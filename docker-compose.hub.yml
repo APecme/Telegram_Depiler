@@ -1,0 +1,13 @@
+services:
+  app:
+    image: YOUR_DOCKERHUB_USERNAME/telegram-manager:latest
+    container_name: telegram-manager
+    volumes:
+      - ./downloads:/app/downloads
+      - ./data:/app/data
+    ports:
+      - "8000:8000"
+    network_mode: bridge
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped

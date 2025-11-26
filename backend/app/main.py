@@ -1,0 +1,652 @@
+from __future__ import annotations
+
+import asyncio
+import logging
+import time
+from contextlib import asynccontextmanager
+from typing import Optional
+from fastapi import FastAPI, HTTPException, Body
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from telethon import events
+
+from .config import get_settings
+from .database import Database
+from .schemas import (
+    ConfigPayload,
+    RestartRequest,
+    SendCodeRequest,
+    StartBotRequest,
+    VerifyCodeRequest,
+    SubmitPasswordRequest,
+    VerifyRequest,
+    GroupRuleCreate,
+    GroupRuleUpdate,
+)
+from .telegram_worker import TelegramWorker
+from .bot_handler import BotCommandHandler
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+settings = get_settings()
+database = Database(settings.data_dir / "state.db")
+settings.load_from_mapping(database.get_config())
+worker = TelegramWorker(settings, database)
+bot_handler: Optional[BotCommandHandler] = None
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """应用启动和关闭时的生命周期管理"""
+    global bot_handler
+    
+    # 记录当前配置
+    logger.info("应用启动，当前配置:")
+    logger.info("  - Bot Token: %s", "已配置" if settings.bot_token else "未配置")
+    logger.info("  - Bot Username: %s", settings.bot_username or "未配置")
+    logger.info("  - 管理员用户ID列表: %s", settings.admin_user_ids if settings.admin_user_ids else "未配置")
+    
+    # 启动时：尝试自动启动 Bot 命令处理器（如果满足条件）
+    try:
+        await _ensure_bot_handler_running()
+    except Exception as e:
+        logger.warning(f"初始化 Bot 命令处理器失败: {e}")
+    
+    yield
+    
+    # 关闭时：断开连接
+    if bot_handler:
+        await bot_handler.stop()
+    await worker.stop()
+
+
+async def _ensure_bot_handler_running() -> None:
+    """在满足条件时自动启动 BotCommandHandler。
+
+    条件：
+    - 已配置 bot_token 和 bot_username
+    - 用户账户已登录（is_user_authorized 为 True）
+    - 当前没有正在运行的 bot_handler
+    """
+    global bot_handler
+
+    if bot_handler is not None:
+        return
+
+    if not settings.bot_token or not settings.bot_username:
+        logger.info("Bot Token 或 Bot Username 未配置，跳过自动启动 Bot 命令处理器")
+        return
+
+    try:
+        client = await worker._get_client()
+    except Exception as exc:  # pragma: no cover - 防御性
+        logger.warning("获取 Telegram 客户端失败，无法自动启动 Bot 命令处理器: %s", exc)
+        return
+
+    try:
+        if not await client.is_user_authorized():
+            logger.info("用户账户未登录，暂不自动启动 Bot 命令处理器")
+            return
+
+        user_info = await client.get_me()
+        logger.info("用户账户已登录: @%s (ID: %s)", user_info.username, user_info.id)
+
+        bot_handler = BotCommandHandler(settings, database, client, worker)
+        await bot_handler.start()
+        logger.info("Bot 命令处理器已自动启动")
+        
+        # 设置Bot客户端到worker，用于发送群聊下载通知
+        worker.set_bot_client(bot_handler._bot_client)
+        
+        # 同时启动用户账户的事件监听器，用于监控群聊消息
+        await worker.start_bot_listener(settings.bot_username)
+        logger.info("用户账户事件监听器已自动启动，开始监控群聊消息")
+    except Exception as exc:  # pragma: no cover - 防御性
+        logger.warning("自动启动 Bot 命令处理器失败: %s", exc)
+
+
+api = FastAPI(title="Telegram Download Manager", lifespan=lifespan)
+api.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@api.get("/health")
+async def health_check() -> dict:
+    return {"status": "ok", "version": settings.version}
+
+
+@api.get("/config")
+async def read_config() -> dict:
+    stored = database.get_config()
+    return {
+        "api_id": stored.get("api_id"),
+        "api_hash": stored.get("api_hash"),
+        "phone_number": stored.get("phone_number"),
+        "bot_token": stored.get("bot_token"),
+        "bot_username": stored.get("bot_username"),
+        "admin_user_ids": stored.get("admin_user_ids", ""),
+        "proxy": {
+            "type": stored.get("proxy_type") or "http",
+            "host": stored.get("proxy_host"),
+            "port": stored.get("proxy_port"),
+            "user": stored.get("proxy_user"),
+            "password": stored.get("proxy_password"),
+        },
+    }
+
+
+@api.post("/config")
+async def update_config(payload: ConfigPayload) -> dict:
+    global bot_handler
+
+    old_bot_token = settings.bot_token
+    old_bot_username = settings.bot_username
+
+    settings.api_id = payload.api_id
+    settings.api_hash = payload.api_hash
+    settings.phone_number = payload.phone_number
+    settings.bot_token = payload.bot_token
+    settings.bot_username = payload.bot_username
+    
+    # 更新管理员ID列表
+    if payload.admin_user_ids:
+        try:
+            settings.admin_user_ids = [int(x.strip()) for x in payload.admin_user_ids.split(",") if x.strip() and x.strip().isdigit()]
+        except (TypeError, ValueError):
+            settings.admin_user_ids = []
+    else:
+        settings.admin_user_ids = []
+
+    if payload.proxy:
+        settings.proxy_type = payload.proxy.type or "http"
+        settings.proxy_host = payload.proxy.host
+        settings.proxy_port = payload.proxy.port
+        settings.proxy_user = payload.proxy.user
+        settings.proxy_password = payload.proxy.password
+
+    database.set_config(
+        {
+            "api_id": payload.api_id,
+            "api_hash": payload.api_hash,
+            "phone_number": payload.phone_number,
+            "bot_token": payload.bot_token or "",
+            "bot_username": payload.bot_username,
+            "admin_user_ids": payload.admin_user_ids or "",
+            "proxy_type": payload.proxy.type if payload.proxy else "http",
+            "proxy_host": payload.proxy.host if payload.proxy else "",
+            "proxy_port": payload.proxy.port if payload.proxy else "",
+            "proxy_user": payload.proxy.user if payload.proxy else "",
+            "proxy_password": payload.proxy.password if payload.proxy else "",
+        }
+    )
+    token_changed = (old_bot_token or "") != (settings.bot_token or "")
+    username_changed = (old_bot_username or "") != (settings.bot_username or "")
+
+    if token_changed or username_changed:
+        if bot_handler is not None:
+            try:
+                await bot_handler.stop()
+            except Exception as exc:  # pragma: no cover - 防御性
+                logger.warning("停止旧的 Bot 命令处理器时出错: %s", exc)
+            bot_handler = None
+
+        bot_session_base = settings.data_dir / "bot_session"
+        for bot_session_path in [bot_session_base, bot_session_base.with_suffix(".session")]:
+            try:
+                if bot_session_path.exists():
+                    bot_session_path.unlink()
+            except Exception as exc:  # pragma: no cover - 防御性
+                logger.warning("删除旧的 Bot 会话文件失败: %s", exc)
+
+    try:
+        await _ensure_bot_handler_running()
+    except Exception as exc:  # pragma: no cover - 防御性
+        logger.warning("配置更新后自动启动 Bot 命令处理器失败: %s", exc)
+
+    return {"status": "saved"}
+
+
+@api.post("/auth/send-code")
+async def send_code(body: SendCodeRequest) -> dict:
+    try:
+        result = await worker.send_login_code(body.phone_number, force=body.force)
+    except (ValueError, PermissionError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (RuntimeError, ConnectionError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return result
+
+
+@api.post("/auth/verify-code")
+async def verify_code(body: VerifyCodeRequest) -> dict:
+    """提交验证码 - 参考 telegram-message-bot-main 的实现方式"""
+    try:
+        result = await worker.submit_verification_code(
+            phone_number=body.phone_number,
+            code=body.code,
+        )
+    except (ValueError, ConnectionError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if isinstance(result, dict) and result.get("status") == "connected":
+        await _ensure_bot_handler_running()
+    return result
+
+
+@api.post("/auth/submit-password")
+async def submit_password(body: SubmitPasswordRequest) -> dict:
+    """提交二步验证密码 - 参考 telegram-message-bot-main 的实现方式"""
+    try:
+        result = await worker.submit_password(
+            phone_number=body.phone_number,
+            password=body.password,
+        )
+    except (ValueError, ConnectionError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if isinstance(result, dict) and result.get("status") == "connected":
+        await _ensure_bot_handler_running()
+    return result
+
+
+@api.post("/auth/verify")
+async def verify(body: VerifyRequest) -> dict:
+    """统一的验证接口，根据 step 字段处理验证码或密码"""
+    if body.step == "code":
+        if not body.code or not body.code.strip():
+            raise HTTPException(status_code=400, detail="验证码不能为空")
+        try:
+            result = await worker.submit_verification_code(
+                phone_number=body.phone_number,
+                code=body.code.strip(),
+            )
+        except ValueError as exc:
+            # ValueError 通常是业务逻辑错误，返回 400
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except ConnectionError as exc:
+            # ConnectionError 是连接问题，返回 503
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except Exception as exc:
+            # 其他未知错误，记录日志并返回 500
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.exception("Unexpected error in verify code")
+            raise HTTPException(status_code=500, detail=f"验证失败: {str(exc)}") from exc
+        if isinstance(result, dict) and result.get("status") == "connected":
+            await _ensure_bot_handler_running()
+        return result
+    elif body.step == "password":
+        if not body.password or not body.password.strip():
+            raise HTTPException(status_code=400, detail="密码不能为空")
+        try:
+            result = await worker.submit_password(
+                phone_number=body.phone_number,
+                password=body.password.strip(),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except ConnectionError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except Exception as exc:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.exception("Unexpected error in verify password")
+            raise HTTPException(status_code=500, detail=f"验证失败: {str(exc)}") from exc
+        if isinstance(result, dict) and result.get("status") == "connected":
+            await _ensure_bot_handler_running()
+        return result
+    else:
+        raise HTTPException(status_code=400, detail=f"无效的步骤: {body.step}")
+
+
+@api.get("/auth/login-state")
+async def get_login_state() -> dict:
+    """获取当前登录状态"""
+    return worker.get_login_state()
+
+
+@api.post("/auth/restart")
+async def restart_client(body: RestartRequest) -> dict:
+    return await worker.restart_client(body.reset_session)
+
+
+@api.post("/bot/start")
+async def start_bot(body: StartBotRequest) -> dict:
+    """启动与 Bot 相关的监听逻辑。
+
+    - 如果配置了 bot_token，则启动 BotCommandHandler，由 Bot 收消息并回复开始/完成等信息；
+    - 否则退回到旧行为，仅使用用户账户监听 Bot 对话。
+    """
+    global bot_handler
+
+    try:
+        settings.bot_username = body.bot_username
+        database.set_config({"bot_username": body.bot_username})
+
+        # 必须配置 bot_token 才允许启动监听，否则提示用户先在设置页保存 Bot Token
+        if not settings.bot_token:
+            raise HTTPException(
+                status_code=400,
+                detail="未配置 Bot Token，请先在设置页保存 Bot Token 后再启动监听",
+            )
+
+        client = await worker._get_client()
+        if not await client.is_user_authorized():
+            raise HTTPException(status_code=400, detail="用户账户未登录，请先完成登录再启动 Bot")
+
+        # 如已有运行中的 handler，先尝试停止（用于重新启动场景）
+        if bot_handler is not None:
+            try:
+                await bot_handler.stop()
+            except Exception:  # pragma: no cover - 防御性
+                pass
+
+        # 始终通过 BotCommandHandler 来处理 Bot 收到的消息并回复
+        bot_handler = BotCommandHandler(settings, database, client, worker)
+        await bot_handler.start()
+        
+        # 设置Bot客户端到worker，用于发送群聊下载通知
+        worker.set_bot_client(bot_handler._bot_client)
+        
+        # 同时启动用户账户的事件监听器，用于监控群聊消息
+        await worker.start_bot_listener(body.bot_username)
+        logger.info("用户账户事件监听器已启动，开始监控群聊消息")
+        
+        return {"status": "bot_started", "bot_username": body.bot_username}
+    except (PermissionError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@api.post("/bot/stop")
+async def stop_bot() -> dict:
+    """停止 Bot 监听。"""
+    global bot_handler
+
+    if bot_handler is not None:
+        try:
+            await bot_handler.stop()
+        except Exception as exc:  # pragma: no cover - 防御性日志
+            logger.warning("停止 Bot 命令处理器时出错: %s", exc)
+        finally:
+            bot_handler = None
+
+    return {"status": "stopped", "bot_username": settings.bot_username}
+
+
+@api.get("/bot/status")
+async def bot_status() -> dict:
+    """查询 Bot 监听状态。"""
+    return {
+        "running": bool(bot_handler),
+        "bot_username": settings.bot_username,
+    }
+
+
+@api.get("/downloads")
+async def list_downloads() -> dict:
+    return {"items": database.list_downloads()}
+
+
+@api.post("/downloads/{download_id}/pause")
+async def pause_download(download_id: int) -> dict:
+    """暂停下载"""
+    if worker:
+        success = await worker.cancel_download(download_id)
+        if success:
+            database.update_download(download_id, status="paused", error="用户暂停")
+            return {"success": True, "message": "已暂停下载"}
+    return {"success": False, "message": "暂停失败"}
+
+
+@api.post("/downloads/{download_id}/priority")
+async def set_download_priority(download_id: int) -> dict:
+    """设置下载优先级"""
+    downloads = database.list_downloads(limit=1000)
+    download = next((d for d in downloads if d.get('id') == download_id), None)
+    
+    if not download:
+        raise HTTPException(status_code=404, detail="下载记录不存在")
+    
+    current_priority = download.get('priority', 0)
+    new_priority = 10 if current_priority < 10 else 0
+    
+    database.update_download(download_id, priority=new_priority)
+    return {"success": True, "priority": new_priority, "message": "已更新优先级"}
+
+
+@api.delete("/downloads/{download_id}")
+async def delete_download(download_id: int) -> dict:
+    """删除下载任务"""
+    downloads = database.list_downloads(limit=1000)
+    download = next((d for d in downloads if d.get('id') == download_id), None)
+    
+    if not download:
+        raise HTTPException(status_code=404, detail="下载记录不存在")
+    
+    # 如果正在下载，先取消
+    if download.get('status') == 'downloading' and worker:
+        await worker.cancel_download(download_id)
+    
+    # 删除数据库记录
+    database.delete_download(download_id)
+    
+    # 删除文件（如果存在）
+    if download.get('file_path'):
+        import os
+        try:
+            if os.path.exists(download['file_path']):
+                os.remove(download['file_path'])
+        except Exception as e:
+            logger.warning(f"删除文件失败: {e}")
+    
+    return {"success": True, "message": "已删除下载任务"}
+
+
+@api.get("/messages")
+async def list_messages() -> dict:
+    return {"items": database.list_messages()}
+
+
+@api.get("/dialogs")
+async def list_dialogs() -> dict:
+    try:
+        items = await worker.list_dialogs()
+    except PermissionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # pragma: no cover - 防御性
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return {"items": items}
+
+
+@api.get("/group-rules")
+async def list_group_rules(chat_id: int | None = None, mode: str | None = None) -> dict:
+    items = database.list_group_rules(chat_id=chat_id, mode=mode)
+    return {"items": items}
+
+
+@api.post("/group-rules")
+async def create_group_rule(body: GroupRuleCreate) -> dict:
+    min_size_bytes = int((body.min_size_mb or 0) * 1024 * 1024)
+    rule_id = database.add_group_rule(
+        chat_id=body.chat_id,
+        chat_title=body.chat_title,
+        mode=body.mode,
+        enabled=body.enabled,
+        include_extensions=body.include_extensions,
+        min_size_bytes=min_size_bytes,
+        save_dir=body.save_dir,
+        filename_template=body.filename_template,
+        include_keywords=body.include_keywords,
+        exclude_keywords=body.exclude_keywords,
+        match_mode=body.match_mode,
+        start_time=body.start_time.isoformat() if body.start_time else None,
+        end_time=body.end_time.isoformat() if body.end_time else None,
+    )
+    rule = database.get_group_rule(rule_id)
+    return {"id": rule_id, "rule": rule}
+
+
+@api.put("/group-rules/{rule_id}")
+async def update_group_rule(rule_id: int, body: GroupRuleUpdate) -> dict:
+    min_size_bytes = None
+    if body.min_size_mb is not None:
+        min_size_bytes = int(max(0, body.min_size_mb) * 1024 * 1024)
+
+    database.update_group_rule(
+        rule_id,
+        chat_title=body.chat_title,
+        mode=body.mode,
+        enabled=body.enabled,
+        include_extensions=body.include_extensions,
+        min_size_bytes=min_size_bytes,
+        save_dir=body.save_dir,
+        filename_template=body.filename_template,
+        include_keywords=body.include_keywords,
+        exclude_keywords=body.exclude_keywords,
+        match_mode=body.match_mode,
+        start_time=body.start_time.isoformat() if body.start_time else None,
+        end_time=body.end_time.isoformat() if body.end_time else None,
+    )
+    rule = database.get_group_rule(rule_id)
+    if not rule:
+        raise HTTPException(status_code=404, detail="规则不存在")
+    return {"rule": rule}
+
+
+@api.delete("/group-rules/{rule_id}")
+async def delete_group_rule(rule_id: int) -> dict:
+    database.delete_group_rule(rule_id)
+    return {"status": "deleted", "id": rule_id}
+
+
+@api.post("/messages/test")
+async def create_test_message(payload: dict = Body(default={})) -> dict:
+    """发送一条测试消息到 Telegram 管理员账号，并在本地插入对应记录。
+
+    行为：
+    - 优先使用已启动的 BotCommandHandler 所在的 Bot 客户端发送消息；
+    - 如果 Bot 尚未启动，则回退到用户账户客户端发送；
+    - 发送成功后，将该消息写入 messages 表，便于前端展示；
+    - 如果未配置管理员ID或发送失败，则返回明确的错误。
+    """
+
+    text = (payload or {}).get("text") or "这是来自后端的测试消息"
+
+    # 解析管理员ID列表
+    admin_ids = settings.admin_user_ids or []
+    if isinstance(admin_ids, str):
+        try:
+            admin_ids = [
+                int(x.strip()) for x in admin_ids.split(",") if x.strip() and x.strip().isdigit()
+            ]
+        except Exception:  # pragma: no cover - 防御性
+            admin_ids = []
+
+    if not admin_ids:
+        raise HTTPException(status_code=400, detail="未配置管理员用户ID，无法发送测试消息")
+
+    target_id = int(admin_ids[0])
+
+    # 选择发送客户端：优先使用 Bot 客户端，其次使用用户账户客户端
+    send_client = None
+    is_bot_client = False
+
+    global bot_handler
+    if bot_handler is not None and getattr(bot_handler, "_bot_client", None) is not None:
+        send_client = bot_handler._bot_client
+        is_bot_client = True
+    else:
+        try:
+            send_client = await worker._get_client()
+        except Exception as exc:  # pragma: no cover - 防御性
+            logger.warning("获取用户账户客户端失败，无法发送测试消息: %s", exc)
+            raise HTTPException(status_code=500, detail=f"获取客户端失败: {exc}") from exc
+
+    try:
+        # 确保客户端已连接
+        if not send_client.is_connected():
+            await send_client.connect()
+
+        # 发送测试消息到管理员
+        sent_msg = await send_client.send_message(target_id, text)
+    except Exception as exc:  # pragma: no cover - 防御性
+        logger.warning("发送 Telegram 测试消息失败: %s", exc)
+        raise HTTPException(status_code=500, detail=f"发送 Telegram 测试消息失败: {exc}") from exc
+
+    # 发送成功后，将该消息写入本地 messages 表，便于前端展示
+    try:
+        database.add_message(
+            message_id=sent_msg.id or int(time.time()),
+            chat_id=sent_msg.chat_id or 0,
+            sender_id=getattr(sent_msg.sender, "id", 0) if getattr(sent_msg, "sender", None) else (bot_handler._bot_id if is_bot_client and bot_handler else 0),
+            sender_username=getattr(sent_msg.sender, "username", None) if getattr(sent_msg, "sender", None) else (getattr(settings, "bot_username", None) if is_bot_client else None),
+            sender_first_name=getattr(sent_msg.sender, "first_name", None) if getattr(sent_msg, "sender", None) else None,
+            sender_last_name=getattr(sent_msg.sender, "last_name", None) if getattr(sent_msg, "sender", None) else None,
+            message_text=text,
+            has_media=False,
+            media_type=None,
+            file_name=None,
+        )
+    except Exception as exc:  # pragma: no cover - 防御性
+        logger.warning("插入测试消息记录失败: %s", exc)
+        # 发送已成功，这里仅记录日志，不再向上抛出
+
+    return {
+        "status": "ok",
+        "message_id": sent_msg.id,
+        "chat_id": sent_msg.chat_id,
+        "via_bot": is_bot_client,
+    }
+
+
+@api.get("/status")
+async def status() -> dict:
+    downloads = database.list_downloads(limit=10)
+    login_state = database.get_login_state()
+    return {
+        "bot_username": settings.bot_username,
+        "download_count": len(downloads),
+        "last_download": downloads[0] if downloads else None,
+        "login_state": login_state,
+    }
+
+
+@api.get("/auth/status")
+async def auth_status() -> dict:
+    """获取登录状态"""
+    login_state = database.get_login_state()
+    if not login_state:
+        return {"is_authorized": False, "account_type": None}
+    
+    return {
+        "is_authorized": bool(login_state.get("is_authorized")),
+        "account_type": login_state.get("account_type"),
+        "user_id": login_state.get("user_id"),
+        "username": login_state.get("username"),
+        "first_name": login_state.get("first_name"),
+        "last_name": login_state.get("last_name"),
+        "phone_number": login_state.get("phone_number"),
+        "last_login": login_state.get("last_login"),
+    }
+
+
+@api.get("/logs")
+async def get_logs(limit: int = 50) -> dict:
+    """获取应用日志
+    
+    注意：这是一个简单的实现，返回空日志列表。
+    如果需要实际的日志功能，需要配置日志处理器将日志写入文件或数据库。
+    """
+    # 目前返回空列表，避免前端404错误
+    # 未来可以实现从日志文件读取或从数据库读取
+    return {"logs": []}
+
+app = FastAPI(lifespan=lifespan)
+app.mount("/api", api)
+
+if settings.static_dir.exists():
+    app.mount("/", StaticFiles(directory=settings.static_dir, html=True), name="frontend")
+

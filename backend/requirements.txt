@@ -1,0 +1,10 @@
+fastapi==0.111.0
+uvicorn[standard]==0.30.0
+telethon==1.36.0
+PySocks==1.7.1
+pydantic==2.8.2
+pydantic-settings==2.3.4
+python-multipart==0.0.9
+MarkupSafe>=2.1.5,<3.0
+Jinja2>=3.1.3
+
