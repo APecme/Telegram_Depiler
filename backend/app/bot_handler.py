@@ -627,8 +627,22 @@ class BotCommandHandler:
                 await event.answer("❌ 您没有权限执行此操作", alert=True)
                 return
             
+            user_id = sender.id
+            
             # 解析回调数据
-            if data.startswith("pause_"):
+            if data.startswith("group_"):
+                # 群聊选择回调
+                group_id = int(data.split("_")[1])
+                await self._handle_group_callback(event, user_id, group_id)
+            elif data.startswith("page_"):
+                # 分页回调
+                page = int(data.split("_")[1])
+                await self._handle_page_callback(event, user_id, page)
+            elif data == "mode_monitor" or data == "mode_history":
+                # 模式选择回调
+                mode = "monitor" if data == "mode_monitor" else "history"
+                await self._handle_mode_callback(event, user_id, mode)
+            elif data.startswith("pause_"):
                 download_id = int(data.split("_")[1])
                 await self._handle_pause_download(event, download_id)
             elif data.startswith("priority_"):
@@ -787,20 +801,12 @@ class BotCommandHandler:
             self._conversation_states[user_id] = {
                 'step': 'select_group',
                 'groups': groups,
+                'page': 0,
                 'rule_data': {}
             }
             
-            # 显示群聊列表
-            group_list = "📋 **请选择要监控的群聊**\n\n"
-            for idx, group in enumerate(groups[:20], 1):  # 限制显示前20个
-                group_list += f"{idx}. {group['title']} (ID: {group['id']})\n"
-            
-            if len(groups) > 20:
-                group_list += f"\n... 还有 {len(groups) - 20} 个群聊\n"
-            
-            group_list += "\n💡 **请回复群聊编号或群聊ID**\n使用 /cancel 取消操作"
-            
-            await event.reply(group_list, parse_mode='markdown')
+            # 使用内联键盘显示群聊列表（分页）
+            await self._send_group_selection_page(event, user_id, 0)
             
         except Exception as e:
             logger.exception(f"处理创建规则命令失败: {e}")
@@ -847,25 +853,121 @@ class BotCommandHandler:
             logger.exception(f"处理对话消息失败: {e}")
             await event.reply(f"❌ 处理失败: {str(e)}\n使用 /cancel 取消操作")
     
+    async def _send_group_selection_page(self, event, user_id, page):
+        """发送群聊选择页面（带分页）"""
+        from telethon.tl.types import KeyboardButtonCallback
+        from telethon.types import ReplyKeyboardMarkup
+        
+        state = self._conversation_states.get(user_id)
+        if not state:
+            return
+        
+        groups = state['groups']
+        page_size = 10
+        total_pages = (len(groups) + page_size - 1) // page_size
+        
+        # 确保页码有效
+        page = max(0, min(page, total_pages - 1))
+        state['page'] = page
+        
+        # 获取当前页的群聊
+        start_idx = page * page_size
+        end_idx = min(start_idx + page_size, len(groups))
+        page_groups = groups[start_idx:end_idx]
+        
+        # 构建内联键盘
+        buttons = []
+        for group in page_groups:
+            # 截断过长的标题
+            title = group['title'][:30] + '...' if len(group['title']) > 30 else group['title']
+            button_data = f"group_{group['id']}".encode('utf-8')
+            buttons.append([KeyboardButtonCallback(title, button_data)])
+        
+        # 添加分页按钮
+        nav_buttons = []
+        if page > 0:
+            nav_buttons.append(KeyboardButtonCallback("⬅️ 上一页", f"page_{page-1}".encode('utf-8')))
+        if page < total_pages - 1:
+            nav_buttons.append(KeyboardButtonCallback("下一页 ➡️", f"page_{page+1}".encode('utf-8')))
+        
+        if nav_buttons:
+            buttons.append(nav_buttons)
+        
+        # 发送或编辑消息
+        text = (
+            f"📋 **请选择要监控的群聊**\n\n"
+            f"第 {page + 1}/{total_pages} 页 (共 {len(groups)} 个群聊)\n\n"
+            f"💡 点击下方按钮选择群聊\n"
+            f"使用 /cancel 取消操作"
+        )
+        
+        if hasattr(event, 'edit'):
+            # 这是回调查询，编辑现有消息
+            await event.edit(text, buttons=buttons, parse_mode='markdown')
+        else:
+            # 这是新消息，发送新的消息
+            await event.reply(text, buttons=buttons, parse_mode='markdown')
+    
+    async def _handle_group_callback(self, event, user_id, group_id):
+        """处理群聊选择回调"""
+        state = self._conversation_states.get(user_id)
+        if not state or state.get('step') != 'select_group':
+            await event.answer("❌ 会话已过期，请重新使用 /createrule", alert=True)
+            return
+        
+        groups = state['groups']
+        selected_group = next((g for g in groups if g['id'] == group_id), None)
+        
+        if not selected_group:
+            await event.answer("❌ 群聊不存在", alert=True)
+            return
+        
+        state['rule_data']['chat_id'] = selected_group['id']
+        state['rule_data']['chat_title'] = selected_group['title']
+        state['step'] = 'select_mode'
+        
+        # 使用内联键盘选择模式
+        from telethon.tl.types import KeyboardButtonCallback
+        
+        buttons = [
+            [KeyboardButtonCallback("📡 监控模式 - 自动下载新消息", b"mode_monitor")],
+            [KeyboardButtonCallback("📚 历史模式 - 下载历史消息", b"mode_history")]
+        ]
+        
+        mode_text = (
+            f"✅ 已选择群聊: **{selected_group['title']}**\n\n"
+            "📝 **请选择规则模式**\n\n"
+            "💡 点击下方按钮选择模式"
+        )
+        
+        await event.edit(mode_text, buttons=buttons, parse_mode='markdown')
+        await event.answer()
+    
+    async def _handle_page_callback(self, event, user_id, page):
+        """处理分页回调"""
+        state = self._conversation_states.get(user_id)
+        if not state or state.get('step') != 'select_group':
+            await event.answer("❌ 会话已过期，请重新使用 /createrule", alert=True)
+            return
+        
+        await self._send_group_selection_page(event, user_id, page)
+        await event.answer()
+    
     async def _handle_group_selection(self, event, user_id, message_text, state):
-        """处理群聊选择"""
+        """处理群聊选择（文本输入方式，作为备用）"""
         groups = state['groups']
         selected_group = None
         
         # 尝试解析为数字
         try:
             num = int(message_text)
-            # 先尝试作为索引（1-based）
-            if 1 <= num <= len(groups):
-                selected_group = groups[num - 1]
-            else:
-                # 尝试作为chat_id
-                selected_group = next((g for g in groups if g['id'] == num), None)
+            # 尝试作为chat_id
+            selected_group = next((g for g in groups if g['id'] == num), None)
         except ValueError:
             pass
         
         if not selected_group:
-            await event.reply("❌ 无效的选择，请输入正确的编号或ID")
+            await event.reply("❌ 无效的选择，请使用上方按钮选择群聊")
             return
         
         state['rule_data']['chat_id'] = selected_group['id']
@@ -881,8 +983,34 @@ class BotCommandHandler:
         )
         await event.reply(mode_text, parse_mode='markdown')
     
+    async def _handle_mode_callback(self, event, user_id, mode):
+        """处理模式选择回调"""
+        state = self._conversation_states.get(user_id)
+        if not state or state.get('step') != 'select_mode':
+            await event.answer("❌ 会话已过期，请重新使用 /createrule", alert=True)
+            return
+        
+        state['rule_data']['mode'] = mode
+        mode_name = '监控模式' if mode == 'monitor' else '历史模式'
+        state['step'] = 'select_extensions'
+        
+        ext_text = (
+            f"✅ 已选择: **{mode_name}**\n\n"
+            "📁 **请选择文件类型**\n\n"
+            "可选项（多选，用逗号分隔）：\n"
+            "• mp4, mkv, avi (视频)\n"
+            "• jpg, png, gif (图片)\n"
+            "• mp3, flac (音频)\n"
+            "• pdf, zip (文档)\n\n"
+            "💡 示例: mp4,mkv,jpg\n"
+            "或回复 all 下载所有类型"
+        )
+        
+        await event.edit(ext_text, buttons=None, parse_mode='markdown')
+        await event.answer()
+    
     async def _handle_mode_selection(self, event, user_id, message_text, state):
-        """处理模式选择"""
+        """处理模式选择（文本输入方式，作为备用）"""
         if message_text == '1':
             state['rule_data']['mode'] = 'monitor'
             mode_name = '监控模式'
@@ -890,7 +1018,7 @@ class BotCommandHandler:
             state['rule_data']['mode'] = 'history'
             mode_name = '历史模式'
         else:
-            await event.reply("❌ 无效的选择，请回复 1 或 2")
+            await event.reply("❌ 无效的选择，请使用上方按钮或回复 1 或 2")
             return
         
         state['step'] = 'select_extensions'

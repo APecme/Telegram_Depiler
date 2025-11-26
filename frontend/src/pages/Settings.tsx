@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import axios from "axios";
 
 type ProxySettings = {
+  type?: string;
   host: string;
   port: number;
   user?: string;
@@ -56,6 +57,7 @@ export default function Settings() {
   const proxy = useMemo(
     () =>
       config.proxy ?? {
+        type: "socks5",
         host: "",
         port: 0,
         user: "",
@@ -63,6 +65,45 @@ export default function Settings() {
       },
     [config.proxy]
   );
+
+  const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
+
+  const validateConfig = () => {
+    const errors: Record<string, string> = {};
+
+    // API ID 验证
+    if (!config.api_id || !/^\d+$/.test(config.api_id)) {
+      errors.api_id = "API ID 必须是纯数字";
+    }
+
+    // API Hash 验证
+    if (!config.api_hash || config.api_hash.length !== 32) {
+      errors.api_hash = "API Hash 必须是32位字符串";
+    }
+
+    // 手机号验证
+    if (config.phone_number && !/^\+\d{10,15}$/.test(config.phone_number)) {
+      errors.phone_number = "手机号格式错误，应包含国家码，如：+8612345678901";
+    }
+
+    // Bot Token 验证
+    if (config.bot_token && !/^\d+:[A-Za-z0-9_-]+$/.test(config.bot_token)) {
+      errors.bot_token = "Bot Token 格式错误，应为：123456789:ABCdefGHI...";
+    }
+
+    // Admin User IDs 验证
+    if (config.admin_user_ids && !/^\d+(,\d+)*$/.test(config.admin_user_ids.replace(/\s/g, ''))) {
+      errors.admin_user_ids = "管理员ID必须是数字，多个用逗号分隔";
+    }
+
+    // 代理端口验证
+    if (proxy.port && (proxy.port < 1 || proxy.port > 65535)) {
+      errors.proxy_port = "端口号必须在 1-65535 之间";
+    }
+
+    setValidationErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
 
   const fetchConfig = async () => {
     const { data } = await api.get("/config");
@@ -104,6 +145,12 @@ export default function Settings() {
 
   const saveConfig = async (event: FormEvent) => {
     event.preventDefault();
+    
+    if (!validateConfig()) {
+      setMessage({ type: "error", text: "请检查表单中的错误" });
+      return;
+    }
+
     setLoading(true);
     setMessage(null);
     try {
@@ -217,42 +264,87 @@ export default function Settings() {
         <h2>基础配置</h2>
         <form onSubmit={saveConfig}>
           <label>
-            API ID
+            API ID *
             <input
               value={config.api_id}
-              onChange={(e) => setConfig({ ...config, api_id: e.target.value })}
+              onChange={(e) => {
+                setConfig({ ...config, api_id: e.target.value });
+                setValidationErrors({ ...validationErrors, api_id: "" });
+              }}
               required
+              placeholder="12345678"
+              style={{ borderColor: validationErrors.api_id ? "#f44336" : "#ddd" }}
             />
+            {validationErrors.api_id && (
+              <small style={{ color: "#f44336", display: "block", marginTop: "4px" }}>
+                {validationErrors.api_id}
+              </small>
+            )}
+            <small style={{ display: "block", color: "#666", marginTop: "4px" }}>
+              从 https://my.telegram.org 获取，必须是纯数字
+            </small>
           </label>
           <label>
-            API Hash
+            API Hash *
             <input
               value={config.api_hash}
-              onChange={(e) =>
-                setConfig({ ...config, api_hash: e.target.value })
-              }
+              onChange={(e) => {
+                setConfig({ ...config, api_hash: e.target.value });
+                setValidationErrors({ ...validationErrors, api_hash: "" });
+              }}
               required
+              placeholder="1234567890abcdef1234567890abcdef"
+              style={{ borderColor: validationErrors.api_hash ? "#f44336" : "#ddd" }}
             />
+            {validationErrors.api_hash && (
+              <small style={{ color: "#f44336", display: "block", marginTop: "4px" }}>
+                {validationErrors.api_hash}
+              </small>
+            )}
+            <small style={{ display: "block", color: "#666", marginTop: "4px" }}>
+              从 https://my.telegram.org 获取，必须是32位字符串
+            </small>
           </label>
           <label>
             手机号（含国家码）
             <input
               value={config.phone_number}
-              onChange={(e) =>
-                setConfig({ ...config, phone_number: e.target.value })
-              }
+              onChange={(e) => {
+                setConfig({ ...config, phone_number: e.target.value });
+                setValidationErrors({ ...validationErrors, phone_number: "" });
+              }}
+              placeholder="+8612345678901"
+              style={{ borderColor: validationErrors.phone_number ? "#f44336" : "#ddd" }}
             />
+            {validationErrors.phone_number && (
+              <small style={{ color: "#f44336", display: "block", marginTop: "4px" }}>
+                {validationErrors.phone_number}
+              </small>
+            )}
+            <small style={{ display: "block", color: "#666", marginTop: "4px" }}>
+              格式：+国家码+手机号，如 +8612345678901
+            </small>
           </label>
           <label>
             Bot Token（可选，使用bot账户时填写）
             <input
               type="password"
               value={config.bot_token || ""}
-              onChange={(e) =>
-                setConfig({ ...config, bot_token: e.target.value })
-              }
-              placeholder="从 @BotFather 获取的 Bot Token"
+              onChange={(e) => {
+                setConfig({ ...config, bot_token: e.target.value });
+                setValidationErrors({ ...validationErrors, bot_token: "" });
+              }}
+              placeholder="123456789:ABCdefGHIjklMNOpqrsTUVwxyz"
+              style={{ borderColor: validationErrors.bot_token ? "#f44336" : "#ddd" }}
             />
+            {validationErrors.bot_token && (
+              <small style={{ color: "#f44336", display: "block", marginTop: "4px" }}>
+                {validationErrors.bot_token}
+              </small>
+            )}
+            <small style={{ display: "block", color: "#666", marginTop: "4px" }}>
+              从 @BotFather 获取，格式：123456789:ABCdef...
+            </small>
           </label>
           <label>
             目标 Bot 用户名
@@ -271,19 +363,46 @@ export default function Settings() {
             管理员用户ID（可选，多个用逗号分隔）
             <input
               value={config.admin_user_ids || ""}
-              onChange={(e) =>
-                setConfig({ ...config, admin_user_ids: e.target.value })
-              }
-              placeholder="例如: 123456789,987654321"
+              onChange={(e) => {
+                setConfig({ ...config, admin_user_ids: e.target.value });
+                setValidationErrors({ ...validationErrors, admin_user_ids: "" });
+              }}
+              placeholder="123456789,987654321"
+              style={{ borderColor: validationErrors.admin_user_ids ? "#f44336" : "#ddd" }}
             />
+            {validationErrors.admin_user_ids && (
+              <small style={{ color: "#f44336", display: "block", marginTop: "4px" }}>
+                {validationErrors.admin_user_ids}
+              </small>
+            )}
             <small style={{ display: "block", color: "#666", marginTop: "4px" }}>
-              设置后，机器人只接受处理来自这些管理员ID的消息
+              必须是纯数字ID，多个用逗号分隔。获取ID：搜索 @userinfobot
             </small>
           </label>
 
           <div>
             <strong>代理设置（可选）</strong>
           </div>
+
+          <label>
+            代理类型
+            <select
+              value={proxy.type || "socks5"}
+              onChange={(e) =>
+                setConfig({
+                  ...config,
+                  proxy: { ...proxy, type: e.target.value },
+                })
+              }
+              style={{ width: "100%", padding: "0.5rem", borderRadius: "4px", border: "1px solid #ddd" }}
+            >
+              <option value="socks5">SOCKS5</option>
+              <option value="http">HTTP</option>
+            </select>
+            <small style={{ display: "block", color: "#666", marginTop: "4px" }}>
+              选择代理协议类型
+            </small>
+          </label>
 
           <label>
             Host
@@ -295,7 +414,11 @@ export default function Settings() {
                   proxy: { ...proxy, host: e.target.value },
                 })
               }
+              placeholder="127.0.0.1 或 host.docker.internal"
             />
+            <small style={{ display: "block", color: "#666", marginTop: "4px" }}>
+              Docker 容器访问宿主机代理请使用：host.docker.internal
+            </small>
           </label>
 
           <label>
@@ -303,13 +426,23 @@ export default function Settings() {
             <input
               type="number"
               value={proxy.port ?? ""}
-              onChange={(e) =>
+              onChange={(e) => {
                 setConfig({
                   ...config,
                   proxy: { ...proxy, port: Number(e.target.value) },
-                })
-              }
+                });
+                setValidationErrors({ ...validationErrors, proxy_port: "" });
+              }}
+              placeholder="1080"
+              min="1"
+              max="65535"
+              style={{ borderColor: validationErrors.proxy_port ? "#f44336" : "#ddd" }}
             />
+            {validationErrors.proxy_port && (
+              <small style={{ color: "#f44336", display: "block", marginTop: "4px" }}>
+                {validationErrors.proxy_port}
+              </small>
+            )}
           </label>
 
           <label>

@@ -58,6 +58,8 @@ export default function Dashboard() {
   
   // 规则表单状态
   const [formChatId, setFormChatId] = useState<number | "">("");
+  const [dialogPage, setDialogPage] = useState(0);
+  const [dialogSearch, setDialogSearch] = useState("");
   const [formMode, setFormMode] = useState<"monitor" | "history">("monitor");
   const [formExtensions, setFormExtensions] = useState("mp4,mp3,jpg");
   const [formMinSizeMb, setFormMinSizeMb] = useState("0");
@@ -650,20 +652,144 @@ export default function Dashboard() {
             <div style={{ display: "grid", gap: "1rem" }}>
               <div>
                 <label style={{ display: "block", marginBottom: "0.5rem", fontWeight: "500" }}>
-                  目标群聊 *
+                  目标群聊 * {formChatId && `(已选择: ${dialogs.find(d => d.id === formChatId)?.title || formChatId})`}
                 </label>
-                <select
-                  value={formChatId}
-                  onChange={(e) => setFormChatId(e.target.value ? Number(e.target.value) : "")}
-                  style={{ width: "100%", padding: "0.5rem", borderRadius: "4px", border: "1px solid #ddd" }}
-                >
-                  <option value="">请选择群聊</option>
-                  {dialogs.filter(d => d.is_group).map((d) => (
-                    <option key={d.id} value={d.id}>
-                      {d.title || d.username || `ID:${d.id}`}
-                    </option>
-                  ))}
-                </select>
+                
+                {/* 搜索框 */}
+                <input
+                  type="text"
+                  placeholder="搜索群聊名称..."
+                  value={dialogSearch}
+                  onChange={(e) => {
+                    setDialogSearch(e.target.value);
+                    setDialogPage(0);
+                  }}
+                  style={{ 
+                    width: "100%", 
+                    padding: "0.5rem", 
+                    marginBottom: "0.5rem",
+                    borderRadius: "4px", 
+                    border: "1px solid #ddd" 
+                  }}
+                />
+                
+                {/* 群聊列表 */}
+                <div style={{ 
+                  maxHeight: "300px", 
+                  overflowY: "auto", 
+                  border: "1px solid #ddd", 
+                  borderRadius: "4px",
+                  backgroundColor: "#fafafa"
+                }}>
+                  {(() => {
+                    const groupDialogs = dialogs.filter(d => 
+                      d.is_group && 
+                      (dialogSearch === "" || 
+                       (d.title && d.title.toLowerCase().includes(dialogSearch.toLowerCase())) ||
+                       (d.username && d.username.toLowerCase().includes(dialogSearch.toLowerCase()))
+                      )
+                    );
+                    const pageSize = 10;
+                    const totalPages = Math.ceil(groupDialogs.length / pageSize);
+                    const currentPageDialogs = groupDialogs.slice(dialogPage * pageSize, (dialogPage + 1) * pageSize);
+                    
+                    return (
+                      <>
+                        {groupDialogs.length === 0 ? (
+                          <div style={{ padding: "2rem", textAlign: "center", color: "#999" }}>
+                            {dialogSearch ? "未找到匹配的群聊" : "暂无群聊"}
+                          </div>
+                        ) : (
+                          <>
+                            {currentPageDialogs.map((d) => (
+                              <div
+                                key={d.id}
+                                onClick={() => setFormChatId(d.id)}
+                                style={{
+                                  padding: "0.75rem",
+                                  cursor: "pointer",
+                                  backgroundColor: formChatId === d.id ? "#e3f2fd" : "transparent",
+                                  borderBottom: "1px solid #e0e0e0",
+                                  transition: "background-color 0.2s",
+                                }}
+                                onMouseEnter={(e) => {
+                                  if (formChatId !== d.id) {
+                                    e.currentTarget.style.backgroundColor = "#f5f5f5";
+                                  }
+                                }}
+                                onMouseLeave={(e) => {
+                                  if (formChatId !== d.id) {
+                                    e.currentTarget.style.backgroundColor = "transparent";
+                                  }
+                                }}
+                              >
+                                <div style={{ fontWeight: formChatId === d.id ? "600" : "normal" }}>
+                                  {formChatId === d.id && "✓ "}
+                                  {d.title || d.username || `ID:${d.id}`}
+                                </div>
+                                {d.username && (
+                                  <div style={{ fontSize: "0.85rem", color: "#666", marginTop: "0.25rem" }}>
+                                    @{d.username}
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                            
+                            {/* 分页控制 */}
+                            {totalPages > 1 && (
+                              <div style={{ 
+                                padding: "0.75rem", 
+                                display: "flex", 
+                                justifyContent: "space-between", 
+                                alignItems: "center",
+                                backgroundColor: "#fff",
+                                borderTop: "2px solid #e0e0e0"
+                              }}>
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setDialogPage(Math.max(0, dialogPage - 1));
+                                  }}
+                                  disabled={dialogPage === 0}
+                                  style={{
+                                    padding: "0.25rem 0.75rem",
+                                    border: "1px solid #ddd",
+                                    borderRadius: "4px",
+                                    backgroundColor: dialogPage === 0 ? "#f5f5f5" : "white",
+                                    cursor: dialogPage === 0 ? "not-allowed" : "pointer",
+                                    opacity: dialogPage === 0 ? 0.5 : 1
+                                  }}
+                                >
+                                  ← 上一页
+                                </button>
+                                <span style={{ fontSize: "0.9rem", color: "#666" }}>
+                                  第 {dialogPage + 1} / {totalPages} 页 (共 {groupDialogs.length} 个群聊)
+                                </span>
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setDialogPage(Math.min(totalPages - 1, dialogPage + 1));
+                                  }}
+                                  disabled={dialogPage >= totalPages - 1}
+                                  style={{
+                                    padding: "0.25rem 0.75rem",
+                                    border: "1px solid #ddd",
+                                    borderRadius: "4px",
+                                    backgroundColor: dialogPage >= totalPages - 1 ? "#f5f5f5" : "white",
+                                    cursor: dialogPage >= totalPages - 1 ? "not-allowed" : "pointer",
+                                    opacity: dialogPage >= totalPages - 1 ? 0.5 : 1
+                                  }}
+                                >
+                                  下一页 →
+                                </button>
+                              </div>
+                            )}
+                          </>
+                        )}
+                      </>
+                    );
+                  })()}
+                </div>
               </div>
 
               <div>
