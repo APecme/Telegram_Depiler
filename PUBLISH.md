@@ -24,8 +24,8 @@ git commit -m "Initial commit"
 
 #### 2. 在 GitHub 创建仓库
 1. 访问 https://github.com/new
-2. 仓库名：`telegram-manager`
-3. 描述：`Telegram 自动下载管理器`
+2. 仓库名：`Telegram_Depiler`
+3. 描述：`🚀 强大的 Telegram 自动下载管理器 - 支持群聊监控、Bot 交互、Web 管理界面`
 4. 选择 Public（公开）
 5. 不要勾选任何初始化选项
 6. 点击 Create repository
@@ -33,7 +33,7 @@ git commit -m "Initial commit"
 #### 3. 推送代码到 GitHub
 ```bash
 git branch -M main
-git remote add origin https://github.com/YOUR_USERNAME/telegram-manager.git
+git remote add origin https://github.com/YOUR_USERNAME/Telegram_Depiler.git
 git push -u origin main
 ```
 
@@ -73,10 +73,10 @@ git push origin v1.0.0
 ```
 
 这会触发构建并推送以下镜像标签：
-- `YOUR_USERNAME/telegram-manager:latest`
-- `YOUR_USERNAME/telegram-manager:v1.0.0`
-- `YOUR_USERNAME/telegram-manager:1.0`
-- `YOUR_USERNAME/telegram-manager:1`
+- `YOUR_USERNAME/telegram-depiler:latest`
+- `YOUR_USERNAME/telegram-depiler:v1.0.0`
+- `YOUR_USERNAME/telegram-depiler:1.0`
+- `YOUR_USERNAME/telegram-depiler:1`
 
 ## 用户使用方式
 
@@ -87,8 +87,8 @@ git push origin v1.0.0
 ```yaml
 services:
   app:
-    image: YOUR_USERNAME/telegram-manager:latest
-    container_name: telegram-manager
+    image: YOUR_USERNAME/telegram-depiler:latest
+    container_name: telegram-depiler
     volumes:
       - ./downloads:/app/downloads
       - ./data:/app/data
@@ -105,8 +105,8 @@ docker compose up -d
 ### 方式二：从源码构建
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/telegram-manager.git
-cd telegram-manager
+git clone https://github.com/YOUR_USERNAME/Telegram_Depiler.git
+cd Telegram_Depiler
 docker compose up -d
 ```
 
@@ -135,10 +135,10 @@ docker compose up -d
 在 README.md 顶部添加：
 
 ```markdown
-[![Docker Image](https://img.shields.io/docker/v/YOUR_USERNAME/telegram-manager?label=Docker&logo=docker)](https://hub.docker.com/r/YOUR_USERNAME/telegram-manager)
-[![Docker Pulls](https://img.shields.io/docker/pulls/YOUR_USERNAME/telegram-manager)](https://hub.docker.com/r/YOUR_USERNAME/telegram-manager)
-[![GitHub Stars](https://img.shields.io/github/stars/YOUR_USERNAME/telegram-manager)](https://github.com/YOUR_USERNAME/telegram-manager)
-[![License](https://img.shields.io/github/license/YOUR_USERNAME/telegram-manager)](LICENSE)
+[![Docker Image](https://img.shields.io/docker/v/YOUR_USERNAME/telegram-depiler?label=Docker&logo=docker)](https://hub.docker.com/r/YOUR_USERNAME/telegram-depiler)
+[![Docker Pulls](https://img.shields.io/docker/pulls/YOUR_USERNAME/telegram-depiler)](https://hub.docker.com/r/YOUR_USERNAME/telegram-depiler)
+[![GitHub Stars](https://img.shields.io/github/stars/YOUR_USERNAME/Telegram_Depiler)](https://github.com/YOUR_USERNAME/Telegram_Depiler)
+[![License](https://img.shields.io/github/license/YOUR_USERNAME/Telegram_Depiler)](LICENSE)
 ```
 
 ## 注意事项
@@ -166,9 +166,9 @@ docker compose up -d
 ## 分享链接
 
 发布后，你可以分享：
-- **GitHub 仓库**: `https://github.com/YOUR_USERNAME/telegram-manager`
-- **Docker Hub**: `https://hub.docker.com/r/YOUR_USERNAME/telegram-manager`
+- **GitHub 仓库**: `https://github.com/YOUR_USERNAME/Telegram_Depiler`
+- **Docker Hub**: `https://hub.docker.com/r/YOUR_USERNAME/telegram-depiler`
 - **一键部署**: 
   ```bash
-  docker run -d -p 8000:8000 -v ./data:/app/data -v ./downloads:/app/downloads YOUR_USERNAME/telegram-manager:latest
+  docker run -d -p 8000:8000 -v ./data:/app/data -v ./downloads:/app/downloads YOUR_USERNAME/telegram-depiler:latest
   ```

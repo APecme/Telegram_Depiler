@@ -1,9 +1,9 @@
-# Telegram Manager
+# Telegram Depiler
 
-[![Docker Image](https://img.shields.io/docker/v/YOUR_USERNAME/telegram-manager?label=Docker&logo=docker)](https://hub.docker.com/r/YOUR_USERNAME/telegram-manager)
-[![Docker Pulls](https://img.shields.io/docker/pulls/YOUR_USERNAME/telegram-manager)](https://hub.docker.com/r/YOUR_USERNAME/telegram-manager)
-[![GitHub Stars](https://img.shields.io/github/stars/YOUR_USERNAME/telegram-manager)](https://github.com/YOUR_USERNAME/telegram-manager)
-[![License](https://img.shields.io/github/license/YOUR_USERNAME/telegram-manager)](LICENSE)
+[![Docker Image](https://img.shields.io/docker/v/apecme/telegram-depiler?label=Docker&logo=docker)](https://hub.docker.com/r/apecme/telegram-depiler)
+[![Docker Pulls](https://img.shields.io/docker/pulls/apecme/telegram-depiler)](https://hub.docker.com/r/apecme/telegram-depiler)
+[![GitHub Stars](https://img.shields.io/github/stars/APecme/Telegram_Depiler)](https://github.com/APecme/Telegram_Depiler)
+[![License](https://img.shields.io/github/license/APecme/Telegram_Depiler)](LICENSE)
 
 🚀 强大的 Telegram 自动下载管理器 - 支持群聊监控、Bot 交互、Web 管理界面
 
@@ -11,11 +11,11 @@
 
 ```bash
 docker run -d \
-  --name telegram-manager \
+  --name telegram-depiler \
   -p 8000:8000 \
   -v ./data:/app/data \
   -v ./downloads:/app/downloads \
-  YOUR_USERNAME/telegram-manager:latest
+  apecme/telegram-depiler:latest
 ```
 
 访问 http://localhost:8000 开始使用
@@ -43,11 +43,11 @@ docker run -d \
 
 ```bash
 # 1. 创建 docker-compose.yml
-curl -o docker-compose.yml https://raw.githubusercontent.com/YOUR_USERNAME/telegram-manager/main/docker-compose.yml
+curl -o docker-compose.yml https://raw.githubusercontent.com/APecme/Telegram_Depiler/main/docker-compose.yml
 
 # 2. 修改 docker-compose.yml，使用 Docker Hub 镜像
 # 将 build 部分替换为：
-# image: YOUR_DOCKERHUB_USERNAME/telegram-manager:latest
+# image: apecme/telegram-depiler:latest
 
 # 3. 启动服务
 docker compose up -d
@@ -59,8 +59,8 @@ docker compose up -d
 
 #### 克隆项目
 ```bash
-git clone https://github.com/YOUR_USERNAME/telegram-manager.git
-cd telegram-manager
+git clone https://github.com/APecme/Telegram_Depiler.git
+cd Telegram_Depiler
 ```
 
 ### 🐳 Docker Compose 部署详解
