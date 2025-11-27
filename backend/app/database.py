@@ -35,6 +35,7 @@ class Database:
                     status TEXT,
                     progress REAL,
                     download_speed REAL,
+                    source TEXT,
                     error TEXT,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -103,7 +104,7 @@ class Database:
             rows = cur.fetchall()
             return any(row[1] == column or (isinstance(row, sqlite3.Row) and row["name"] == column) for row in rows)
 
-        # downloads 表 - 确保文件路径、进度、下载速度、错误信息和时间戳字段存在
+        # downloads 表 - 确保文件路径、进度、下载速度、来源字段、错误信息和时间戳字段存在
         if has_column("downloads", "id"):
             if not has_column("downloads", "file_path"):
                 conn.execute("ALTER TABLE downloads ADD COLUMN file_path TEXT")
@@ -113,6 +114,8 @@ class Database:
                 conn.execute("ALTER TABLE downloads ADD COLUMN progress REAL DEFAULT 0")
             if not has_column("downloads", "download_speed"):
                 conn.execute("ALTER TABLE downloads ADD COLUMN download_speed REAL DEFAULT 0")
+            if not has_column("downloads", "source"):
+                conn.execute("ALTER TABLE downloads ADD COLUMN source TEXT DEFAULT 'bot'")
             if not has_column("downloads", "error"):
                 conn.execute("ALTER TABLE downloads ADD COLUMN error TEXT")
             if not has_column("downloads", "created_at"):
@@ -182,14 +185,15 @@ class Database:
         bot_username: str,
         file_name: str,
         status: str = "pending",
+        source: str = "bot",
     ) -> int:
         with self._connect() as conn:
             cur = conn.execute(
                 """
-                INSERT INTO downloads (message_id, chat_id, bot_username, file_name, file_path, status, progress, download_speed)
-                VALUES (?, ?, ?, ?, '', ?, 0, 0)
+                INSERT INTO downloads (message_id, chat_id, bot_username, file_name, file_path, status, progress, download_speed, source)
+                VALUES (?, ?, ?, ?, '', ?, 0, 0, ?)
                 """,
-                (message_id, chat_id, bot_username, file_name, status),
+                (message_id, chat_id, bot_username, file_name, status, source),
             )
             conn.commit()
             return int(cur.lastrowid)
