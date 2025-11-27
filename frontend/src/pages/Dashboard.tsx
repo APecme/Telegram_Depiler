@@ -14,6 +14,8 @@ type DownloadRecord = {
   download_speed?: number;
   created_at: string;
   error?: string;
+  bot_username?: string;
+  source?: string;
 };
 
 type GroupRule = {
@@ -457,6 +459,7 @@ export default function Dashboard() {
               <thead>
                 <tr style={{ borderBottom: "2px solid #e0e0e0" }}>
                   <th style={{ padding: "0.75rem", textAlign: "left" }}>文件名</th>
+                  <th style={{ padding: "0.75rem", textAlign: "left" }}>来源</th>
                   <th style={{ padding: "0.75rem", textAlign: "left" }}>状态</th>
                   <th style={{ padding: "0.75rem", textAlign: "left" }}>进度</th>
                   <th style={{ padding: "0.75rem", textAlign: "left" }}>速度</th>
@@ -474,6 +477,20 @@ export default function Dashboard() {
                   .map((record) => (
                     <tr key={record.id} style={{ borderBottom: "1px solid #f0f0f0" }}>
                       <td style={{ padding: "0.75rem" }}>{record.file_name}</td>
+                      <td style={{ padding: "0.75rem" }}>
+                        <span
+                          style={{
+                            padding: "0.2rem 0.5rem",
+                            borderRadius: "999px",
+                            fontSize: "0.8rem",
+                            backgroundColor: record.source === "rule" ? "#ede9fe" : "#e0f2fe",
+                            color: record.source === "rule" ? "#6d28d9" : "#0369a1",
+                            fontWeight: 500,
+                          }}
+                        >
+                          {record.source === "rule" ? "规则下载" : "机器人接收"}
+                        </span>
+                      </td>
                       <td style={{ padding: "0.75rem" }}>
                         <span
                           style={{

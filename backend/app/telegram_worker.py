@@ -1094,9 +1094,10 @@ class TelegramWorker:
             download_id = self.database.add_download(
                 message_id=message.id,
                 chat_id=chat.id,
-                bot_username=self._bot_username or "group_rule",
+                bot_username=self._bot_username or "unknown",
                 file_name=original_file_name,
                 status="downloading",
+                source="rule",
             )
             
             # 注册当前任务以便跟踪和取消
