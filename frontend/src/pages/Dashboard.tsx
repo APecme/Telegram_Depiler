@@ -240,9 +240,16 @@ export default function Dashboard() {
   };
 
   return (
-    <div style={{ padding: "2rem", maxWidth: "1400px", margin: "0 auto" }}>
+    <div style={{ padding: "2rem", maxWidth: "1400px", margin: "0 auto", minHeight: "100vh", display: "flex", flexDirection: "column" }}>
       <div style={{ marginBottom: "2rem", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <h1 style={{ margin: 0 }}>📊 Dashboard</h1>
+        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+          <img
+            src="/images/logo2.png"
+            alt="Telegram Depiler Logo"
+            style={{ height: "40px", objectFit: "contain" }}
+          />
+          <span style={{ fontSize: "0.9rem", color: "#6b7280" }}>v{__APP_VERSION__}</span>
+        </div>
         <Link to="/settings" style={{ textDecoration: "none" }}>
           <button style={{ padding: "0.5rem 1rem", cursor: "pointer" }}>⚙️ Settings</button>
         </Link>
@@ -621,6 +628,17 @@ export default function Dashboard() {
           </div>
         </div>
       )}
+
+      <div style={{ marginTop: "2rem", paddingTop: "1rem", borderTop: "1px solid #e5e7eb", textAlign: "center", color: "#6b7280", fontSize: "0.9rem" }}>
+        <a
+          href="https://github.com/APecme/Telegram_Depiler"
+          target="_blank"
+          rel="noreferrer"
+          style={{ color: "#2563eb", textDecoration: "none" }}
+        >
+          GitHub: https://github.com/APecme/Telegram_Depiler
+        </a>
+      </div>
 
       {/* 规则创建/编辑模态框 */}
       {showRuleModal && (

@@ -246,7 +246,7 @@ export default function Settings() {
   };
 
   return (
-    <div className="app">
+    <div className="app" style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "2rem" }}>
         <h1>系统设置</h1>
         <Link to="/" style={{ 
@@ -575,6 +575,17 @@ export default function Settings() {
             {message.text}
           </p>
         )}
+      </div>
+
+      <div style={{ marginTop: "2rem", paddingTop: "1rem", borderTop: "1px solid #e5e7eb", textAlign: "center", color: "#6b7280", fontSize: "0.9rem" }}>
+        <a
+          href="https://github.com/APecme/Telegram_Depiler"
+          target="_blank"
+          rel="noreferrer"
+          style={{ color: "#2563eb", textDecoration: "none" }}
+        >
+          GitHub: https://github.com/APecme/Telegram_Depiler
+        </a>
       </div>
     </div>
   );
