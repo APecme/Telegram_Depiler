@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="frontend/public/images/logo2.png" alt="Telegram Depiler Logo" width="180" />
+  <img src="frontend/public/images/logo2.png" alt="Telegram Depiler Logo" width="500" />
 </p>
 
 # Telegram Depiler
