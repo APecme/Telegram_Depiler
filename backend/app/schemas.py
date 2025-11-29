@@ -63,7 +63,7 @@ class DownloadRecord(BaseModel):
     bot_username: str
     file_name: str
     file_path: str
-    status: Literal["pending", "downloading", "completed", "failed"]
+    status: Literal["pending", "queued", "downloading", "paused", "completed", "failed", "cancelled"]
     progress: float
     download_speed: Optional[float] = None  # 下载速度（字节/秒）
     error: Optional[str] = None
@@ -77,7 +77,7 @@ class GroupRuleCreate(BaseModel):
     mode: Literal["monitor", "history"] = "monitor"
     enabled: bool = True
     include_extensions: Optional[str] = None  # 逗号分隔的扩展名，如 mp4,mp3,jpg
-    min_size_mb: Optional[float] = 0  # 以 MB 为单位，后端会转换为字节
+    size_range: Optional[str] = "0"  # 体积范围，格式: "0" / "10" / "10-100"
     save_dir: Optional[str] = None  # 保存目录
     filename_template: Optional[str] = None  # 文件名模板，例如 "{task_id}_{message_id}_{chat_title}"
     include_keywords: Optional[str] = None  # 逗号分隔的包含关键词
@@ -92,7 +92,7 @@ class GroupRuleUpdate(BaseModel):
     mode: Optional[Literal["monitor", "history"]] = None
     enabled: Optional[bool] = None
     include_extensions: Optional[str] = None
-    min_size_mb: Optional[float] = None
+    size_range: Optional[str] = None  # 体积范围，格式: "0" / "10" / "10-100"
     save_dir: Optional[str] = None
     filename_template: Optional[str] = None
     include_keywords: Optional[str] = None

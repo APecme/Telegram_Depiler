@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 from typing import Optional
 from telethon import TelegramClient, events
-from telethon.tl.types import User
+from telethon.tl.types import User, KeyboardButtonCallback
 
 from .config import Settings
 from .database import Database
@@ -17,16 +17,19 @@ logger = logging.getLogger(__name__)
 class BotCommandHandler:
     """处理Bot命令的独立处理器"""
     
-    def __init__(self, settings: Settings, database: Database, user_client: TelegramClient, worker=None):
+    def __init__(self, settings: Settings, database: Database, user_client: TelegramClient, worker=None, queue_manager=None):
         self.settings = settings
         self.database = database
         self.user_client = user_client  # 用户账户客户端，用于下载文件
         self.worker = worker  # TelegramWorker实例，用于取消下载
+        self.queue_manager = queue_manager  # 全局下载队列管理器
         self._bot_client: Optional[TelegramClient] = None
         self._bot_username: Optional[str] = None
         self._bot_id: Optional[int] = None
         self._download_semaphore = asyncio.Semaphore(5)
         self._active_downloads: dict[int, bool] = {}
+        self._download_tasks: dict[int, asyncio.Task] = {}
+        self._cancelled_downloads: set[int] = set()
         self._conversation_states: dict[int, dict] = {}  # 用户对话状态
         
     async def start(self) -> None:
@@ -169,15 +172,15 @@ class BotCommandHandler:
         
         try:
             startup_message = (
-                "🚀 **Telegram下载管理器已启动**\n\n"
+                f"🚀 **Telegram Depiler已启动 (v{self.settings.version})**\n\n"
                 "✅ Bot已就绪，正在监听消息\n\n"
                 "📖 **可用命令：**\n"
                 "/help - 显示帮助信息\n"
                 "/download - 查看下载统计\n"
                 "/createrule - 创建群聊下载规则\n"
                 "/cancel - 取消当前操作\n\n"
-                "💡 **提示：**\n"
-                "• 直接发送文件给Bot即可下载\n"
+                "• ✨使用方法：\n" 
+                "• 直接发送文件给Bot即可下载\n" 
                 "• 使用 /createrule 设置群聊自动下载\n"
                 "• 支持视频、图片、音频、文档等文件类型"
             )
@@ -221,6 +224,14 @@ class BotCommandHandler:
             await self._handle_createrule_command(event)
         elif command == "/cancel":
             await self._handle_cancel_command(event)
+        elif command == "/dedupe_on":
+            # 开启机器人重复文件检测（基于 Telegram 文件 ID）
+            self.database.set_config({"bot_dedupe_enabled": "1"})
+            await event.reply("✅ 已开启机器人重复文件检测（基于 Telegram 文件 ID）")
+        elif command == "/dedupe_off":
+            # 关闭机器人重复文件检测，允许对相同文件重复下载
+            self.database.set_config({"bot_dedupe_enabled": "0"})
+            await event.reply("⚠️ 已关闭机器人重复文件检测，Bot 将对相同文件重复下载")
         else:
             await event.reply("❓ 未知命令。使用 /help 查看可用命令")
             
@@ -232,48 +243,72 @@ class BotCommandHandler:
             "/help - 显示此帮助信息\n"
             "/download - 查看下载统计信息\n"
             "/createrule - 创建群聊下载规则\n"
-            "/cancel - 取消当前操作\n\n"
+            "/cancel - 取消当前操作\n"
+            "/dedupe_on - 开启机器人重复文件检测\n"
+            "/dedupe_off - 关闭机器人重复文件检测\n\n"
             "**使用方法：**\n"
             "1. 直接向Bot发送视频或文件，系统会自动下载\n"
-            "2. 使用 /createrule 创建群聊自动下载规则\n\n"
-            "**提示：**\n"
-            "• 支持视频、文档、音频、图片等多种文件类型\n"
-            "• 下载进度会实时更新\n"
-            "• 群聊规则支持文件类型、大小、关键词过滤"
+            "2. 使用 /createrule 创建群聊自动下载规则"
         )
         await event.reply(help_text, parse_mode='markdown')
         
     async def _handle_download_command(self, event: events.NewMessage.Event) -> None:
         """处理/download命令"""
-        downloads = self.database.list_downloads(limit=100)
-        
-        total = len(downloads)
-        completed = sum(1 for d in downloads if d.get("status") == "completed")
-        failed = sum(1 for d in downloads if d.get("status") == "failed")
-        downloading = sum(1 for d in downloads if d.get("status") == "downloading")
-        
-        stats_text = (
-            f"📊 **下载统计**\n\n"
+        # 全局统计
+        stats = self.database.get_download_stats()
+        total = stats.get("total", 0)
+        completed = stats.get("completed", 0)
+        failed = stats.get("failed", 0)
+        downloading = stats.get("downloading", 0)
+
+        # 获取最近的下载记录，并筛选出正在进行的任务
+        downloads = self.database.list_downloads(limit=200)
+        active_status = {"downloading", "pending", "paused"}
+        active_downloads = [d for d in downloads if d.get("status") in active_status]
+
+        header_text = (
+            "📊 **下载概览**\n\n"
             f"**总计：** {total}\n"
             f"✅ **成功：** {completed}\n"
             f"⏳ **下载中：** {downloading}\n"
-            f"❌ **失败：** {failed}\n"
+            f"❌ **失败：** {failed}\n\n"
         )
-        
-        if downloads:
-            # 显示最近5个下载
-            recent = downloads[:5]
-            stats_text += "\n**最近下载：**\n"
-            for d in recent:
-                status_emoji = {
-                    "completed": "✅",
-                    "downloading": "⏳",
-                    "failed": "❌",
-                    "pending": "⏸️"
-                }.get(d.get("status", "pending"), "❓")
-                stats_text += f"{status_emoji} {d.get('file_name', '未知')}\n"
-                
-        await event.reply(stats_text, parse_mode='markdown')
+
+        if not active_downloads:
+            header_text += "当前没有正在进行的下载任务。"
+            await event.reply(header_text, parse_mode='markdown')
+            return
+
+        # 构建正在下载列表和操作按钮
+        lines: list[str] = []
+        buttons: list[list[KeyboardButtonCallback]] = []
+
+        for d in active_downloads[:10]:
+            download_id = d.get("id")
+            if download_id is None:
+                continue
+
+            file_name = d.get("file_name") or "未知"
+            status = d.get("status") or "unknown"
+            progress = float(d.get("progress") or 0.0)
+            speed = float(d.get("download_speed") or 0.0)
+            speed_text = self._format_speed(speed) if speed > 0 else "计算中..."
+
+            lines.append(
+                f"• 任务ID: `{download_id}` | 状态: {status}\n"
+                f"  进度: {progress:.1f}% | 速度: {speed_text}\n"
+                f"  文件: {file_name}"
+            )
+
+            buttons.append([
+                KeyboardButtonCallback("⏸️ 暂停", f"pause_{download_id}".encode("utf-8")),
+                KeyboardButtonCallback("⭐ 优先", f"priority_{download_id}".encode("utf-8")),
+                KeyboardButtonCallback("🗑 删除", f"delete_{download_id}".encode("utf-8")),
+            ])
+
+        text = header_text + "\n**正在进行的任务：**\n" + "\n\n".join(lines)
+
+        await event.reply(text, buttons=buttons, parse_mode='markdown')
         
     async def _handle_bot_message(self, event: events.NewMessage.Event) -> None:
         """处理Bot收到的消息（非命令）"""
@@ -325,6 +360,33 @@ class BotCommandHandler:
             if not file_name:
                 file_name = f"telegram_{event.message.id}"
 
+            # 从 Telegram 媒体对象中提取文件 ID，用于去重
+            tg_file_id = None
+            tg_access_hash = None
+            media_obj = getattr(event.message, "document", None) or getattr(event.message, "photo", None)
+            if media_obj is not None:
+                tg_file_id = getattr(media_obj, "id", None)
+                tg_access_hash = getattr(media_obj, "access_hash", None)
+
+            # 读取配置判断是否启用机器人重复检测（默认启用）
+            config = self.database.get_config()
+            bot_dedupe_enabled = config.get("bot_dedupe_enabled", "1") != "0"
+
+            # 如果启用重复检测，且之前已经有相同 Telegram 文件的已完成下载，则不再重复下载
+            if bot_dedupe_enabled and tg_file_id is not None and tg_access_hash is not None:
+                existing = self.database.find_download_by_telegram_file(tg_file_id, tg_access_hash)
+                if existing:
+                    existing_id = existing.get("id")
+                    existing_path = existing.get("file_path") or "未知路径"
+                    text = (
+                        "⚠️ 此文件之前已下载过，将不再重复下载。\n\n"
+                        f"已有任务ID：`{existing_id}`\n"
+                        f"保存路径：`{existing_path}`\n\n"
+                        "如需再次下载此文件，可先使用 /dedupe_off 关闭重复检测，再重新发送。"
+                    )
+                    await event.reply(text, parse_mode='markdown')
+                    return
+
             # 记录管理员发送给 Bot 的消息
             try:
                 sender = await event.get_sender()
@@ -349,35 +411,72 @@ class BotCommandHandler:
             except Exception as e:
                 logger.debug(f"记录管理员媒体消息失败: {e}")
                 
-            # 获取下载统计
-            downloads = self.database.list_downloads(limit=1000)
-            total = len(downloads)
-            completed = sum(1 for d in downloads if d.get("status") == "completed")
-            failed = sum(1 for d in downloads if d.get("status") == "failed")
+            # 获取下载统计（全局）
+            stats = self.database.get_download_stats()
+            total = stats.get("total", 0)
+            completed = stats.get("completed", 0)
+            failed = stats.get("failed", 0)
             
-            # 添加下载记录
+            # 添加下载记录（初始状态为pending）
             download_id = self.database.add_download(
                 message_id=event.message.id,
                 chat_id=event.chat_id or 0,
                 bot_username=self._bot_username or "unknown",
                 file_name=file_name,
-                status="downloading",
+                status="pending",
+                tg_file_id=tg_file_id,
+                tg_access_hash=tg_access_hash,
             )
             
-            # 发送初始回复
-            reply_text = (
-                f"📥 **开始下载**\n\n"
-                f"**文件ID：** `{event.message.id}`\n"
-                f"**任务ID：** `{download_id}`\n"
-                f"**文件名：** {file_name}\n"
-                f"**大小：** {self._format_size(file_size)}\n"
-                f"**类型：** {media_type}\n"
-                f"**速度：** 计算中...\n\n"
-                f"**下载统计：**\n"
-                f"总计：{total + 1} | 成功：{completed} | 失败：{failed}"
-            )
+            # 检查全局并发限制
+            can_start = True
+            if self.queue_manager:
+                can_start = await self.queue_manager.try_start_download(download_id)
+            else:
+                # 没有队列管理器，直接标记为downloading
+                self.database.update_download(download_id, status="downloading")
             
-            reply_msg = await event.reply(reply_text, parse_mode='markdown')
+            # 发送初始回复（带控制按钮）
+            if can_start:
+                reply_text = (
+                    f"📥 **开始下载**\n\n"
+                    f"**文件ID：** `{event.message.id}`\n"
+                    f"**任务ID：** `{download_id}`\n"
+                    f"**文件名：** {file_name}\n"
+                    f"**大小：** {self._format_size(file_size)}\n"
+                    f"**类型：** {media_type}\n"
+                    f"**速度：** 计算中...\n\n"
+                    f"**下载统计：**\n"
+                    f"总计：{total + 1} | 成功：{completed} | 失败：{failed}"
+                )
+            else:
+                reply_text = (
+                    f"📋 **任务已加入队列**\n\n"
+                    f"**文件ID：** `{event.message.id}`\n"
+                    f"**任务ID：** `{download_id}`\n"
+                    f"**文件名：** {file_name}\n"
+                    f"**大小：** {self._format_size(file_size)}\n"
+                    f"**类型：** {media_type}\n\n"
+                    f"当前有5个任务正在下载，本任务将在队列中等待...\n\n"
+                    f"**下载统计：**\n"
+                    f"总计：{total + 1} | 成功：{completed} | 失败：{failed}"
+                )
+            
+            buttons = [
+                [
+                    KeyboardButtonCallback("⏸️ 暂停", f"pause_{download_id}".encode("utf-8")),
+                    KeyboardButtonCallback("⭐ 置顶优先", f"priority_{download_id}".encode("utf-8")),
+                ],
+                [
+                    KeyboardButtonCallback("🗑️ 删除", f"delete_{download_id}".encode("utf-8")),
+                ],
+            ]
+
+            reply_msg = await event.reply(reply_text, parse_mode='markdown', buttons=buttons)
+            
+            # 如果任务进入队列，直接返回不执行下载
+            if not can_start:
+                return
 
             # 记录 Bot 的回复消息
             try:
@@ -400,6 +499,9 @@ class BotCommandHandler:
             # 使用用户账户客户端下载文件
             # 首先需要通过用户账户客户端获取相同的消息
             async with self._download_semaphore:
+                current_task = asyncio.current_task()
+                if current_task:
+                    self._download_tasks[download_id] = current_task
                 self._active_downloads[download_id] = True
                 try:
                     target_path = Path(self.settings.download_dir) / file_name
@@ -415,6 +517,10 @@ class BotCommandHandler:
                     
                     def progress_callback(current: int, total: int) -> None:
                         nonlocal downloaded_bytes, last_update_time, last_downloaded, download_speed, last_edit_time
+
+                        if download_id in self._cancelled_downloads:
+                            raise asyncio.CancelledError("下载已被用户暂停")
+
                         downloaded_bytes = current
                         progress = (current / total * 100) if total > 0 else 0
                         
@@ -501,11 +607,15 @@ class BotCommandHandler:
                         download_speed=avg_speed,
                     )
                     
-                    # 更新回复消息
-                    downloads = self.database.list_downloads(limit=1000)
-                    total = len(downloads)
-                    completed = sum(1 for d in downloads if d.get("status") == "completed")
-                    failed = sum(1 for d in downloads if d.get("status") == "failed")
+                    # 通知队列管理器，尝试启动下一个任务
+                    if self.queue_manager:
+                        await self.queue_manager.on_download_finished(download_id)
+                    
+                    # 更新回复消息（使用全局统计）
+                    stats = self.database.get_download_stats()
+                    total = stats.get("total", 0)
+                    completed = stats.get("completed", 0)
+                    failed = stats.get("failed", 0)
                     
                     success_text = (
                         f"✅ **下载完成**\n\n"
@@ -518,15 +628,29 @@ class BotCommandHandler:
                         f"**下载统计：**\n"
                         f"总计：{total} | 成功：{completed} | 失败：{failed}"
                     )
-                    
+                    # 下载完成后只保留删除按钮
+                    finished_buttons = [
+                        [
+                            KeyboardButtonCallback("🗑️ 删除", f"delete_{download_id}".encode("utf-8")),
+                        ]
+                    ]
+
                     await self._bot_client.edit_message(
                         event.chat_id,
                         reply_msg.id,
                         success_text,
-                        parse_mode='markdown'
+                        parse_mode='markdown',
+                        buttons=finished_buttons,
                     )
                     self._active_downloads[download_id] = False
+                    self._download_tasks.pop(download_id, None)
+                    self._cancelled_downloads.discard(download_id)
                     
+                except asyncio.CancelledError:
+                    self._active_downloads[download_id] = False
+                    self._download_tasks.pop(download_id, None)
+                    self._cancelled_downloads.discard(download_id)
+                    raise
                 except Exception as e:
                     logger.exception(f"下载文件失败: {e}")
                     self.database.update_download(
@@ -535,10 +659,14 @@ class BotCommandHandler:
                         error=str(e),
                     )
                     
-                    downloads = self.database.list_downloads(limit=1000)
-                    total = len(downloads)
-                    completed = sum(1 for d in downloads if d.get("status") == "completed")
-                    failed = sum(1 for d in downloads if d.get("status") == "failed")
+                    # 通知队列管理器，尝试启动下一个任务
+                    if self.queue_manager:
+                        await self.queue_manager.on_download_finished(download_id)
+                    
+                    stats = self.database.get_download_stats()
+                    total = stats.get("total", 0)
+                    completed = stats.get("completed", 0)
+                    failed = stats.get("failed", 0)
                     
                     error_text = (
                         f"❌ **下载失败**\n\n"
@@ -548,14 +676,23 @@ class BotCommandHandler:
                         f"**下载统计：**\n"
                         f"总计：{total} | 成功：{completed} | 失败：{failed}"
                     )
-                    
+                    # 失败后同样保留删除按钮
+                    failed_buttons = [
+                        [
+                            KeyboardButtonCallback("🗑️ 删除", f"delete_{download_id}".encode("utf-8")),
+                        ]
+                    ]
+
                     await self._bot_client.edit_message(
                         event.chat_id,
                         reply_msg.id,
                         error_text,
-                        parse_mode='markdown'
+                        parse_mode='markdown',
+                        buttons=failed_buttons,
                     )
                     self._active_downloads[download_id] = False
+                    self._download_tasks.pop(download_id, None)
+                    self._cancelled_downloads.discard(download_id)
                 
         except Exception as e:
             logger.exception(f"处理媒体消息失败: {e}")
@@ -602,15 +739,25 @@ class BotCommandHandler:
                 f"**大小：** {self._format_size(file_size)}\n"
                 f"**类型：** {media_type}\n"
                 f"**进度：** {progress_text}\n"
-                f"**速度：** {speed_text}\n\n"
-                f"**下载统计：**\n"
-                f"总计：{total + 1} | 成功：{completed} | 失败：{failed}"
+                f"**速度：** {speed_text}"
             )
+
+            # 在进度更新时始终保留控制按钮
+            buttons = [
+                [
+                    KeyboardButtonCallback("⏸️ 暂停", f"pause_{download_id}".encode("utf-8")),
+                    KeyboardButtonCallback("⭐ 置顶优先", f"priority_{download_id}".encode("utf-8")),
+                ],
+                [
+                    KeyboardButtonCallback("🗑️ 删除", f"delete_{download_id}".encode("utf-8")),
+                ],
+            ]
             await self._bot_client.edit_message(
                 chat_id,
                 reply_message_id,
                 text,
                 parse_mode='markdown',
+                buttons=buttons,
             )
         except Exception as e:
             logger.debug(f"更新下载进度消息失败: {e}")
@@ -660,6 +807,28 @@ class BotCommandHandler:
         except Exception as e:
             logger.exception(f"处理回调查询失败: {e}")
             await event.answer(f"❌ 操作失败: {str(e)}", alert=True)
+
+    async def pause_download(self, download_id: int) -> bool:
+        downloads = self.database.list_downloads(limit=1000)
+        download = next((d for d in downloads if d.get("id") == download_id), None)
+        if not download:
+            return False
+        if download.get("status") != "downloading":
+            return False
+
+        self._cancelled_downloads.add(download_id)
+
+        task = self._download_tasks.get(download_id)
+        if task and not task.done():
+            task.cancel()
+
+        self._active_downloads[download_id] = False
+        
+        # 通知队列管理器，尝试启动下一个任务
+        if self.queue_manager:
+            await self.queue_manager.on_download_finished(download_id)
+        
+        return True
     
     async def _handle_pause_download(self, event: events.CallbackQuery.Event, download_id: int) -> None:
         """处理暂停下载"""
@@ -673,20 +842,29 @@ class BotCommandHandler:
                 return
             
             current_status = download.get('status')
+            source = download.get('source') or 'bot'
             
             # 如果正在下载，取消并标记为暂停
-            if current_status == 'downloading' and self.worker:
-                await self.worker.cancel_download(download_id)
-                self.database.update_download(download_id, status="paused", error="用户暂停")
-                await event.answer("⏸️ 已暂停下载")
-                
-                # 更新消息
-                await event.edit(
-                    f"⏸️ **已暂停**\n\n"
-                    f"文件: {download.get('file_name', '未知')}\n"
-                    f"状态: 已暂停\n\n"
-                    f"使用 /download 命令查看所有下载"
-                )
+            if current_status == 'downloading':
+                success = False
+                if source == 'rule' and self.worker:
+                    success = await self.worker.cancel_download(download_id)
+                else:
+                    success = await self.pause_download(download_id)
+
+                if success:
+                    self.database.update_download(download_id, status="paused", error="用户暂停")
+                    await event.answer("⏸️ 已暂停下载")
+
+                    # 更新消息
+                    await event.edit(
+                        f"⏸️ **已暂停**\n\n"
+                        f"文件: {download.get('file_name', '未知')}\n"
+                        f"状态: 已暂停\n\n"
+                        f"使用 /download 命令查看所有下载"
+                    )
+                else:
+                    await event.answer("❌ 暂停失败", alert=True)
             elif current_status == 'paused':
                 await event.answer("ℹ️ 下载已经是暂停状态", alert=True)
             else:
@@ -708,13 +886,35 @@ class BotCommandHandler:
                 return
             
             # 更新优先级（设置为高优先级）
-            # 注意：这里只是标记，实际的优先级队列需要在下载管理器中实现
             current_priority = download.get('priority', 0)
             new_priority = 10 if current_priority < 10 else 0
             
             self.database.update_download(download_id, priority=new_priority)
-            
+
+            # 如果设置为高优先级，则抢占最早开始的其他下载任务
             if new_priority > 0:
+                other_candidates = [
+                    d for d in downloads
+                    if d.get('status') == 'downloading' and d.get('id') != download_id
+                ]
+                if other_candidates:
+                    other_candidates.sort(key=lambda d: d.get('created_at') or "")
+                    victim = other_candidates[0]
+                    victim_id = victim.get('id')
+                    victim_source = victim.get('source') or 'bot'
+
+                    if victim_id is not None:
+                        if victim_source == 'rule' and self.worker:
+                            await self.worker.cancel_download(int(victim_id))
+                        else:
+                            await self.pause_download(int(victim_id))
+
+                        self.database.update_download(
+                            int(victim_id),
+                            status="paused",
+                            error="被高优先级任务抢占",
+                        )
+
                 await event.answer("⭐ 已设置为高优先级")
                 await event.edit(
                     f"⭐ **高优先级**\n\n"
@@ -1048,28 +1248,41 @@ class BotCommandHandler:
         
         size_text = (
             f"✅ 文件类型: **{extensions if extensions else '所有类型'}**\n\n"
-            "📏 **请输入最小文件大小（MB）**\n\n"
-            "💡 输入数字，例如: 10\n"
-            "或回复 0 表示不限制大小"
+            "📏 **请输入文件体积范围（MB）**\n\n"
+            "💡 **格式说明：**\n"
+            "• `0` - 不限制大小\n"
+            "• `10` - 大于等于 10MB\n"
+            "• `10-100` - 10MB 到 100MB 之间\n"
+            "• `0-100` - 小于等于 100MB\n\n"
+            "**示例：** 10-500"
         )
         await event.reply(size_text, parse_mode='markdown')
     
     async def _handle_min_size_input(self, event, user_id, message_text, state):
-        """处理最小文件大小输入"""
-        try:
-            min_size = float(message_text)
-            if min_size < 0:
-                await event.reply("❌ 大小不能为负数，请重新输入")
-                return
-        except ValueError:
-            await event.reply("❌ 无效的数字，请重新输入")
-            return
+        """处理文件体积范围输入"""
+        size_range = message_text.strip()
         
-        state['rule_data']['min_size_mb'] = min_size
+        # 验证格式
+        from ..database import Database
+        min_bytes, max_bytes = Database.parse_size_range(size_range)
+        
+        state['rule_data']['size_range'] = size_range
+        state['rule_data']['min_size_bytes'] = min_bytes
+        state['rule_data']['max_size_bytes'] = max_bytes
         state['step'] = 'enter_keywords'
         
+        # 显示解析结果
+        if min_bytes == 0 and max_bytes == 0:
+            size_desc = "不限制"
+        elif min_bytes > 0 and max_bytes > 0:
+            size_desc = f"{min_bytes / (1024 * 1024):.1f} MB ~ {max_bytes / (1024 * 1024):.1f} MB"
+        elif min_bytes > 0:
+            size_desc = f">= {min_bytes / (1024 * 1024):.1f} MB"
+        else:
+            size_desc = f"<= {max_bytes / (1024 * 1024):.1f} MB"
+        
         keywords_text = (
-            f"✅ 最小大小: **{min_size} MB**\n\n"
+            f"✅ 体积范围: **{size_desc}**\n\n"
             "🔍 **请输入关键词过滤**\n\n"
             "• 包含关键词: 用 + 开头，例如: +电影\n"
             "• 排除关键词: 用 - 开头，例如: -广告\n"
@@ -1095,12 +1308,25 @@ class BotCommandHandler:
         
         # 显示确认信息
         rule_data = state['rule_data']
+        
+        # 格式化体积范围显示
+        min_bytes = rule_data.get('min_size_bytes', 0)
+        max_bytes = rule_data.get('max_size_bytes', 0)
+        if min_bytes == 0 and max_bytes == 0:
+            size_desc = "不限制"
+        elif min_bytes > 0 and max_bytes > 0:
+            size_desc = f"{min_bytes / (1024 * 1024):.1f} MB ~ {max_bytes / (1024 * 1024):.1f} MB"
+        elif min_bytes > 0:
+            size_desc = f">= {min_bytes / (1024 * 1024):.1f} MB"
+        else:
+            size_desc = f"<= {max_bytes / (1024 * 1024):.1f} MB"
+        
         confirm_text = (
             "📋 **规则配置预览**\n\n"
             f"**群聊**: {rule_data['chat_title']}\n"
             f"**模式**: {'监控模式' if rule_data['mode'] == 'monitor' else '历史模式'}\n"
             f"**文件类型**: {rule_data['extensions'] if rule_data['extensions'] else '所有类型'}\n"
-            f"**最小大小**: {rule_data['min_size_mb']} MB\n"
+            f"**体积范围**: {size_desc}\n"
             f"**包含关键词**: {include_keywords if include_keywords else '无'}\n"
             f"**排除关键词**: {exclude_keywords if exclude_keywords else '无'}\n\n"
             "✅ 回复 yes 确认创建\n"
@@ -1118,15 +1344,14 @@ class BotCommandHandler:
         # 创建规则
         rule_data = state['rule_data']
         try:
-            # 将MB转换为字节
-            min_size_bytes = int(rule_data['min_size_mb'] * 1024 * 1024)
-            
             rule_id = self.database.add_group_rule(
                 chat_id=rule_data['chat_id'],
                 chat_title=rule_data['chat_title'],
                 mode=rule_data['mode'],
                 include_extensions=rule_data['extensions'],
-                min_size_bytes=min_size_bytes,
+                min_size_bytes=rule_data.get('min_size_bytes', 0),
+                max_size_bytes=rule_data.get('max_size_bytes', 0),
+                size_range=rule_data.get('size_range', '0'),
                 include_keywords=rule_data['include_keywords'],
                 exclude_keywords=rule_data['exclude_keywords'],
                 enabled=True

@@ -5,11 +5,18 @@ from typing import Any, Dict, Optional
 
 
 def _read_version() -> str:
-    version_file = Path(__file__).resolve().parents[2] / "VERSION"
-    try:
-        return version_file.read_text(encoding="utf-8").strip()
-    except FileNotFoundError:
-        return "1.0002"
+    """读取版本号，优先从上级目录中的 VERSION 文件获取。"""
+    config_path = Path(__file__).resolve()
+    # 从当前文件所在目录一路向上查找 VERSION 文件，兼容源码运行和 Docker 容器内的路径结构
+    for parent in config_path.parents:
+        candidate = parent / "VERSION"
+        if candidate.is_file():
+            try:
+                return candidate.read_text(encoding="utf-8").strip()
+            except OSError:
+                continue
+    # 找不到 VERSION 时返回一个开发标记
+    return "dev"
 
 
 @dataclass

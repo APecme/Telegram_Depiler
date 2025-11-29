@@ -4,7 +4,7 @@
 
 # Telegram Depiler
 
-[![Version](https://img.shields.io/badge/version-1.0.4-blue)](https://github.com/APecme/Telegram_Depiler/releases/tag/v1.0.4)
+[![Version](https://img.shields.io/badge/version-1.0.5-blue)](https://github.com/APecme/Telegram_Depiler/releases/tag/v1.0.5)
 [![Docker Image](https://img.shields.io/docker/v/apecme/telegram-depiler?label=Docker&logo=docker)](https://hub.docker.com/r/apecme/telegram-depiler)
 [![Docker Pulls](https://img.shields.io/docker/pulls/apecme/telegram-depiler)](https://hub.docker.com/r/apecme/telegram-depiler)
 [![GitHub Stars](https://img.shields.io/github/stars/APecme/Telegram_Depiler)](https://github.com/APecme/Telegram_Depiler)
@@ -12,7 +12,7 @@
 
 🚀 强大的 Telegram 自动下载管理器 - 支持群聊监控、Bot 交互、Web 管理界面
 
-> **最新版本 v1.0.4** - 简化Docker标签策略 🎉
+> **最新版本 v1.0.5** - 简化Docker标签策略 🎉
 
 ## 一键部署
 

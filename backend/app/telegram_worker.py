@@ -91,9 +91,10 @@ class LoginContext:
 
 
 class TelegramWorker:
-    def __init__(self, settings: Settings, database: Database):
+    def __init__(self, settings: Settings, database: Database, queue_manager=None):
         self.settings = settings
         self.database = database
+        self.queue_manager = queue_manager  # 全局下载队列管理器
         self._client: Optional[TelegramClient] = None
         self._event_handler_added = False
         self._lock = asyncio.Lock()
@@ -553,6 +554,11 @@ class TelegramWorker:
             
             # 更新数据库状态
             self.database.update_download(download_id, status="cancelled", error="用户取消")
+            
+            # 通知队列管理器，尝试启动下一个任务
+            if self.queue_manager:
+                await self.queue_manager.on_download_finished(download_id)
+            
             return True
         except Exception as e:
             logger.exception(f"取消下载任务失败: {e}")
@@ -659,7 +665,7 @@ class TelegramWorker:
             # 记录收到的所有消息（用于调试）
             chat_title = getattr(chat, 'title', None) or getattr(chat, 'username', None) or f"Chat_{event.chat_id}"
             message_preview = (getattr(event.message, 'message', '') or '')[:50]
-            logger.info(
+            logger.debug(
                 "📨 收到消息 | 来源: %s | 发送者: %s | 类型: %s | 内容预览: %s",
                 chat_title,
                 sender_username or sender_first_name or f"ID:{sender_id}",
@@ -796,7 +802,11 @@ class TelegramWorker:
                 )
             except Exception as exc:
                 logger.exception("记录消息失败: %s", exc)
-            
+
+            # 发给 Bot 的私聊消息统一由 BotCommandHandler 处理，这里不再重复下载
+            if is_bot_chat:
+                return
+
             # 如果是视频或文档，则下载
             # 注意：Bot收到的消息由bot_handler处理，这里只处理用户账户收到的其他消息
             if event.message.video or event.message.document:
@@ -938,25 +948,25 @@ class TelegramWorker:
                 only_enabled=True
             )
             
-            logger.info("🔔 群聊 '%s' (ID:%d) 收到新消息", chat_title, chat_id)
+            logger.debug("🔔 群聊 '%s' (ID:%d) 收到新消息", chat_title, chat_id)
             
             if not rules:
-                logger.info("  ℹ️  该群聊没有配置监控下载规则，跳过处理")
+                logger.debug("  ℹ️  该群聊没有配置监控下载规则，跳过处理")
                 return
             
-            logger.info("  📋 找到 %d 条启用的监控规则", len(rules))
+            logger.debug("  📋 找到 %d 条启用的监控规则", len(rules))
             
             # 检查消息是否有媒体
             if not (event.message.video or event.message.document or event.message.photo or event.message.audio):
-                logger.info("  ℹ️  消息不包含媒体文件，跳过处理")
+                logger.debug("  ℹ️  消息不包含媒体文件，跳过处理")
                 return
             
-            logger.info("  📎 消息包含媒体文件，开始逐条检查规则...")
+            logger.debug("  📎 消息包含媒体文件，开始逐条检查规则...")
             
             # 对每条规则进行匹配
             matched = False
             for idx, rule in enumerate(rules, 1):
-                logger.info("\n检查第 %d/%d 条规则...", idx, len(rules))
+                logger.debug("\n检查第 %d/%d 条规则...", idx, len(rules))
                 if self._should_download_by_rule(event.message, rule):
                     logger.info("✅ 消息匹配规则 ID:%d，开始下载", rule['id'])
                     # 创建下载任务并跟踪
@@ -967,7 +977,7 @@ class TelegramWorker:
                     break  # 匹配到一条规则就下载，避免重复
             
             if not matched:
-                logger.info("❌ 消息不匹配任何规则，不下载")
+                logger.debug("❌ 消息不匹配任何规则，不下载")
                     
         except Exception as e:
             logger.exception("处理群聊消息规则时出错: %s", e)
@@ -1012,18 +1022,38 @@ class TelegramWorker:
             else:
                 logger.info("  - 文件扩展名检查: 跳过（未配置）")
             
-            # 检查文件大小
-            if rule.get('min_size_bytes') and rule['min_size_bytes'] > 0:
+            # 检查文件大小（支持范围）
+            min_size_bytes = rule.get('min_size_bytes', 0) or 0
+            max_size_bytes = rule.get('max_size_bytes', 0) or 0
+            
+            if min_size_bytes > 0 or max_size_bytes > 0:
                 file_size = 0
                 if message.file:
                     file_size = getattr(message.file, "size", 0) or 0
                 file_size_mb = file_size / (1024 * 1024)
-                min_size_mb = rule['min_size_bytes'] / (1024 * 1024)
-                if file_size < rule['min_size_bytes']:
-                    logger.info("  ✗ 文件大小检查: 失败 - %.2f MB < %.2f MB", file_size_mb, min_size_mb)
+                
+                # 检查最小值
+                if min_size_bytes > 0 and file_size < min_size_bytes:
+                    min_size_mb = min_size_bytes / (1024 * 1024)
+                    logger.info("  ✗ 文件大小检查: 失败 - %.2f MB < %.2f MB（最小值）", file_size_mb, min_size_mb)
                     logger.info("=" * 60)
                     return False
-                logger.info("  ✓ 文件大小检查: 通过 - %.2f MB >= %.2f MB", file_size_mb, min_size_mb)
+                
+                # 检查最大值
+                if max_size_bytes > 0 and file_size > max_size_bytes:
+                    max_size_mb = max_size_bytes / (1024 * 1024)
+                    logger.info("  ✗ 文件大小检查: 失败 - %.2f MB > %.2f MB（最大值）", file_size_mb, max_size_mb)
+                    logger.info("=" * 60)
+                    return False
+                
+                # 通过检查
+                if min_size_bytes > 0 and max_size_bytes > 0:
+                    logger.info("  ✓ 文件大小检查: 通过 - %.2f MB 在范围 [%.2f, %.2f] MB 内", 
+                               file_size_mb, min_size_bytes / (1024 * 1024), max_size_bytes / (1024 * 1024))
+                elif min_size_bytes > 0:
+                    logger.info("  ✓ 文件大小检查: 通过 - %.2f MB >= %.2f MB", file_size_mb, min_size_bytes / (1024 * 1024))
+                else:
+                    logger.info("  ✓ 文件大小检查: 通过 - %.2f MB <= %.2f MB", file_size_mb, max_size_bytes / (1024 * 1024))
             else:
                 logger.info("  - 文件大小检查: 跳过（未配置或为0）")
             
@@ -1082,23 +1112,56 @@ class TelegramWorker:
             elif message.photo:
                 original_file_name = f"photo_{message.id}.jpg"
                 media_type = "图片"
-            
+
             original_file_name = original_file_name or f"file_{message.id}"
-            
+
+            # 从 Telegram 媒体对象中提取文件 ID，用于去重
+            tg_file_id = None
+            tg_access_hash = None
+            media_obj = getattr(message, "document", None) or getattr(message, "photo", None)
+            if media_obj is not None:
+                tg_file_id = getattr(media_obj, "id", None)
+                tg_access_hash = getattr(media_obj, "access_hash", None)
+
+            # 如果之前已经有相同 Telegram 文件的已完成下载，则跳过本次按规则下载
+            if tg_file_id is not None and tg_access_hash is not None:
+                existing = self.database.find_download_by_telegram_file(tg_file_id, tg_access_hash)
+                if existing:
+                    logger.info(
+                        "检测到已下载的 Telegram 文件 (download_id=%s)，按规则下载将被跳过",
+                        existing.get("id"),
+                    )
+                    return
+
             # 应用文件名模板
             filename_template = rule.get('filename_template') or "{message_id}_{file_name}"
             chat_title = getattr(chat, 'title', 'Unknown').replace('/', '_').replace('\\', '_')
             timestamp = int(time.time())
             
-            # 先创建下载记录以获取task_id
+            # 先创建下载记录（初始状态为pending）
             download_id = self.database.add_download(
                 message_id=message.id,
                 chat_id=chat.id,
                 bot_username=self._bot_username or "unknown",
                 file_name=original_file_name,
-                status="downloading",
+                status="pending",
                 source="rule",
+                tg_file_id=tg_file_id,
+                tg_access_hash=tg_access_hash,
             )
+            
+            # 检查全局并发限制
+            can_start = True
+            if self.queue_manager:
+                can_start = await self.queue_manager.try_start_download(download_id)
+            else:
+                # 没有队列管理器，直接标记为downloading
+                self.database.update_download(download_id, status="downloading")
+            
+            # 如果任务进入队列，直接返回不执行下载
+            if not can_start:
+                logger.info(f"规则下载任务 {download_id} 进入队列，等待其他任务完成")
+                return
             
             # 注册当前任务以便跟踪和取消
             current_task = asyncio.current_task()
@@ -1226,6 +1289,10 @@ class TelegramWorker:
             )
             logger.info("下载完成: %s", file_name)
             
+            # 通知队列管理器，尝试启动下一个任务
+            if self.queue_manager:
+                await self.queue_manager.on_download_finished(download_id)
+            
             # 更新Bot通知为完成状态
             if bot_message and self._bot_client:
                 try:
@@ -1281,6 +1348,10 @@ class TelegramWorker:
                 self.database.update_download(
                     download_id, status="failed", error=str(exc)
                 )
+                
+                # 通知队列管理器，尝试启动下一个任务
+                if self.queue_manager:
+                    await self.queue_manager.on_download_finished(download_id)
                 
                 # 更新Bot通知为失败状态
                 if 'bot_message' in locals() and bot_message and self._bot_client:

@@ -36,6 +36,9 @@ class Database:
                     progress REAL,
                     download_speed REAL,
                     source TEXT,
+                    tg_file_id INTEGER,
+                    tg_access_hash INTEGER,
+                    priority INTEGER DEFAULT 0,
                     error TEXT,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -82,6 +85,8 @@ class Database:
                     enabled BOOLEAN NOT NULL DEFAULT 1,
                     include_extensions TEXT,
                     min_size_bytes INTEGER DEFAULT 0,
+                    max_size_bytes INTEGER DEFAULT 0,
+                    size_range TEXT DEFAULT '0',
                     save_dir TEXT,
                     filename_template TEXT,
                     include_keywords TEXT,
@@ -116,6 +121,12 @@ class Database:
                 conn.execute("ALTER TABLE downloads ADD COLUMN download_speed REAL DEFAULT 0")
             if not has_column("downloads", "source"):
                 conn.execute("ALTER TABLE downloads ADD COLUMN source TEXT DEFAULT 'bot'")
+            if not has_column("downloads", "tg_file_id"):
+                conn.execute("ALTER TABLE downloads ADD COLUMN tg_file_id INTEGER")
+            if not has_column("downloads", "tg_access_hash"):
+                conn.execute("ALTER TABLE downloads ADD COLUMN tg_access_hash INTEGER")
+            if not has_column("downloads", "priority"):
+                conn.execute("ALTER TABLE downloads ADD COLUMN priority INTEGER DEFAULT 0")
             if not has_column("downloads", "error"):
                 conn.execute("ALTER TABLE downloads ADD COLUMN error TEXT")
             if not has_column("downloads", "created_at"):
@@ -160,6 +171,10 @@ class Database:
                 conn.execute("ALTER TABLE group_download_rules ADD COLUMN start_time DATETIME")
             if not has_column("group_download_rules", "end_time"):
                 conn.execute("ALTER TABLE group_download_rules ADD COLUMN end_time DATETIME")
+            if not has_column("group_download_rules", "max_size_bytes"):
+                conn.execute("ALTER TABLE group_download_rules ADD COLUMN max_size_bytes INTEGER DEFAULT 0")
+            if not has_column("group_download_rules", "size_range"):
+                conn.execute("ALTER TABLE group_download_rules ADD COLUMN size_range TEXT DEFAULT '0'")
 
         conn.commit()
 
@@ -186,14 +201,29 @@ class Database:
         file_name: str,
         status: str = "pending",
         source: str = "bot",
+        tg_file_id: int | None = None,
+        tg_access_hash: int | None = None,
     ) -> int:
         with self._connect() as conn:
             cur = conn.execute(
                 """
-                INSERT INTO downloads (message_id, chat_id, bot_username, file_name, file_path, status, progress, download_speed, source)
-                VALUES (?, ?, ?, ?, '', ?, 0, 0, ?)
+                INSERT INTO downloads (
+                    message_id, chat_id, bot_username, file_name,
+                    file_path, status, progress, download_speed,
+                    source, tg_file_id, tg_access_hash
+                )
+                VALUES (?, ?, ?, ?, '', ?, 0, 0, ?, ?, ?)
                 """,
-                (message_id, chat_id, bot_username, file_name, status, source),
+                (
+                    message_id,
+                    chat_id,
+                    bot_username,
+                    file_name,
+                    status,
+                    source,
+                    tg_file_id,
+                    tg_access_hash,
+                ),
             )
             conn.commit()
             return int(cur.lastrowid)
@@ -206,6 +236,7 @@ class Database:
         status: str | None = None,
         progress: float | None = None,
         download_speed: float | None = None,
+        priority: int | None = None,
         error: str | None = None,
     ) -> None:
         updates = []
@@ -223,6 +254,9 @@ class Database:
         if download_speed is not None:
             updates.append("download_speed = ?")
             params.append(download_speed)
+        if priority is not None:
+            updates.append("priority = ?")
+            params.append(priority)
         if error is not None:
             updates.append("error = ?")
             params.append(error)
@@ -239,11 +273,56 @@ class Database:
             conn.commit()
 
     def list_downloads(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """按时间倒序列出最近的下载记录。"""
         with self._connect() as conn:
             rows = conn.execute(
                 "SELECT * FROM downloads ORDER BY created_at DESC LIMIT ?", (limit,)
             ).fetchall()
             return [dict(row) for row in rows]
+
+    def delete_download(self, download_id: int) -> None:
+        """删除指定的下载记录。"""
+        with self._connect() as conn:
+            conn.execute("DELETE FROM downloads WHERE id = ?", (download_id,))
+            conn.commit()
+
+    def find_download_by_telegram_file(
+        self,
+        tg_file_id: int,
+        tg_access_hash: int,
+    ) -> Optional[Dict[str, Any]]:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM downloads
+                WHERE tg_file_id = ? AND tg_access_hash = ? AND status = 'completed'
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (tg_file_id, tg_access_hash),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def get_download_stats(self) -> Dict[str, int]:
+        """统计下载任务总体情况，避免仅基于有限条目计算不准确。"""
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT
+                    COUNT(*) AS total,
+                    SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS completed,
+                    SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed,
+                    SUM(CASE WHEN status = 'downloading' THEN 1 ELSE 0 END) AS downloading
+                FROM downloads
+                """
+            ).fetchone()
+
+        return {
+            "total": (row["total"] or 0) if row is not None else 0,
+            "completed": (row["completed"] or 0) if row is not None else 0,
+            "failed": (row["failed"] or 0) if row is not None else 0,
+            "downloading": (row["downloading"] or 0) if row is not None else 0,
+        }
 
     # Message helpers ---------------------------------------------------
     def add_message(
@@ -336,6 +415,35 @@ class Database:
             conn.commit()
 
     # Group download rule helpers -----------------------------------------
+    @staticmethod
+    def parse_size_range(size_range: str) -> tuple[int, int]:
+        """解析体积范围字符串，返回 (min_bytes, max_bytes)。
+        
+        示例：
+        - "0" -> (0, 0) 不限制
+        - "10" -> (10MB, 0) >= 10MB
+        - "10-100" -> (10MB, 100MB) 10MB ~ 100MB
+        - "0-100" -> (0, 100MB) <= 100MB
+        """
+        size_range = (size_range or "0").strip()
+        if not size_range or size_range == "0":
+            return (0, 0)
+        
+        if "-" in size_range:
+            parts = size_range.split("-", 1)
+            try:
+                min_mb = float(parts[0].strip()) if parts[0].strip() else 0
+                max_mb = float(parts[1].strip()) if parts[1].strip() else 0
+                return (int(min_mb * 1024 * 1024), int(max_mb * 1024 * 1024))
+            except ValueError:
+                return (0, 0)
+        else:
+            try:
+                min_mb = float(size_range)
+                return (int(min_mb * 1024 * 1024), 0)
+            except ValueError:
+                return (0, 0)
+
     def add_group_rule(
         self,
         *,
@@ -345,6 +453,8 @@ class Database:
         enabled: bool = True,
         include_extensions: str | None = None,
         min_size_bytes: int = 0,
+        max_size_bytes: int = 0,
+        size_range: str = "0",
         save_dir: str | None = None,
         filename_template: str | None = None,
         include_keywords: str | None = None,
@@ -359,11 +469,11 @@ class Database:
                 """
                 INSERT INTO group_download_rules (
                     chat_id, chat_title, mode, enabled,
-                    include_extensions, min_size_bytes, save_dir,
+                    include_extensions, min_size_bytes, max_size_bytes, size_range, save_dir,
                     filename_template, include_keywords, exclude_keywords,
                     match_mode, start_time, end_time
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     chat_id,
@@ -372,6 +482,8 @@ class Database:
                     1 if enabled else 0,
                     (include_extensions or ""),
                     int(min_size_bytes or 0),
+                    int(max_size_bytes or 0),
+                    (size_range or "0"),
                     (save_dir or ""),
                     (filename_template or ""),
                     (include_keywords or ""),
@@ -393,6 +505,8 @@ class Database:
         enabled: bool | None = None,
         include_extensions: str | None = None,
         min_size_bytes: int | None = None,
+        max_size_bytes: int | None = None,
+        size_range: str | None = None,
         save_dir: str | None = None,
         filename_template: str | None = None,
         include_keywords: str | None = None,
@@ -420,6 +534,12 @@ class Database:
         if min_size_bytes is not None:
             updates.append("min_size_bytes = ?")
             params.append(int(min_size_bytes))
+        if max_size_bytes is not None:
+            updates.append("max_size_bytes = ?")
+            params.append(int(max_size_bytes))
+        if size_range is not None:
+            updates.append("size_range = ?")
+            params.append(size_range)
         if save_dir is not None:
             updates.append("save_dir = ?")
             params.append(save_dir)

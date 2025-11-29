@@ -32,7 +32,73 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 database = Database(settings.data_dir / "state.db")
 settings.load_from_mapping(database.get_config())
-worker = TelegramWorker(settings, database)
+
+
+class DownloadQueueManager:
+    """全局下载队列管理器，限制最多同时5个下载任务"""
+    
+    MAX_CONCURRENT = 5
+    
+    def __init__(self, database: Database):
+        self.database = database
+        self._lock = asyncio.Lock()
+    
+    async def try_start_download(self, download_id: int) -> bool:
+        """尝试开始一个下载任务。如果当前并发数已满，返回False并将任务标记为queued"""
+        async with self._lock:
+            # 统计当前正在下载的任务数
+            downloads = self.database.list_downloads(limit=1000)
+            downloading_count = sum(1 for d in downloads if d.get('status') == 'downloading')
+            
+            if downloading_count >= self.MAX_CONCURRENT:
+                # 超过并发限制，标记为队列中
+                self.database.update_download(download_id, status='queued')
+                logger.info(f"下载任务 {download_id} 进入队列（当前 {downloading_count}/{self.MAX_CONCURRENT}）")
+                return False
+            else:
+                # 可以开始下载
+                self.database.update_download(download_id, status='downloading')
+                logger.info(f"下载任务 {download_id} 开始（当前 {downloading_count + 1}/{self.MAX_CONCURRENT}）")
+                return True
+    
+    async def on_download_finished(self, download_id: int):
+        """下载完成/失败/取消时调用，尝试启动队列中的下一个任务"""
+        async with self._lock:
+            # 查找最早的queued任务
+            downloads = self.database.list_downloads(limit=1000)
+            queued_tasks = [
+                d for d in downloads 
+                if d.get('status') == 'queued'
+            ]
+            
+            if not queued_tasks:
+                logger.info(f"下载任务 {download_id} 完成，队列为空")
+                return
+            
+            # 按创建时间排序，取最早的
+            queued_tasks.sort(key=lambda d: d.get('created_at') or '')
+            next_task = queued_tasks[0]
+            next_id = next_task.get('id')
+            
+            if next_id is None:
+                return
+            
+            # 将队列中的任务标记为downloading，并触发实际下载
+            self.database.update_download(next_id, status='downloading')
+            logger.info(f"下载任务 {download_id} 完成，启动队列任务 {next_id}")
+            
+            # 根据来源触发下载
+            source = next_task.get('source', 'bot')
+            if source == 'rule' and worker:
+                # 规则下载：需要重新触发（这里简化处理，实际可能需要更复杂的恢复逻辑）
+                logger.warning(f"规则下载任务 {next_id} 从队列恢复暂不支持自动重启")
+            elif bot_handler:
+                # Bot下载：同样需要恢复逻辑
+                logger.warning(f"Bot下载任务 {next_id} 从队列恢复暂不支持自动重启")
+
+
+download_queue_manager = DownloadQueueManager(database)
+worker = TelegramWorker(settings, database, queue_manager=download_queue_manager)
 bot_handler: Optional[BotCommandHandler] = None
 
 
@@ -92,7 +158,7 @@ async def _ensure_bot_handler_running() -> None:
         user_info = await client.get_me()
         logger.info("用户账户已登录: @%s (ID: %s)", user_info.username, user_info.id)
 
-        bot_handler = BotCommandHandler(settings, database, client, worker)
+        bot_handler = BotCommandHandler(settings, database, client, worker, queue_manager=download_queue_manager)
         await bot_handler.start()
         logger.info("Bot 命令处理器已自动启动")
         
@@ -345,7 +411,7 @@ async def start_bot(body: StartBotRequest) -> dict:
                 pass
 
         # 始终通过 BotCommandHandler 来处理 Bot 收到的消息并回复
-        bot_handler = BotCommandHandler(settings, database, client, worker)
+        bot_handler = BotCommandHandler(settings, database, client, worker, queue_manager=download_queue_manager)
         await bot_handler.start()
         
         # 设置Bot客户端到worker，用于发送群聊下载通知
@@ -392,28 +458,75 @@ async def list_downloads() -> dict:
 
 @api.post("/downloads/{download_id}/pause")
 async def pause_download(download_id: int) -> dict:
-    """暂停下载"""
-    if worker:
+    """暂停下载（支持 Bot 与群聊规则任务）。"""
+    downloads = database.list_downloads(limit=1000)
+    download = next((d for d in downloads if d.get("id") == download_id), None)
+
+    if not download:
+        raise HTTPException(status_code=404, detail="下载记录不存在")
+
+    status = download.get("status")
+    if status != "downloading":
+        return {"success": False, "message": f"当前状态({status})无法暂停"}
+
+    source = download.get("source") or "bot"
+    success = False
+
+    # 群聊规则任务由 TelegramWorker 管理
+    if source == "rule" and worker is not None:
         success = await worker.cancel_download(download_id)
-        if success:
-            database.update_download(download_id, status="paused", error="用户暂停")
-            return {"success": True, "message": "已暂停下载"}
+    # Bot 任务由 BotCommandHandler 管理
+    elif bot_handler is not None:
+        success = await bot_handler.pause_download(download_id)
+
+    if success:
+        database.update_download(download_id, status="paused", error="用户暂停")
+        return {"success": True, "message": "已暂停下载"}
+
     return {"success": False, "message": "暂停失败"}
 
 
 @api.post("/downloads/{download_id}/priority")
 async def set_download_priority(download_id: int) -> dict:
-    """设置下载优先级"""
+    """设置下载优先级，并在需要时抢占其他下载任务。"""
     downloads = database.list_downloads(limit=1000)
-    download = next((d for d in downloads if d.get('id') == download_id), None)
-    
+    download = next((d for d in downloads if d.get("id") == download_id), None)
+
     if not download:
         raise HTTPException(status_code=404, detail="下载记录不存在")
-    
-    current_priority = download.get('priority', 0)
+
+    current_priority = download.get("priority", 0)
     new_priority = 10 if current_priority < 10 else 0
-    
+
     database.update_download(download_id, priority=new_priority)
+
+    # 如果设置为高优先级，则抢占最早开始的其他下载任务
+    if new_priority > 0:
+        other_candidates = [
+            d
+            for d in downloads
+            if d.get("status") == "downloading" and d.get("id") != download_id
+        ]
+        if other_candidates:
+            other_candidates.sort(key=lambda d: d.get("created_at") or "")
+            victim = other_candidates[0]
+            victim_id = victim.get("id")
+            victim_source = victim.get("source") or "bot"
+
+            if victim_id is not None:
+                # 规则任务：交给 TelegramWorker 取消
+                if victim_source == "rule" and worker is not None:
+                    await worker.cancel_download(int(victim_id))
+                # Bot 任务：交给 BotCommandHandler 处理
+                elif bot_handler is not None:
+                    await bot_handler.pause_download(int(victim_id))
+
+                database.update_download(
+                    int(victim_id),
+                    status="paused",
+                    error="被高优先级任务抢占",
+                )
+
     return {"success": True, "priority": new_priority, "message": "已更新优先级"}
 
 
@@ -425,10 +538,13 @@ async def delete_download(download_id: int) -> dict:
     
     if not download:
         raise HTTPException(status_code=404, detail="下载记录不存在")
-    
-    # 如果正在下载，先取消
-    if download.get('status') == 'downloading' and worker:
-        await worker.cancel_download(download_id)
+    # 如果正在下载，先取消（根据来源路由到相应下载管理器）
+    if download.get('status') == 'downloading':
+        source = download.get('source') or 'bot'
+        if source == 'rule' and worker is not None:
+            await worker.cancel_download(download_id)
+        elif bot_handler is not None:
+            await bot_handler.pause_download(download_id)
     
     # 删除数据库记录
     database.delete_download(download_id)
@@ -469,7 +585,10 @@ async def list_group_rules(chat_id: int | None = None, mode: str | None = None) 
 
 @api.post("/group-rules")
 async def create_group_rule(body: GroupRuleCreate) -> dict:
-    min_size_bytes = int((body.min_size_mb or 0) * 1024 * 1024)
+    # 解析体积范围字符串
+    size_range = body.size_range or "0"
+    min_size_bytes, max_size_bytes = database.parse_size_range(size_range)
+    
     rule_id = database.add_group_rule(
         chat_id=body.chat_id,
         chat_title=body.chat_title,
@@ -477,6 +596,8 @@ async def create_group_rule(body: GroupRuleCreate) -> dict:
         enabled=body.enabled,
         include_extensions=body.include_extensions,
         min_size_bytes=min_size_bytes,
+        max_size_bytes=max_size_bytes,
+        size_range=size_range,
         save_dir=body.save_dir,
         filename_template=body.filename_template,
         include_keywords=body.include_keywords,
@@ -491,9 +612,13 @@ async def create_group_rule(body: GroupRuleCreate) -> dict:
 
 @api.put("/group-rules/{rule_id}")
 async def update_group_rule(rule_id: int, body: GroupRuleUpdate) -> dict:
+    # 解析体积范围字符串（如果提供）
     min_size_bytes = None
-    if body.min_size_mb is not None:
-        min_size_bytes = int(max(0, body.min_size_mb) * 1024 * 1024)
+    max_size_bytes = None
+    size_range = body.size_range
+    
+    if size_range is not None:
+        min_size_bytes, max_size_bytes = database.parse_size_range(size_range)
 
     database.update_group_rule(
         rule_id,
@@ -502,6 +627,8 @@ async def update_group_rule(rule_id: int, body: GroupRuleUpdate) -> dict:
         enabled=body.enabled,
         include_extensions=body.include_extensions,
         min_size_bytes=min_size_bytes,
+        max_size_bytes=max_size_bytes,
+        size_range=size_range,
         save_dir=body.save_dir,
         filename_template=body.filename_template,
         include_keywords=body.include_keywords,

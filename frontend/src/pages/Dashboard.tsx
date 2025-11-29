@@ -3,7 +3,8 @@ import { Link } from "react-router-dom";
 import axios from "axios";
 
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || "http://localhost:8000/api",
+  // 默认使用相对路径，始终请求当前站点下的 /api，避免端口写死为 8000
+  baseURL: import.meta.env.VITE_API_URL || "/api",
 });
 
 type DownloadRecord = {
@@ -25,6 +26,8 @@ type GroupRule = {
   mode: string;
   include_extensions?: string;
   min_size_bytes?: number;
+  max_size_bytes?: number;
+  size_range?: string;
   save_dir?: string;
   filename_template?: string;
   match_mode?: string;
@@ -64,7 +67,7 @@ export default function Dashboard() {
   const [dialogSearch, setDialogSearch] = useState("");
   const [formMode, setFormMode] = useState<"monitor" | "history">("monitor");
   const [formExtensions, setFormExtensions] = useState("mp4,mp3,jpg");
-  const [formMinSizeMb, setFormMinSizeMb] = useState("0");
+  const [formSizeRange, setFormSizeRange] = useState("0");
   const [formSaveDir, setFormSaveDir] = useState("");
   const [formFilenameTemplate, setFormFilenameTemplate] = useState("{task_id}_{message_id}_{chat_title}");
   const [formMatchMode, setFormMatchMode] = useState<"all" | "include" | "exclude">("all");
@@ -162,7 +165,7 @@ export default function Dashboard() {
     setFormChatId("");
     setFormMode("monitor");
     setFormExtensions("mp4,mp3,jpg");
-    setFormMinSizeMb("0");
+    setFormSizeRange("0");
     setFormSaveDir("");
     setFormFilenameTemplate("{task_id}_{message_id}_{chat_title}");
     setFormMatchMode("all");
@@ -176,7 +179,7 @@ export default function Dashboard() {
     setFormChatId(rule.chat_id);
     setFormMode(rule.mode as "monitor" | "history");
     setFormExtensions(rule.include_extensions || "");
-    setFormMinSizeMb(rule.min_size_bytes ? (rule.min_size_bytes / (1024 * 1024)).toFixed(1) : "0");
+    setFormSizeRange(rule.size_range || "0");
     setFormSaveDir(rule.save_dir || "");
     setFormFilenameTemplate(rule.filename_template || "{task_id}_{message_id}_{chat_title}");
     setFormMatchMode((rule.match_mode as "all" | "include" | "exclude") || "all");
@@ -195,7 +198,7 @@ export default function Dashboard() {
       chat_id: formChatId,
       mode: formMode,
       include_extensions: formExtensions || null,
-      min_size_bytes: formMinSizeMb ? Math.round(parseFloat(formMinSizeMb) * 1024 * 1024) : 0,
+      size_range: formSizeRange || "0",
       save_dir: formSaveDir || null,
       filename_template: formFilenameTemplate || null,
       match_mode: formMatchMode,
@@ -248,7 +251,7 @@ export default function Dashboard() {
           <img
             src="/images/logo2.png"
             alt="Telegram Depiler Logo"
-            style={{ height: "40px", objectFit: "contain" }}
+            style={{ height: "100px", objectFit: "contain" }}
           />
           <span style={{ fontSize: "0.9rem", color: "#6b7280" }}>v{__APP_VERSION__}</span>
         </div>
@@ -387,11 +390,19 @@ export default function Dashboard() {
                       <span style={{ fontWeight: "500" }}>{rule.include_extensions}</span>
                     </div>
                   )}
-                  {rule.min_size_bytes && rule.min_size_bytes > 0 && (
+                  {rule.size_range && rule.size_range !== "0" && (
                     <div>
-                      <span style={{ color: "#666" }}>最小体积：</span>
+                      <span style={{ color: "#666" }}>体积范围：</span>
                       <span style={{ fontWeight: "500" }}>
-                        {(rule.min_size_bytes / (1024 * 1024)).toFixed(1)} MB
+                        {(() => {
+                          const range = rule.size_range;
+                          if (range.includes("-")) {
+                            const [min, max] = range.split("-");
+                            return `${min || "0"} ~ ${max} MB`;
+                          } else {
+                            return `≥ ${range} MB`;
+                          }
+                        })()}
                       </span>
                     </div>
                   )}
@@ -502,12 +513,20 @@ export default function Dashboard() {
                                 ? "#e8f5e9"
                                 : record.status === "failed"
                                 ? "#ffebee"
+                                : record.status === "queued"
+                                ? "#fff3e0"
+                                : record.status === "paused"
+                                ? "#fce4ec"
                                 : "#e3f2fd",
                             color:
                               record.status === "completed"
                                 ? "#2e7d32"
                                 : record.status === "failed"
                                 ? "#c62828"
+                                : record.status === "queued"
+                                ? "#e65100"
+                                : record.status === "paused"
+                                ? "#880e4f"
                                 : "#1565c0",
                           }}
                         >
@@ -515,6 +534,10 @@ export default function Dashboard() {
                             ? "✅ 完成"
                             : record.status === "downloading"
                             ? "⏳ 下载中"
+                            : record.status === "queued"
+                            ? "📋 队列中"
+                            : record.status === "paused"
+                            ? "⏸️ 已暂停"
                             : record.status === "failed"
                             ? "❌ 失败"
                             : record.status}
@@ -1021,14 +1044,58 @@ export default function Dashboard() {
 
               <div>
                 <label style={{ display: "block", marginBottom: "0.5rem", fontWeight: "500" }}>
-                  最小体积（MB）
+                  体积范围（MB）
+                  <span
+                    title="格式说明"
+                    style={{
+                      display: "inline-block",
+                      marginLeft: "0.5rem",
+                      width: "18px",
+                      height: "18px",
+                      lineHeight: "18px",
+                      textAlign: "center",
+                      borderRadius: "50%",
+                      backgroundColor: "#2196f3",
+                      color: "white",
+                      fontSize: "0.75rem",
+                      cursor: "help",
+                    }}
+                  >
+                    ?
+                    <div
+                      style={{
+                        display: "none",
+                        position: "absolute",
+                        left: "25px",
+                        top: "-10px",
+                        backgroundColor: "#333",
+                        color: "white",
+                        padding: "0.75rem",
+                        borderRadius: "6px",
+                        fontSize: "0.85rem",
+                        whiteSpace: "nowrap",
+                        zIndex: 1000,
+                        boxShadow: "0 2px 8px rgba(0,0,0,0.2)",
+                      }}
+                      className="tooltip-content"
+                    >
+                      <div style={{ marginBottom: "0.5rem", fontWeight: "600", borderBottom: "1px solid #555", paddingBottom: "0.25rem" }}>
+                        格式说明：
+                      </div>
+                      <div style={{ lineHeight: "1.6" }}>
+                        <div>• <strong>0</strong> - 不限制大小</div>
+                        <div>• <strong>10</strong> - 大于等于 10MB</div>
+                        <div>• <strong>10-100</strong> - 10MB 到 100MB 之间</div>
+                        <div>• <strong>0-100</strong> - 小于等于 100MB</div>
+                      </div>
+                    </div>
+                  </span>
                 </label>
                 <input
-                  type="number"
-                  min="0"
-                  step="0.1"
-                  value={formMinSizeMb}
-                  onChange={(e) => setFormMinSizeMb(e.target.value)}
+                  type="text"
+                  value={formSizeRange}
+                  onChange={(e) => setFormSizeRange(e.target.value)}
+                  placeholder="例如: 0 或 10 或 10-100"
                   style={{ width: "100%", padding: "0.5rem", borderRadius: "4px", border: "1px solid #ddd" }}
                 />
               </div>
