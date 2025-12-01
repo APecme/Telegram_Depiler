@@ -100,3 +100,15 @@ class GroupRuleUpdate(BaseModel):
     match_mode: Optional[Literal["all", "include", "exclude"]] = None
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
+
+
+class AdminLoginRequest(BaseModel):
+    """面板登录请求"""
+    username: str
+    password: str
+
+
+class AdminCredentialsUpdate(BaseModel):
+    """面板账号密码修改请求"""
+    username: Optional[str] = None
+    password: Optional[str] = None

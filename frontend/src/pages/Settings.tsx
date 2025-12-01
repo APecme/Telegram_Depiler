@@ -35,6 +35,15 @@ const api = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL ?? "/api",
 });
 
+api.interceptors.request.use((config) => {
+  const token = localStorage.getItem("admin_token");
+  if (token) {
+    config.headers = config.headers ?? {};
+    (config.headers as Record<string, string>)["X-Admin-Token"] = token;
+  }
+  return config;
+});
+
 type LoginStep = "idle" | "verify_code" | "submit_password" | "connected";
 
 export default function Settings() {
@@ -53,6 +62,8 @@ export default function Settings() {
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [loginState, setLoginState] = useState<LoginState | null>(null);
+  const [panelUsername, setPanelUsername] = useState("");
+  const [panelPassword, setPanelPassword] = useState("");
 
   const proxy = useMemo(
     () =>
@@ -475,6 +486,75 @@ export default function Settings() {
             保存配置
           </button>
         </form>
+      </div>
+
+      <div className="card">
+        <h2>面板账号</h2>
+        <p style={{ color: "#666", fontSize: "0.9rem", marginTop: 0 }}>
+          默认账号密码为 <code>admin / admin</code>，建议登录后尽快修改。
+        </p>
+        <div style={{ display: "grid", gap: "0.75rem", maxWidth: "400px" }}>
+          <label>
+            新用户名（留空则不修改）
+            <input
+              value={panelUsername}
+              onChange={(e) => setPanelUsername(e.target.value)}
+              placeholder="例如：admin123"
+            />
+          </label>
+          <label>
+            新密码（留空则不修改）
+            <input
+              type="password"
+              value={panelPassword}
+              onChange={(e) => setPanelPassword(e.target.value)}
+              placeholder="例如：更复杂的密码"
+            />
+          </label>
+          <button
+            className="btn-secondary"
+            disabled={loading}
+            onClick={async () => {
+              if (!panelUsername && !panelPassword) {
+                setMessage({ type: "error", text: "请至少填写用户名或密码其中一项" });
+                return;
+              }
+              setLoading(true);
+              setMessage(null);
+              try {
+                await api.post("/admin/credentials", {
+                  username: panelUsername || undefined,
+                  password: panelPassword || undefined,
+                });
+                setPanelUsername("");
+                setPanelPassword("");
+                localStorage.removeItem("admin_token");
+                setMessage({
+                  type: "success",
+                  text: "面板账号已更新，请使用新账号密码重新登录",
+                });
+              } catch (error) {
+                setMessage({
+                  type: "error",
+                  text: `更新失败：${formatError(error)}`,
+                });
+              } finally {
+                setLoading(false);
+              }
+            }}
+          >
+            更新面板账号
+          </button>
+          <button
+            className="btn-secondary"
+            onClick={() => {
+              localStorage.removeItem("admin_token");
+              window.location.href = "/login";
+            }}
+          >
+            退出登录
+          </button>
+        </div>
       </div>
 
       <div className="card">

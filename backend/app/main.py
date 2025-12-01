@@ -3,9 +3,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import hashlib
+import secrets
 from contextlib import asynccontextmanager
 from typing import Optional
-from fastapi import FastAPI, HTTPException, Body
+from fastapi import FastAPI, HTTPException, Body, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from telethon import events
@@ -22,6 +24,8 @@ from .schemas import (
     VerifyRequest,
     GroupRuleCreate,
     GroupRuleUpdate,
+    AdminLoginRequest,
+    AdminCredentialsUpdate,
 )
 from .telegram_worker import TelegramWorker
 from .bot_handler import BotCommandHandler
@@ -32,6 +36,39 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 database = Database(settings.data_dir / "state.db")
 settings.load_from_mapping(database.get_config())
+
+
+def _hash_password(password: str) -> str:
+    return hashlib.sha256(password.encode("utf-8")).hexdigest()
+
+
+def _ensure_default_admin() -> None:
+    """确保面板管理账号存在，默认 admin/admin。"""
+    cfg = database.get_config()
+    if "ui_admin_username" not in cfg or "ui_admin_password_hash" not in cfg:
+        logging.getLogger(__name__).info("初始化默认面板账号 admin/admin")
+        database.set_config(
+            {
+                "ui_admin_username": cfg.get("ui_admin_username", "admin"),
+                "ui_admin_password_hash": cfg.get(
+                    "ui_admin_password_hash", _hash_password("admin")
+                ),
+            }
+        )
+
+
+_ensure_default_admin()
+
+
+def _get_admin_credentials() -> tuple[str, str]:
+    cfg = database.get_config()
+    username = cfg.get("ui_admin_username") or "admin"
+    pwd_hash = cfg.get("ui_admin_password_hash") or _hash_password("admin")
+    return username, pwd_hash
+
+
+# 简单的内存会话令牌，用于面板登录校验（容器重启后需重新登录）
+ADMIN_TOKENS: set[str] = set()
 
 
 class DownloadQueueManager:
@@ -206,8 +243,18 @@ async def read_config() -> dict:
     }
 
 
+def _require_admin(token: str | None) -> None:
+    if not token or token not in ADMIN_TOKENS:
+        raise HTTPException(status_code=401, detail="未登录或会话已过期")
+
+
 @api.post("/config")
-async def update_config(payload: ConfigPayload) -> dict:
+async def update_config(
+    payload: ConfigPayload,
+    x_admin_token: str | None = Header(default=None, alias="X-Admin-Token"),
+) -> dict:
+    # 仅允许已登录的面板管理员修改配置
+    _require_admin(x_admin_token)
     global bot_handler
 
     old_bot_token = settings.bot_token
@@ -275,6 +322,51 @@ async def update_config(payload: ConfigPayload) -> dict:
         logger.warning("配置更新后自动启动 Bot 命令处理器失败: %s", exc)
 
     return {"status": "saved"}
+
+
+@api.post("/admin/login")
+async def admin_login(body: AdminLoginRequest) -> dict:
+    """面板登录，默认账号密码 admin/admin。"""
+    username, pwd_hash = _get_admin_credentials()
+    if body.username != username or _hash_password(body.password) != pwd_hash:
+        raise HTTPException(status_code=401, detail="用户名或密码错误")
+
+    token = secrets.token_hex(32)
+    ADMIN_TOKENS.add(token)
+    return {"token": token, "username": username}
+
+
+@api.get("/admin/me")
+async def admin_me(x_admin_token: str | None = Header(default=None, alias="X-Admin-Token")) -> dict:
+    """校验当前面板会话是否有效。"""
+    _require_admin(x_admin_token)
+    username, _ = _get_admin_credentials()
+    return {"username": username}
+
+
+@api.post("/admin/credentials")
+async def update_admin_credentials(
+    body: AdminCredentialsUpdate,
+    x_admin_token: str | None = Header(default=None, alias="X-Admin-Token"),
+) -> dict:
+    """修改面板账号密码，需要已登录会话。"""
+    _require_admin(x_admin_token)
+
+    if not body.username and not body.password:
+        raise HTTPException(status_code=400, detail="至少提供用户名或密码之一")
+
+    cfg_update: dict[str, str] = {}
+    if body.username:
+        cfg_update["ui_admin_username"] = body.username
+    if body.password:
+        cfg_update["ui_admin_password_hash"] = _hash_password(body.password)
+
+    database.set_config(cfg_update)
+
+    # 修改凭据后清空所有现有令牌，要求重新登录
+    ADMIN_TOKENS.clear()
+
+    return {"status": "updated"}
 
 
 @api.post("/auth/send-code")
