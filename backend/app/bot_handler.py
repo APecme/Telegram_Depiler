@@ -1262,7 +1262,6 @@ class BotCommandHandler:
         size_range = message_text.strip()
         
         # 验证格式
-        from ..database import Database
         min_bytes, max_bytes = Database.parse_size_range(size_range)
         
         state['rule_data']['size_range'] = size_range

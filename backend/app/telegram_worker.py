@@ -606,14 +606,20 @@ class TelegramWorker:
         if not await client.is_user_authorized():
             raise PermissionError("Client not authorized. Complete login first.")
 
+        from telethon.tl.types import Channel, Chat
+
         dialogs = await client.get_dialogs()
         results: list[dict[str, Any]] = []
+
         for d in dialogs:
             try:
                 entity = d.entity
-                is_group = bool(getattr(d, "is_group", False))
-                if not is_group:
+                # 与 BotCommandHandler._handle_createrule_command 中保持一致：
+                # 只要是 Channel 或 Chat，就认为是可选的“群聊/频道”
+                is_group_like = isinstance(entity, (Channel, Chat))
+                if not is_group_like:
                     continue
+
                 title = (
                     getattr(d, "name", None)
                     or getattr(entity, "title", None)
@@ -621,12 +627,14 @@ class TelegramWorker:
                     or ""
                 )
                 username = getattr(entity, "username", None)
+
                 results.append(
                     {
                         "id": getattr(entity, "id", 0),
                         "title": title,
                         "username": username,
-                        "is_group": is_group,
+                        # 前端使用 is_group 过滤，这里对群和频道统一标记为 true
+                        "is_group": True,
                     }
                 )
             except Exception as exc:
