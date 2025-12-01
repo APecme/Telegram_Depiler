@@ -1100,8 +1100,7 @@ class BotCommandHandler:
             f"💡 点击下方按钮选择群聊\n"
             f"使用 /cancel 取消操作"
         )
-        
-        if hasattr(event, 'edit'):
+        if isinstance(event, events.CallbackQuery.Event):
             # 这是回调查询，编辑现有消息
             await event.edit(text, buttons=buttons, parse_mode='markdown')
         else:
