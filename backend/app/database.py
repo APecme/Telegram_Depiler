@@ -94,6 +94,8 @@ class Database:
                     match_mode TEXT DEFAULT 'all', -- 'all'、'include'、'exclude'
                     start_time DATETIME,
                     end_time DATETIME,
+                    min_message_id INTEGER,
+                    max_message_id INTEGER,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 );
@@ -175,6 +177,10 @@ class Database:
                 conn.execute("ALTER TABLE group_download_rules ADD COLUMN max_size_bytes INTEGER DEFAULT 0")
             if not has_column("group_download_rules", "size_range"):
                 conn.execute("ALTER TABLE group_download_rules ADD COLUMN size_range TEXT DEFAULT '0'")
+            if not has_column("group_download_rules", "min_message_id"):
+                conn.execute("ALTER TABLE group_download_rules ADD COLUMN min_message_id INTEGER")
+            if not has_column("group_download_rules", "max_message_id"):
+                conn.execute("ALTER TABLE group_download_rules ADD COLUMN max_message_id INTEGER")
 
         conn.commit()
 
@@ -462,6 +468,8 @@ class Database:
         match_mode: str = "all",
         start_time: str | None = None,
         end_time: str | None = None,
+        min_message_id: int | None = None,
+        max_message_id: int | None = None,
     ) -> int:
         """新增一条群聊下载规则，返回规则ID。"""
         with self._connect() as conn:
@@ -471,9 +479,10 @@ class Database:
                     chat_id, chat_title, mode, enabled,
                     include_extensions, min_size_bytes, max_size_bytes, size_range, save_dir,
                     filename_template, include_keywords, exclude_keywords,
-                    match_mode, start_time, end_time
+                    match_mode, start_time, end_time,
+                    min_message_id, max_message_id
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     chat_id,
@@ -491,6 +500,8 @@ class Database:
                     (match_mode or "all"),
                     start_time,
                     end_time,
+                    min_message_id,
+                    max_message_id,
                 ),
             )
             conn.commit()
@@ -514,6 +525,8 @@ class Database:
         match_mode: str | None = None,
         start_time: str | None = None,
         end_time: str | None = None,
+        min_message_id: int | None = None,
+        max_message_id: int | None = None,
     ) -> None:
         """更新一条群聊下载规则。"""
         updates: list[str] = []
@@ -561,6 +574,12 @@ class Database:
         if end_time is not None:
             updates.append("end_time = ?")
             params.append(end_time)
+        if min_message_id is not None:
+            updates.append("min_message_id = ?")
+            params.append(int(min_message_id))
+        if max_message_id is not None:
+            updates.append("max_message_id = ?")
+            params.append(int(max_message_id))
 
         if not updates:
             return

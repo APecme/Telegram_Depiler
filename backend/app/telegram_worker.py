@@ -5,6 +5,7 @@ import logging
 import socket
 from dataclasses import dataclass
 from pathlib import Path
+from datetime import datetime
 import sqlite3
 from typing import Any, Awaitable, Callable, Literal, Optional
 
@@ -990,6 +991,166 @@ class TelegramWorker:
         except Exception as e:
             logger.exception("处理群聊消息规则时出错: %s", e)
     
+    async def run_history_rule(self, rule_id: int) -> None:
+        """执行单条 history 模式群聊下载规则，按时间/消息ID区间扫描历史消息并下载。"""
+        try:
+            rule = self.database.get_group_rule(rule_id)
+            if not rule:
+                logger.warning("历史规则 ID=%s 不存在，无法执行", rule_id)
+                return
+
+            if (rule.get("mode") or "").lower() != "history":
+                logger.info("规则 ID=%s 的模式不是 history，跳过执行", rule_id)
+                return
+
+            chat_id = rule.get("chat_id")
+            if chat_id is None:
+                logger.warning("历史规则 ID=%s 缺少 chat_id，无法执行", rule_id)
+                return
+
+            # 解析时间区间
+            start_str = rule.get("start_time")
+            end_str = rule.get("end_time")
+            start_dt: Optional[datetime] = None
+            end_dt: Optional[datetime] = None
+
+            if start_str:
+                try:
+                    start_dt = datetime.fromisoformat(start_str)
+                except Exception:
+                    logger.warning("规则 ID=%s 的 start_time 无法解析: %s", rule_id, start_str)
+                    start_dt = None
+
+            if end_str:
+                try:
+                    end_dt = datetime.fromisoformat(end_str)
+                except Exception:
+                    logger.warning("规则 ID=%s 的 end_time 无法解析: %s", rule_id, end_str)
+                    end_dt = None
+
+            def _to_naive(dt: datetime) -> datetime:
+                # 将可能带时区的信息转换为 naive，便于与前端传入的本地时间进行比较
+                if dt.tzinfo is not None:
+                    return dt.replace(tzinfo=None)
+                return dt
+
+            if start_dt is not None:
+                start_dt = _to_naive(start_dt)
+            if end_dt is not None:
+                end_dt = _to_naive(end_dt)
+
+            min_message_id = rule.get("min_message_id")
+            max_message_id = rule.get("max_message_id")
+
+            logger.info(
+                "开始执行历史规则 ID=%s (chat_id=%s, 时间[%s, %s], 消息ID[%s, %s])",
+                rule_id,
+                chat_id,
+                start_dt,
+                end_dt,
+                min_message_id,
+                max_message_id,
+            )
+
+            client = await self._get_client()
+            if not await client.is_user_authorized():
+                logger.warning("用户账户未登录，无法执行历史规则 ID=%s", rule_id)
+                return
+
+            try:
+                chat = await client.get_entity(int(chat_id))
+            except Exception as e:
+                logger.warning("获取历史规则 ID=%s 的 chat(%s) 失败: %s", rule_id, chat_id, e)
+                return
+
+            chat_title = (
+                getattr(chat, "title", None)
+                or getattr(chat, "username", None)
+                or f"Chat_{chat_id}"
+            )
+
+            matched_count = 0
+            checked_count = 0
+
+            # 默认从新的到旧的遍历
+            async for message in client.iter_messages(chat, reverse=False):
+                checked_count += 1
+
+                msg_id = getattr(message, "id", None)
+                msg_date = getattr(message, "date", None)
+                if msg_date is not None:
+                    msg_date = _to_naive(msg_date)
+
+                # 按消息ID区间过滤
+                if msg_id is not None:
+                    if max_message_id is not None and msg_id > max_message_id:
+                        # 比最大ID新，继续往旧消息遍历
+                        continue
+                    if min_message_id is not None and msg_id < min_message_id:
+                        # 已经到达最小ID之前的消息，可以提前结束
+                        logger.info(
+                            "历史规则 ID=%s: 消息ID已小于最小值 %s，提前结束遍历",
+                            rule_id,
+                            min_message_id,
+                        )
+                        break
+
+                # 按时间区间过滤
+                if msg_date is not None:
+                    if end_dt is not None and msg_date > end_dt:
+                        # 比结束时间新，继续往旧消息遍历
+                        continue
+                    if start_dt is not None and msg_date < start_dt:
+                        logger.info(
+                            "历史规则 ID=%s: 消息时间已早于起始时间 %s，提前结束遍历",
+                            rule_id,
+                            start_dt,
+                        )
+                        break
+
+                # 仅处理包含媒体的消息
+                if not (
+                    message.video
+                    or message.document
+                    or message.photo
+                    or message.audio
+                ):
+                    continue
+
+                # 按规则检查是否需要下载
+                if not self._should_download_by_rule(message, rule):
+                    continue
+
+                # 获取发送者信息用于通知
+                sender = None
+                try:
+                    sender = await message.get_sender()
+                except Exception as e:
+                    logger.debug("获取历史消息发送者失败: %s", e)
+
+                logger.info(
+                    "历史规则 ID=%s: 命中消息 ID=%s，开始按规则下载 (群: %s)",
+                    rule_id,
+                    msg_id,
+                    chat_title,
+                )
+
+                task = asyncio.create_task(
+                    self._download_file_by_rule(message, rule, chat, sender)
+                )
+                task.add_done_callback(lambda t: self._cleanup_download_task(t))
+                matched_count += 1
+
+            logger.info(
+                "历史规则 ID=%s 执行完成，检查消息数=%d，触发下载数=%d",
+                rule_id,
+                checked_count,
+                matched_count,
+            )
+
+        except Exception as e:  # pragma: no cover - 防御性日志
+            logger.exception("执行历史规则 ID=%s 失败: %s", rule_id, e)
+
     def _should_download_by_rule(self, message: Any, rule: dict) -> bool:
         """检查消息是否符合下载规则"""
         try:

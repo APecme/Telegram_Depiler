@@ -85,6 +85,8 @@ class GroupRuleCreate(BaseModel):
     match_mode: Literal["all", "include", "exclude"] = "all"
     start_time: Optional[datetime] = None  # 仅 history 模式使用
     end_time: Optional[datetime] = None  # 仅 history 模式使用
+    min_message_id: Optional[int] = None  # 仅 history 模式使用：消息ID起始
+    max_message_id: Optional[int] = None  # 仅 history 模式使用：消息ID结束
 
 
 class GroupRuleUpdate(BaseModel):
@@ -100,6 +102,8 @@ class GroupRuleUpdate(BaseModel):
     match_mode: Optional[Literal["all", "include", "exclude"]] = None
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
+    min_message_id: Optional[int] = None
+    max_message_id: Optional[int] = None
 
 
 class AdminLoginRequest(BaseModel):

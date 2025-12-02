@@ -697,6 +697,8 @@ async def create_group_rule(body: GroupRuleCreate) -> dict:
         match_mode=body.match_mode,
         start_time=body.start_time.isoformat() if body.start_time else None,
         end_time=body.end_time.isoformat() if body.end_time else None,
+        min_message_id=body.min_message_id,
+        max_message_id=body.max_message_id,
     )
     rule = database.get_group_rule(rule_id)
     return {"id": rule_id, "rule": rule}
@@ -728,6 +730,8 @@ async def update_group_rule(rule_id: int, body: GroupRuleUpdate) -> dict:
         match_mode=body.match_mode,
         start_time=body.start_time.isoformat() if body.start_time else None,
         end_time=body.end_time.isoformat() if body.end_time else None,
+        min_message_id=body.min_message_id,
+        max_message_id=body.max_message_id,
     )
     rule = database.get_group_rule(rule_id)
     if not rule:
