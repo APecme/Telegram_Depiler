@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 from typing import Optional
 from telethon import TelegramClient, events
-from telethon.tl.types import User, KeyboardButtonCallback
+from telethon.tl.types import User, KeyboardButtonCallback, Channel, Chat
 
 from .config import Settings
 from .database import Database
@@ -209,13 +209,19 @@ class BotCommandHandler:
         """处理Bot命令"""
         if not event.message or not event.message.text:
             return
-            
+        
         command = event.message.text.split()[0].lower()
         sender = await event.get_sender()
         
         if not isinstance(sender, User):
             return
-            
+        
+        chat = await event.get_chat()
+        if isinstance(chat, (Channel, Chat)):
+            return
+        if getattr(chat, "id", None) != sender.id:
+            return
+        
         sender_id = sender.id
         
         # 验证管理员权限
@@ -236,7 +242,7 @@ class BotCommandHandler:
             self.database.set_config({"bot_dedupe_enabled": "1"})
             await event.reply("✅ 已开启机器人重复文件检测（基于 Telegram 文件 ID）")
         elif command == "/dedupe_off":
-            # 关闭机器人重复文件检测，允许对相同文件重复下载
+            # 关闭机器人重复检测，允许对相同文件重复下载
             self.database.set_config({"bot_dedupe_enabled": "0"})
             await event.reply("⚠️ 已关闭机器人重复文件检测，Bot 将对相同文件重复下载")
         else:
@@ -321,7 +327,7 @@ class BotCommandHandler:
         """处理Bot收到的消息（非命令）"""
         if not event.message:
             return
-            
+        
         # 忽略命令消息（已由_handle_bot_command处理）
         if event.message.text and event.message.text.startswith('/'):
             return
@@ -331,15 +337,22 @@ class BotCommandHandler:
         if not isinstance(sender, User):
             return
         
+        chat = await event.get_chat()
+        if isinstance(chat, (Channel, Chat)):
+            return
+        if getattr(chat, "id", None) != sender.id:
+            return
+        
         if sender.id in self._conversation_states:
             await self._handle_conversation_message(event)
             return
-            
+        
         sender_id = sender.id
         
         # 验证管理员权限
         if self.settings.admin_user_ids and sender_id not in self.settings.admin_user_ids:
             return
+        
             
         # 检查是否是视频或文档
         if event.message.video or event.message.document:
@@ -949,10 +962,16 @@ class BotCommandHandler:
                 return
             
             # 如果正在下载，先取消任务
-            if download.get('status') == 'downloading' and self.worker:
-                logger.info(f"取消正在进行的下载任务: {download_id}")
-                await self.worker.cancel_download(download_id)
-                await asyncio.sleep(0.5)  # 等待取消完成
+            status = (download.get('status') or '').lower()
+            source = download.get('source') or 'bot'
+            if status == 'downloading':
+                if source == 'rule' and self.worker:
+                    logger.info(f"取消正在进行的下载任务: {download_id}")
+                    await self.worker.cancel_download(download_id)
+                else:
+                    logger.info(f"取消正在进行的下载任务: {download_id}")
+                    await self.pause_download(download_id)
+                await asyncio.sleep(0.5)
             
             # 删除文件（如果存在）
             file_path = download.get('file_path')
@@ -965,6 +984,10 @@ class BotCommandHandler:
             
             # 删除数据库记录
             # TODO: 添加 database.delete_download 方法
+            self.database.delete_download(download_id)
+            self._active_downloads.pop(download_id, None)
+            self._download_tasks.pop(download_id, None)
+            self._cancelled_downloads.discard(download_id)
             await event.answer("✅ 已删除下载任务")
             
             # 更新消息
