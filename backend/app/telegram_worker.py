@@ -1200,12 +1200,18 @@ class TelegramWorker:
             if message.file:
                 file_size = getattr(message.file, "size", 0) or 0
             
-            # 发送Bot通知给管理员（如果Bot客户端可用）
+            # 发送Bot通知给管理员用户（如果Bot客户端可用，且管理员为用户账号而非频道/群）
             bot_message = None
             if self._bot_client and self.settings.admin_user_ids:
                 try:
-                    sender_name = getattr(sender, 'username', None) or getattr(sender, 'first_name', None) or f"ID:{getattr(sender, 'id', 'Unknown')}"
-                    
+                    from telethon.tl.types import User as TgUser
+
+                    sender_name = (
+                        getattr(sender, "username", None)
+                        or getattr(sender, "first_name", None)
+                        or f"ID:{getattr(sender, 'id', 'Unknown')}"
+                    )
+
                     notification_text = (
                         f"📥 **群聊自动下载**\n\n"
                         f"**来源群聊：** {chat_title}\n"
@@ -1218,27 +1224,34 @@ class TelegramWorker:
                         f"**状态：** 正在下载...\n"
                         f"**进度：** 0%"
                     )
-                    
+
                     # 创建内联键盘按钮
                     buttons = [
                         [
                             Button.inline("⏸️ 暂停", f"pause_{download_id}"),
-                            Button.inline("⭐ 置顶优先", f"priority_{download_id}")
+                            Button.inline("⭐ 置顶优先", f"priority_{download_id}"),
                         ],
-                        [
-                            Button.inline("🗑️ 删除", f"delete_{download_id}")
-                        ]
+                        [Button.inline("🗑️ 删除", f"delete_{download_id}")],
                     ]
-                    
-                    # 发送给第一个管理员
-                    admin_id = self.settings.admin_user_ids[0]
-                    bot_message = await self._bot_client.send_message(
-                        admin_id,
-                        notification_text,
-                        parse_mode='markdown',
-                        buttons=buttons
-                    )
-                    logger.info("已向管理员 %d 发送下载通知", admin_id)
+
+                    # 只向“管理员用户”（User 类型）发送私聊通知，避免误填频道/群ID导致发消息到频道
+                    for admin_id in self.settings.admin_user_ids:
+                        try:
+                            entity = await self._bot_client.get_entity(admin_id)
+                            if isinstance(entity, TgUser):
+                                bot_message = await self._bot_client.send_message(
+                                    entity.id,
+                                    notification_text,
+                                    parse_mode="markdown",
+                                    buttons=buttons,
+                                )
+                                logger.info("已向管理员用户 %s 发送下载通知", entity.id)
+                                break
+                        except Exception as inner_e:  # pragma: no cover - 防御性
+                            logger.warning("向管理员 %s 发送通知失败: %s", admin_id, inner_e)
+
+                    if not bot_message:
+                        logger.warning("未找到可用的管理员用户账号，群聊自动下载通知已跳过")
                 except Exception as e:
                     logger.warning("发送Bot通知失败: %s", e)
             

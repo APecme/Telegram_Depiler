@@ -171,6 +171,8 @@ class BotCommandHandler:
             return
         
         try:
+            from telethon.tl.types import User as TgUser
+
             startup_message = (
                 f"🚀 **Telegram Depiler已启动 (v{self.settings.version})**\n\n"
                 "✅ Bot已就绪，正在监听消息\n\n"
@@ -187,12 +189,17 @@ class BotCommandHandler:
             
             for admin_id in self.settings.admin_user_ids:
                 try:
+                    entity = await self._bot_client.get_entity(admin_id)
+                    if not isinstance(entity, TgUser):
+                        logger.info("管理员ID %s 不是用户账号（可能是频道/群），跳过启动通知", admin_id)
+                        continue
+
                     await self._bot_client.send_message(
-                        admin_id,
+                        entity.id,
                         startup_message,
-                        parse_mode='markdown'
+                        parse_mode="markdown",
                     )
-                    logger.info(f"已发送启动通知给管理员 {admin_id}")
+                    logger.info(f"已发送启动通知给管理员用户 {entity.id}")
                 except Exception as e:
                     logger.warning(f"发送启动通知给管理员 {admin_id} 失败: {e}")
         except Exception as e:
