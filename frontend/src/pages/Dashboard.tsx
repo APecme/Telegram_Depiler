@@ -44,8 +44,6 @@ type GroupRule = {
   exclude_keywords?: string;
   start_time?: string;
   end_time?: string;
-  min_message_id?: number;
-  max_message_id?: number;
   enabled: boolean;
   created_at: string;
 };
@@ -82,10 +80,8 @@ export default function Dashboard() {
   const [formMatchMode, setFormMatchMode] = useState<"all" | "include" | "exclude">("all");
   const [formIncludeKeywords, setFormIncludeKeywords] = useState("");
   const [formExcludeKeywords, setFormExcludeKeywords] = useState("");
-  const [formStartTime, setFormStartTime] = useState("");
-  const [formEndTime, setFormEndTime] = useState("");
-  const [formMinMessageId, setFormMinMessageId] = useState("");
-  const [formMaxMessageId, setFormMaxMessageId] = useState("");
+  const [dirOptions, setDirOptions] = useState<string[]>([]);
+  const [dirLoading, setDirLoading] = useState(false);
 
   useEffect(() => {
     fetchDownloads();
@@ -137,6 +133,62 @@ export default function Dashboard() {
     }
   };
 
+  const fetchDirectories = async () => {
+    try {
+      setDirLoading(true);
+      const { data } = await api.get("/fs/dirs");
+      const items: string[] = data.items || [];
+      setDirOptions(["", ...items]);
+    } catch (error) {
+      console.error("Failed to fetch directories:", error);
+    } finally {
+      setDirLoading(false);
+    }
+  };
+
+  const handleCreateDirectory = async () => {
+    const name = prompt("输入新建文件夹名称：");
+    if (!name) return;
+    try {
+      const parent_path = formSaveDir || "";
+      const { data } = await api.post("/fs/dirs", { parent_path, name });
+      await fetchDirectories();
+      if (data.path) {
+        setFormSaveDir(data.path);
+      }
+      alert("已创建文件夹");
+    } catch (error) {
+      console.error("Failed to create directory:", error);
+      alert("创建文件夹失败");
+    }
+  };
+
+  const handleRenameDirectory = async () => {
+    if (!formSaveDir) {
+      alert("请选择要重命名的文件夹");
+      return;
+    }
+    const newName = prompt("输入新的文件夹名称：", formSaveDir.split("/").pop() || "");
+    if (!newName) return;
+    try {
+      const { data } = await api.put("/fs/dirs/rename", { path: formSaveDir, new_name: newName });
+      await fetchDirectories();
+      if (data.path) {
+        setFormSaveDir(data.path);
+      }
+      alert("已重命名文件夹");
+    } catch (error) {
+      console.error("Failed to rename directory:", error);
+      alert("重命名失败");
+    }
+  };
+
+  useEffect(() => {
+    if (showRuleModal) {
+      fetchDirectories();
+    }
+  }, [showRuleModal]);
+
   const handlePauseDownload = async (downloadId: number) => {
     try {
       await api.post(`/downloads/${downloadId}/pause`);
@@ -184,10 +236,6 @@ export default function Dashboard() {
     setFormMatchMode("all");
     setFormIncludeKeywords("");
     setFormExcludeKeywords("");
-    setFormStartTime("");
-    setFormEndTime("");
-    setFormMinMessageId("");
-    setFormMaxMessageId("");
     setShowRuleModal(true);
   };
 
@@ -202,10 +250,6 @@ export default function Dashboard() {
     setFormMatchMode((rule.match_mode as "all" | "include" | "exclude") || "all");
     setFormIncludeKeywords(rule.include_keywords || "");
     setFormExcludeKeywords(rule.exclude_keywords || "");
-    setFormStartTime(rule.start_time ? rule.start_time.slice(0, 16) : "");
-    setFormEndTime(rule.end_time ? rule.end_time.slice(0, 16) : "");
-    setFormMinMessageId(rule.min_message_id ? String(rule.min_message_id) : "");
-    setFormMaxMessageId(rule.max_message_id ? String(rule.max_message_id) : "");
     setShowRuleModal(true);
   };
 
@@ -225,22 +269,6 @@ export default function Dashboard() {
       match_mode: formMatchMode,
       include_keywords: formMatchMode === "include" ? formIncludeKeywords : null,
       exclude_keywords: formMatchMode === "exclude" ? formExcludeKeywords : null,
-      start_time:
-        formMode === "history" && formStartTime
-          ? new Date(formStartTime).toISOString()
-          : null,
-      end_time:
-        formMode === "history" && formEndTime
-          ? new Date(formEndTime).toISOString()
-          : null,
-      min_message_id:
-        formMode === "history" && formMinMessageId
-          ? Number(formMinMessageId)
-          : null,
-      max_message_id:
-        formMode === "history" && formMaxMessageId
-          ? Number(formMaxMessageId)
-          : null,
       enabled: true,
     };
 
@@ -805,15 +833,167 @@ export default function Dashboard() {
                 <label style={{ display: "block", marginBottom: "0.5rem", fontWeight: "500" }}>
                   文件类型
                 </label>
-                <input
-                  type="text"
-                  value={formExtensions}
-                  onChange={(e) => setFormExtensions(e.target.value)}
-                  placeholder="例如: mp4,mkv,avi,jpg,jpeg,png,gif,mp3,flac,pdf,zip"
-                  style={{ width: "100%", padding: "0.5rem", borderRadius: "4px", border: "1px solid #ddd" }}
-                />
-                <p style={{ fontSize: "0.8rem", color: "#666", marginTop: "0.5rem" }}>
-                  常用格式：视频 mp4,mkv,avi · 图片 jpg,jpeg,png,gif · 音频 mp3,flac · 文档 pdf,zip
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))", gap: "0.5rem" }}>
+                  {/* 视频 */}
+                  <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.5rem", border: "1px solid #ddd", borderRadius: "4px", cursor: "pointer" }}>
+                    <input
+                      type="checkbox"
+                      checked={formExtensions.includes("mp4")}
+                      onChange={(e) => {
+                        const exts = formExtensions.split(",").filter(x => x);
+                        if (e.target.checked) {
+                          setFormExtensions([...exts, "mp4"].join(","));
+                        } else {
+                          setFormExtensions(exts.filter(x => x !== "mp4").join(","));
+                        }
+                      }}
+                    />
+                    <span>📹 MP4</span>
+                  </label>
+                  <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.5rem", border: "1px solid #ddd", borderRadius: "4px", cursor: "pointer" }}>
+                    <input
+                      type="checkbox"
+                      checked={formExtensions.includes("mkv")}
+                      onChange={(e) => {
+                        const exts = formExtensions.split(",").filter(x => x);
+                        if (e.target.checked) {
+                          setFormExtensions([...exts, "mkv"].join(","));
+                        } else {
+                          setFormExtensions(exts.filter(x => x !== "mkv").join(","));
+                        }
+                      }}
+                    />
+                    <span>📹 MKV</span>
+                  </label>
+                  <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.5rem", border: "1px solid #ddd", borderRadius: "4px", cursor: "pointer" }}>
+                    <input
+                      type="checkbox"
+                      checked={formExtensions.includes("avi")}
+                      onChange={(e) => {
+                        const exts = formExtensions.split(",").filter(x => x);
+                        if (e.target.checked) {
+                          setFormExtensions([...exts, "avi"].join(","));
+                        } else {
+                          setFormExtensions(exts.filter(x => x !== "avi").join(","));
+                        }
+                      }}
+                    />
+                    <span>📹 AVI</span>
+                  </label>
+                  
+                  {/* 图片 */}
+                  <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.5rem", border: "1px solid #ddd", borderRadius: "4px", cursor: "pointer" }}>
+                    <input
+                      type="checkbox"
+                      checked={formExtensions.includes("jpg")}
+                      onChange={(e) => {
+                        const exts = formExtensions.split(",").filter(x => x);
+                        if (e.target.checked) {
+                          setFormExtensions([...exts, "jpg", "jpeg"].join(","));
+                        } else {
+                          setFormExtensions(exts.filter(x => x !== "jpg" && x !== "jpeg").join(","));
+                        }
+                      }}
+                    />
+                    <span>🖼️ JPG</span>
+                  </label>
+                  <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.5rem", border: "1px solid #ddd", borderRadius: "4px", cursor: "pointer" }}>
+                    <input
+                      type="checkbox"
+                      checked={formExtensions.includes("png")}
+                      onChange={(e) => {
+                        const exts = formExtensions.split(",").filter(x => x);
+                        if (e.target.checked) {
+                          setFormExtensions([...exts, "png"].join(","));
+                        } else {
+                          setFormExtensions(exts.filter(x => x !== "png").join(","));
+                        }
+                      }}
+                    />
+                    <span>🖼️ PNG</span>
+                  </label>
+                  <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.5rem", border: "1px solid #ddd", borderRadius: "4px", cursor: "pointer" }}>
+                    <input
+                      type="checkbox"
+                      checked={formExtensions.includes("gif")}
+                      onChange={(e) => {
+                        const exts = formExtensions.split(",").filter(x => x);
+                        if (e.target.checked) {
+                          setFormExtensions([...exts, "gif"].join(","));
+                        } else {
+                          setFormExtensions(exts.filter(x => x !== "gif").join(","));
+                        }
+                      }}
+                    />
+                    <span>🖼️ GIF</span>
+                  </label>
+                  
+                  {/* 音频 */}
+                  <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.5rem", border: "1px solid #ddd", borderRadius: "4px", cursor: "pointer" }}>
+                    <input
+                      type="checkbox"
+                      checked={formExtensions.includes("mp3")}
+                      onChange={(e) => {
+                        const exts = formExtensions.split(",").filter(x => x);
+                        if (e.target.checked) {
+                          setFormExtensions([...exts, "mp3"].join(","));
+                        } else {
+                          setFormExtensions(exts.filter(x => x !== "mp3").join(","));
+                        }
+                      }}
+                    />
+                    <span>🎵 MP3</span>
+                  </label>
+                  <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.5rem", border: "1px solid #ddd", borderRadius: "4px", cursor: "pointer" }}>
+                    <input
+                      type="checkbox"
+                      checked={formExtensions.includes("flac")}
+                      onChange={(e) => {
+                        const exts = formExtensions.split(",").filter(x => x);
+                        if (e.target.checked) {
+                          setFormExtensions([...exts, "flac"].join(","));
+                        } else {
+                          setFormExtensions(exts.filter(x => x !== "flac").join(","));
+                        }
+                      }}
+                    />
+                    <span>🎵 FLAC</span>
+                  </label>
+                  
+                  {/* 文档 */}
+                  <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.5rem", border: "1px solid #ddd", borderRadius: "4px", cursor: "pointer" }}>
+                    <input
+                      type="checkbox"
+                      checked={formExtensions.includes("pdf")}
+                      onChange={(e) => {
+                        const exts = formExtensions.split(",").filter(x => x);
+                        if (e.target.checked) {
+                          setFormExtensions([...exts, "pdf"].join(","));
+                        } else {
+                          setFormExtensions(exts.filter(x => x !== "pdf").join(","));
+                        }
+                      }}
+                    />
+                    <span>📄 PDF</span>
+                  </label>
+                  <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.5rem", border: "1px solid #ddd", borderRadius: "4px", cursor: "pointer" }}>
+                    <input
+                      type="checkbox"
+                      checked={formExtensions.includes("zip")}
+                      onChange={(e) => {
+                        const exts = formExtensions.split(",").filter(x => x);
+                        if (e.target.checked) {
+                          setFormExtensions([...exts, "zip"].join(","));
+                        } else {
+                          setFormExtensions(exts.filter(x => x !== "zip").join(","));
+                        }
+                      }}
+                    />
+                    <span>📦 ZIP</span>
+                  </label>
+                </div>
+                <p style={{ fontSize: "0.8rem", color: "# 666", marginTop: "0.5rem" }}>
+                  选择要下载的文件类型
                 </p>
               </div>
 
@@ -879,143 +1059,37 @@ export default function Dashboard() {
                 <label style={{ display: "block", marginBottom: "0.5rem", fontWeight: "500" }}>
                   保存路径（可选）
                 </label>
-                <div style={{ display: "flex", gap: "0.5rem" }}>
+                <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
                   <input
-                    type="text"
+                    list="save-dir-list"
                     value={formSaveDir}
+                    onFocus={fetchDirectories}
                     onChange={(e) => setFormSaveDir(e.target.value)}
-                    placeholder="留空使用默认 downloads 目录"
-                    style={{ flex: 1, padding: "0.5rem", borderRadius: "4px", border: "1px solid #ddd" }}
+                    placeholder={dirLoading ? "加载中..." : "留空使用默认 downloads"}
+                    style={{ flex: "1 1 240px", padding: "0.5rem", borderRadius: "4px", border: "1px solid #ddd" }}
                   />
-                  <select
-                    value={""}
-                    onChange={(e) => {
-                      const value = e.target.value;
-                      if (value) setFormSaveDir(value);
-                    }}
-                    style={{ width: "200px", padding: "0.5rem", borderRadius: "4px", border: "1px solid #ddd" }}
-                  >
-                    <option value="">常用容器路径</option>
-                    <option value="/data/downloads">/data/downloads</option>
-                    <option value="/downloads">/downloads</option>
-                    <option value="/mnt">/mnt</option>
-                  </select>
+                  <datalist id="save-dir-list">
+                    <option key="default" value=""></option>
+                    {dirOptions
+                      .filter((p) => p)
+                      .map((path) => (
+                        <option key={path} value={path}>
+                          {path}
+                        </option>
+                      ))}
+                  </datalist>
+                  <button onClick={fetchDirectories} style={{ padding: "0.5rem 0.75rem" }}>刷新</button>
+                  <button onClick={handleCreateDirectory} style={{ padding: "0.5rem 0.75rem" }}>新建文件夹</button>
+                  <button onClick={handleRenameDirectory} style={{ padding: "0.5rem 0.75rem" }}>重命名当前</button>
                 </div>
                 <small style={{ display: "block", marginTop: "0.25rem", color: "#666", fontSize: "0.8rem" }}>
-                  可从下拉选择常用容器内部路径，或手动输入自定义目录
+                  点击输入框可展开 downloads 目录下的子目录列表，或新建/重命名文件夹
                 </small>
               </div>
-
-              {formMode === "history" && (
-                <>
-                  <div>
-                    <label style={{ display: "block", marginBottom: "0.5rem", fontWeight: "500" }}>
-                      历史时间区间（可选）
-                    </label>
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "0.5rem" }}>
-                      <input
-                        type="datetime-local"
-                        value={formStartTime}
-                        onChange={(e) => setFormStartTime(e.target.value)}
-                        style={{ padding: "0.5rem", borderRadius: "4px", border: "1px solid #ddd" }}
-                      />
-                      <input
-                        type="datetime-local"
-                        value={formEndTime}
-                        onChange={(e) => setFormEndTime(e.target.value)}
-                        style={{ padding: "0.5rem", borderRadius: "4px", border: "1px solid #ddd" }}
-                      />
-                    </div>
-                    <small style={{ display: "block", marginTop: "0.25rem", color: "#666", fontSize: "0.8rem" }}>
-                      留空表示不按时间限制，时间为群聊消息的发送时间
-                    </small>
-                  </div>
-
-                  <div>
-                    <label style={{ display: "block", marginBottom: "0.5rem", fontWeight: "500" }}>
-                      历史消息 ID 区间（可选）
-                    </label>
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: "0.5rem" }}>
-                      <input
-                        type="number"
-                        value={formMinMessageId}
-                        onChange={(e) => setFormMinMessageId(e.target.value)}
-                        placeholder="起始消息ID"
-                        style={{ padding: "0.5rem", borderRadius: "4px", border: "1px solid #ddd" }}
-                      />
-                      <input
-                        type="number"
-                        value={formMaxMessageId}
-                        onChange={(e) => setFormMaxMessageId(e.target.value)}
-                        placeholder="结束消息ID"
-                        style={{ padding: "0.5rem", borderRadius: "4px", border: "1px solid #ddd" }}
-                      />
-                    </div>
-                    <small style={{ display: "block", marginTop: "0.25rem", color: "#666", fontSize: "0.8rem" }}>
-                      可只填写时间或消息ID中的一种，也可以同时填写；全部留空表示整个历史
-                    </small>
-                  </div>
-                </>
-              )}
 
               <div>
                 <label style={{ display: "block", marginBottom: "0.5rem", fontWeight: "500" }}>
                   文件名模板
-                  <span
-                    title="可用变量说明"
-                    style={{
-                      display: "inline-block",
-                      marginLeft: "0.5rem",
-                      width: "18px",
-                      height: "18px",
-                      lineHeight: "18px",
-                      textAlign: "center",
-                      borderRadius: "50%",
-                      backgroundColor: "#2196f3",
-                      color: "white",
-                      fontSize: "0.75rem",
-                      cursor: "help",
-                      position: "relative",
-                    }}
-                    onMouseEnter={(e) => {
-                      const tooltip = e.currentTarget.querySelector('.tooltip-content') as HTMLElement;
-                      if (tooltip) tooltip.style.display = 'block';
-                    }}
-                    onMouseLeave={(e) => {
-                      const tooltip = e.currentTarget.querySelector('.tooltip-content') as HTMLElement;
-                      if (tooltip) tooltip.style.display = 'none';
-                    }}
-                  >
-                    ?
-                    <div
-                      className="tooltip-content"
-                      style={{
-                        display: "none",
-                        position: "absolute",
-                        left: "25px",
-                        top: "-10px",
-                        backgroundColor: "#333",
-                        color: "white",
-                        padding: "0.75rem",
-                        borderRadius: "6px",
-                        fontSize: "0.85rem",
-                        whiteSpace: "nowrap",
-                        zIndex: 1000,
-                        boxShadow: "0 2px 8px rgba(0,0,0,0.2)",
-                      }}
-                    >
-                      <div style={{ marginBottom: "0.5rem", fontWeight: "600", borderBottom: "1px solid #555", paddingBottom: "0.25rem" }}>
-                        可用变量：
-                      </div>
-                      <div style={{ lineHeight: "1.6" }}>
-                        <div><strong>{"{task_id}"}</strong> - 任务ID（数据库自增ID）</div>
-                        <div><strong>{"{message_id}"}</strong> - 消息ID（Telegram消息ID）</div>
-                        <div><strong>{"{chat_title}"}</strong> - 群聊名称</div>
-                        <div><strong>{"{timestamp}"}</strong> - 时间戳（Unix时间戳）</div>
-                        <div><strong>{"{file_name}"}</strong> - 原始文件名</div>
-                      </div>
-                    </div>
-                  </span>
                 </label>
                 <input
                   type="text"
@@ -1024,6 +1098,42 @@ export default function Dashboard() {
                   placeholder="{task_id}_{message_id}_{chat_title}"
                   style={{ width: "100%", padding: "0.5rem", borderRadius: "4px", border: "1px solid #ddd" }}
                 />
+                <div style={{ marginTop: "0.5rem", border: "1px solid #eee", borderRadius: "6px", padding: "0.5rem" }}>
+                  <div style={{ fontWeight: 600, marginBottom: "0.5rem" }}>可用变量（点击复制）</div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.5rem" }}>
+                    {[
+                      { key: "{task_id}", desc: "任务ID" },
+                      { key: "{message_id}", desc: "消息ID" },
+                      { key: "{chat_title}", desc: "群聊名称" },
+                      { key: "{timestamp}", desc: "时间戳" },
+                      { key: "{file_name}", desc: "原始文件名" },
+                    ].map((item) => (
+                      <button
+                        key={item.key}
+                        type="button"
+                        onClick={() => navigator.clipboard?.writeText(item.key)}
+                        style={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "center",
+                          width: "100%",
+                          padding: "0.45rem 0.6rem",
+                          borderRadius: "4px",
+                          border: "1px solid #ddd",
+                          background: "#fafafa",
+                          cursor: "pointer",
+                        }}
+                        title="点击复制变量"
+                      >
+                        <span style={{ fontFamily: "monospace" }}>{item.key}</span>
+                        <span style={{ color: "#666", fontSize: "0.85rem" }}>{item.desc}</span>
+                      </button>
+                    ))}
+                  </div>
+                  <small style={{ display: "block", marginTop: "0.35rem", color: "#666", fontSize: "0.8rem" }}>
+                    示例：{`{task_id}_{message_id}_{file_name}`}
+                  </small>
+                </div>
               </div>
 
               <div>

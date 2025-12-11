@@ -5,13 +5,11 @@ import logging
 import os
 from pathlib import Path
 from typing import Optional
-from datetime import datetime
 from telethon import TelegramClient, events
-from telethon.tl.types import User, KeyboardButtonCallback, Channel, Chat
+from telethon.tl.types import User, KeyboardButtonCallback
 
 from .config import Settings
 from .database import Database
-from . import bot_messages as msgs
 
 logger = logging.getLogger(__name__)
 
@@ -175,7 +173,19 @@ class BotCommandHandler:
         try:
             from telethon.tl.types import User as TgUser
 
-            startup_message = msgs.STARTUP_MESSAGE.format(version=self.settings.version)
+            startup_message = (
+                f"🚀 **Telegram Depiler已启动 (v{self.settings.version})**\n\n"
+                "✅ Bot已就绪，正在监听消息\n\n"
+                "📖 **可用命令：**\n"
+                "/help - 显示帮助信息\n"
+                "/download - 查看下载统计\n"
+                "/createrule - 创建群聊下载规则\n"
+                "/cancel - 取消当前操作\n\n"
+                "• ✨使用方法：\n" 
+                "• 直接发送文件给Bot即可下载\n" 
+                "• 使用 /createrule 设置群聊自动下载\n"
+                "• 支持视频、图片、音频、文档等文件类型"
+            )
             
             for admin_id in self.settings.admin_user_ids:
                 try:
@@ -199,24 +209,18 @@ class BotCommandHandler:
         """处理Bot命令"""
         if not event.message or not event.message.text:
             return
-        
+            
         command = event.message.text.split()[0].lower()
         sender = await event.get_sender()
         
         if not isinstance(sender, User):
             return
-        
-        chat = await event.get_chat()
-        if isinstance(chat, (Channel, Chat)):
-            return
-        if getattr(chat, "id", None) != sender.id:
-            return
-        
+            
         sender_id = sender.id
         
         # 验证管理员权限
         if self.settings.admin_user_ids and sender_id not in self.settings.admin_user_ids:
-            await event.reply(msgs.NO_PERMISSION)
+            await event.reply("❌ 您没有权限使用此Bot")
             return
             
         if command == "/help":
@@ -230,17 +234,30 @@ class BotCommandHandler:
         elif command == "/dedupe_on":
             # 开启机器人重复文件检测（基于 Telegram 文件 ID）
             self.database.set_config({"bot_dedupe_enabled": "1"})
-            await event.reply(msgs.DEDUPE_ON_MESSAGE)
+            await event.reply("✅ 已开启机器人重复文件检测（基于 Telegram 文件 ID）")
         elif command == "/dedupe_off":
-            # 关闭机器人重复检测，允许对相同文件重复下载
+            # 关闭机器人重复文件检测，允许对相同文件重复下载
             self.database.set_config({"bot_dedupe_enabled": "0"})
-            await event.reply(msgs.DEDUPE_OFF_MESSAGE)
+            await event.reply("⚠️ 已关闭机器人重复文件检测，Bot 将对相同文件重复下载")
         else:
-            await event.reply(msgs.UNKNOWN_COMMAND)
+            await event.reply("❓ 未知命令。使用 /help 查看可用命令")
             
     async def _handle_help_command(self, event: events.NewMessage.Event) -> None:
         """处理/help命令"""
-        await event.reply(msgs.HELP_TEXT, parse_mode='markdown')
+        help_text = (
+            "🤖 **Telegram下载管理器Bot**\n\n"
+            "**可用命令：**\n"
+            "/help - 显示此帮助信息\n"
+            "/download - 查看下载统计信息\n"
+            "/createrule - 创建群聊下载规则\n"
+            "/cancel - 取消当前操作\n"
+            "/dedupe_on - 开启机器人重复文件检测\n"
+            "/dedupe_off - 关闭机器人重复文件检测\n\n"
+            "**使用方法：**\n"
+            "1. 直接向Bot发送视频或文件，系统会自动下载\n"
+            "2. 使用 /createrule 创建群聊自动下载规则"
+        )
+        await event.reply(help_text, parse_mode='markdown')
         
     async def _handle_download_command(self, event: events.NewMessage.Event) -> None:
         """处理/download命令"""
@@ -256,15 +273,16 @@ class BotCommandHandler:
         active_status = {"downloading", "pending", "paused"}
         active_downloads = [d for d in downloads if d.get("status") in active_status]
 
-        header_text = msgs.DOWNLOAD_OVERVIEW_HEADER.format(
-            total=total,
-            completed=completed,
-            downloading=downloading,
-            failed=failed,
+        header_text = (
+            "📊 **下载概览**\n\n"
+            f"**总计：** {total}\n"
+            f"✅ **成功：** {completed}\n"
+            f"⏳ **下载中：** {downloading}\n"
+            f"❌ **失败：** {failed}\n\n"
         )
 
         if not active_downloads:
-            header_text += msgs.NO_ACTIVE_DOWNLOADS
+            header_text += "当前没有正在进行的下载任务。"
             await event.reply(header_text, parse_mode='markdown')
             return
 
@@ -284,13 +302,9 @@ class BotCommandHandler:
             speed_text = self._format_speed(speed) if speed > 0 else "计算中..."
 
             lines.append(
-                msgs.DOWNLOAD_ITEM_LINE.format(
-                    download_id=download_id,
-                    status=status,
-                    progress=progress,
-                    speed_text=speed_text,
-                    file_name=file_name,
-                )
+                f"• 任务ID: `{download_id}` | 状态: {status}\n"
+                f"  进度: {progress:.1f}% | 速度: {speed_text}\n"
+                f"  文件: {file_name}"
             )
 
             buttons.append([
@@ -307,7 +321,7 @@ class BotCommandHandler:
         """处理Bot收到的消息（非命令）"""
         if not event.message:
             return
-        
+            
         # 忽略命令消息（已由_handle_bot_command处理）
         if event.message.text and event.message.text.startswith('/'):
             return
@@ -317,22 +331,15 @@ class BotCommandHandler:
         if not isinstance(sender, User):
             return
         
-        chat = await event.get_chat()
-        if isinstance(chat, (Channel, Chat)):
-            return
-        if getattr(chat, "id", None) != sender.id:
-            return
-        
         if sender.id in self._conversation_states:
             await self._handle_conversation_message(event)
             return
-        
+            
         sender_id = sender.id
         
         # 验证管理员权限
         if self.settings.admin_user_ids and sender_id not in self.settings.admin_user_ids:
             return
-        
             
         # 检查是否是视频或文档
         if event.message.video or event.message.document:
@@ -378,9 +385,11 @@ class BotCommandHandler:
                 if existing:
                     existing_id = existing.get("id")
                     existing_path = existing.get("file_path") or "未知路径"
-                    text = msgs.DEDUPE_HIT_MESSAGE.format(
-                        existing_id=existing_id,
-                        existing_path=existing_path,
+                    text = (
+                        "⚠️ 此文件之前已下载过，将不再重复下载。\n\n"
+                        f"已有任务ID：`{existing_id}`\n"
+                        f"保存路径：`{existing_path}`\n\n"
+                        "如需再次下载此文件，可先使用 /dedupe_off 关闭重复检测，再重新发送。"
                     )
                     await event.reply(text, parse_mode='markdown')
                     return
@@ -436,26 +445,28 @@ class BotCommandHandler:
             
             # 发送初始回复（带控制按钮）
             if can_start:
-                reply_text = msgs.DOWNLOAD_START_MESSAGE.format(
-                    message_id=event.message.id,
-                    download_id=download_id,
-                    file_name=file_name,
-                    file_size=self._format_size(file_size),
-                    media_type=media_type,
-                    total=total + 1,
-                    completed=completed,
-                    failed=failed,
+                reply_text = (
+                    f"📥 **开始下载**\n\n"
+                    f"**文件ID：** `{event.message.id}`\n"
+                    f"**任务ID：** `{download_id}`\n"
+                    f"**文件名：** {file_name}\n"
+                    f"**大小：** {self._format_size(file_size)}\n"
+                    f"**类型：** {media_type}\n"
+                    f"**速度：** 计算中...\n\n"
+                    f"**下载统计：**\n"
+                    f"总计：{total + 1} | 成功：{completed} | 失败：{failed}"
                 )
             else:
-                reply_text = msgs.DOWNLOAD_QUEUED_MESSAGE.format(
-                    message_id=event.message.id,
-                    download_id=download_id,
-                    file_name=file_name,
-                    file_size=self._format_size(file_size),
-                    media_type=media_type,
-                    total=total + 1,
-                    completed=completed,
-                    failed=failed,
+                reply_text = (
+                    f"📋 **任务已加入队列**\n\n"
+                    f"**文件ID：** `{event.message.id}`\n"
+                    f"**任务ID：** `{download_id}`\n"
+                    f"**文件名：** {file_name}\n"
+                    f"**大小：** {self._format_size(file_size)}\n"
+                    f"**类型：** {media_type}\n\n"
+                    f"当前有5个任务正在下载，本任务将在队列中等待...\n\n"
+                    f"**下载统计：**\n"
+                    f"总计：{total + 1} | 成功：{completed} | 失败：{failed}"
                 )
             
             buttons = [
@@ -612,17 +623,17 @@ class BotCommandHandler:
                     total = stats.get("total", 0)
                     completed = stats.get("completed", 0)
                     failed = stats.get("failed", 0)
-
-                    success_text = msgs.DOWNLOAD_COMPLETED_MESSAGE.format(
-                        message_id=event.message.id,
-                        download_id=download_id,
-                        file_name=file_name,
-                        file_size=self._format_size(file_size),
-                        avg_speed=self._format_speed(avg_speed),
-                        elapsed=elapsed_time,
-                        total=total,
-                        completed=completed,
-                        failed=failed,
+                    
+                    success_text = (
+                        f"✅ **下载完成**\n\n"
+                        f"**文件ID：** `{event.message.id}`\n"
+                        f"**任务ID：** `{download_id}`\n"
+                        f"**文件名：** {file_name}\n"
+                        f"**大小：** {self._format_size(file_size)}\n"
+                        f"**平均速度：** {self._format_speed(avg_speed)}\n"
+                        f"**耗时：** {elapsed_time:.1f}秒\n\n"
+                        f"**下载统计：**\n"
+                        f"总计：{total} | 成功：{completed} | 失败：{failed}"
                     )
                     # 下载完成后只保留删除按钮
                     finished_buttons = [
@@ -663,14 +674,14 @@ class BotCommandHandler:
                     total = stats.get("total", 0)
                     completed = stats.get("completed", 0)
                     failed = stats.get("failed", 0)
-
-                    error_text = msgs.DOWNLOAD_FAILED_MESSAGE.format(
-                        message_id=event.message.id,
-                        file_name=file_name,
-                        error=str(e),
-                        total=total,
-                        completed=completed,
-                        failed=failed,
+                    
+                    error_text = (
+                        f"❌ **下载失败**\n\n"
+                        f"**文件ID：** `{event.message.id}`\n"
+                        f"**文件名：** {file_name}\n"
+                        f"**错误：** {str(e)}\n\n"
+                        f"**下载统计：**\n"
+                        f"总计：{total} | 成功：{completed} | 失败：{failed}"
                     )
                     # 失败后同样保留删除按钮
                     failed_buttons = [
@@ -725,22 +736,17 @@ class BotCommandHandler:
         if not self._active_downloads.get(download_id, False):
             return
         try:
-            # 进度条 + 百分比
-            percent = max(0.0, min(100.0, float(progress)))
-            total_blocks = 10
-            filled_blocks = int(percent / 100 * total_blocks)
-            bar = "█" * filled_blocks + "░" * (total_blocks - filled_blocks)
             speed_text = self._format_speed(speed) if speed > 0 else "计算中..."
-
-            text = msgs.DOWNLOADING_PROGRESS_MESSAGE.format(
-                message_id=message_id,
-                download_id=download_id,
-                file_name=file_name,
-                file_size=self._format_size(file_size),
-                media_type=media_type,
-                progress_bar=bar,
-                progress_percent=f"{percent:.1f}%",
-                speed_text=speed_text,
+            progress_text = f"{progress:.1f}%"
+            text = (
+                f"📥 **正在下载**\n\n"
+                f"**文件ID：** `{message_id}`\n"
+                f"**任务ID：** `{download_id}`\n"
+                f"**文件名：** {file_name}\n"
+                f"**大小：** {self._format_size(file_size)}\n"
+                f"**类型：** {media_type}\n"
+                f"**进度：** {progress_text}\n"
+                f"**速度：** {speed_text}"
             )
 
             # 在进度更新时始终保留控制按钮
@@ -839,7 +845,7 @@ class BotCommandHandler:
             download = next((d for d in downloads if d.get('id') == download_id), None)
             
             if not download:
-                await event.answer(msgs.PAUSE_DOWNLOAD_NOT_FOUND, alert=True)
+                await event.answer("❌ 下载记录不存在", alert=True)
                 return
             
             current_status = download.get('status')
@@ -855,27 +861,25 @@ class BotCommandHandler:
 
                 if success:
                     self.database.update_download(download_id, status="paused", error="用户暂停")
-                    await event.answer(msgs.PAUSE_SUCCESS_ANSWER)
+                    await event.answer("⏸️ 已暂停下载")
 
                     # 更新消息
                     await event.edit(
-                        msgs.PAUSE_MESSAGE_BODY.format(
-                            file_name=download.get("file_name", "未知"),
-                        )
+                        f"⏸️ **已暂停**\n\n"
+                        f"文件: {download.get('file_name', '未知')}\n"
+                        f"状态: 已暂停\n\n"
+                        f"使用 /download 命令查看所有下载"
                     )
                 else:
-                    await event.answer(msgs.PAUSE_FAILED_ANSWER, alert=True)
+                    await event.answer("❌ 暂停失败", alert=True)
             elif current_status == 'paused':
-                await event.answer(msgs.PAUSE_ALREADY_PAUSED_ANSWER, alert=True)
+                await event.answer("ℹ️ 下载已经是暂停状态", alert=True)
             else:
-                await event.answer(
-                    msgs.PAUSE_INVALID_STATUS_ANSWER.format(status=current_status),
-                    alert=True,
-                )
+                await event.answer(f"ℹ️ 当前状态 ({current_status}) 无法暂停", alert=True)
                 
         except Exception as e:
             logger.exception(f"暂停下载失败: {e}")
-            await event.answer(msgs.PAUSE_ERROR_ANSWER.format(error=str(e)), alert=True)
+            await event.answer(f"❌ 暂停失败: {str(e)}", alert=True)
     
     async def _handle_priority_download(self, event: events.CallbackQuery.Event, download_id: int) -> None:
         """处理置顶优先"""
@@ -918,15 +922,16 @@ class BotCommandHandler:
                             error="被高优先级任务抢占",
                         )
 
-                await event.answer(msgs.PRIORITY_SET_HIGH_ANSWER)
+                await event.answer("⭐ 已设置为高优先级")
                 await event.edit(
-                    msgs.PRIORITY_SET_HIGH_MESSAGE.format(
-                        file_name=download.get("file_name", "未知"),
-                        status=download.get("status", "未知"),
-                    )
+                    f"⭐ **高优先级**\n\n"
+                    f"文件: {download.get('file_name', '未知')}\n"
+                    f"状态: {download.get('status', '未知')}\n"
+                    f"优先级: 高\n\n"
+                    f"此任务将优先处理"
                 )
             else:
-                await event.answer(msgs.PRIORITY_RESET_ANSWER)
+                await event.answer("📋 已恢复正常优先级")
                 
         except Exception as e:
             logger.exception(f"设置优先级失败: {e}")
@@ -944,16 +949,10 @@ class BotCommandHandler:
                 return
             
             # 如果正在下载，先取消任务
-            status = (download.get('status') or '').lower()
-            source = download.get('source') or 'bot'
-            if status == 'downloading':
-                if source == 'rule' and self.worker:
-                    logger.info(f"取消正在进行的下载任务: {download_id}")
-                    await self.worker.cancel_download(download_id)
-                else:
-                    logger.info(f"取消正在进行的下载任务: {download_id}")
-                    await self.pause_download(download_id)
-                await asyncio.sleep(0.5)
+            if download.get('status') == 'downloading' and self.worker:
+                logger.info(f"取消正在进行的下载任务: {download_id}")
+                await self.worker.cancel_download(download_id)
+                await asyncio.sleep(0.5)  # 等待取消完成
             
             # 删除文件（如果存在）
             file_path = download.get('file_path')
@@ -965,14 +964,11 @@ class BotCommandHandler:
                     logger.warning(f"删除文件失败: {e}")
             
             # 删除数据库记录
-            self.database.delete_download(download_id)
-            self._active_downloads.pop(download_id, None)
-            self._download_tasks.pop(download_id, None)
-            self._cancelled_downloads.discard(download_id)
+            # TODO: 添加 database.delete_download 方法
             await event.answer("✅ 已删除下载任务")
             
             # 更新消息
-            await event.edit(msgs.DOWNLOAD_DELETED_MESSAGE)
+            await event.edit("🗑️ **已删除**\n\n此下载任务已被删除。")
             
         except Exception as e:
             logger.exception(f"删除下载失败: {e}")
@@ -1057,10 +1053,6 @@ class BotCommandHandler:
                 await self._handle_min_size_input(event, user_id, message_text, state)
             elif step == 'enter_keywords':
                 await self._handle_keywords_input(event, user_id, message_text, state)
-            elif step == 'enter_history_time':
-                await self._handle_history_time_input(event, user_id, message_text, state)
-            elif step == 'enter_history_message_id':
-                await self._handle_history_message_id_input(event, user_id, message_text, state)
             elif step == 'confirm':
                 await self._handle_confirmation(event, user_id, message_text, state)
                 
@@ -1317,36 +1309,12 @@ class BotCommandHandler:
         
         state['rule_data']['include_keywords'] = include_keywords
         state['rule_data']['exclude_keywords'] = exclude_keywords
-        # 计算匹配模式
-        if include_keywords and not exclude_keywords:
-            match_mode = 'include'
-        elif exclude_keywords and not include_keywords:
-            match_mode = 'exclude'
-        elif include_keywords and exclude_keywords:
-            match_mode = 'include'
-        else:
-            match_mode = 'all'
-        state['rule_data']['match_mode'] = match_mode
-
-        # 如果是历史模式，继续询问历史范围；否则直接进入确认
-        mode = state['rule_data'].get('mode', 'monitor')
-        if mode == 'history':
-            state['step'] = 'enter_history_time'
-            history_time_text = (
-                "🕒 **历史时间区间（仅 history 模式，可选）**\n\n"
-                "请输入时间范围，格式示例：\n"
-                "- `2024-01-01 00:00~2024-01-31 23:59`\n"
-                "- `2024-01-01~2024-01-31`（不写时间则使用 00:00）\n"
-                "- 单独一个时间表示仅设置开始时间，例如 `2024-01-01 00:00`\n\n"
-                "回复 `skip` 跳过时间限制"
-            )
-            await event.reply(history_time_text, parse_mode='markdown')
-            return
-
         state['step'] = 'confirm'
-
-        # 显示确认信息（监控模式无需历史范围）
+        
+        # 显示确认信息
         rule_data = state['rule_data']
+        
+        # 格式化体积范围显示
         min_bytes = rule_data.get('min_size_bytes', 0)
         max_bytes = rule_data.get('max_size_bytes', 0)
         if min_bytes == 0 and max_bytes == 0:
@@ -1357,7 +1325,7 @@ class BotCommandHandler:
             size_desc = f">= {min_bytes / (1024 * 1024):.1f} MB"
         else:
             size_desc = f"<= {max_bytes / (1024 * 1024):.1f} MB"
-
+        
         confirm_text = (
             "📋 **规则配置预览**\n\n"
             f"**群聊**: {rule_data['chat_title']}\n"
@@ -1366,142 +1334,6 @@ class BotCommandHandler:
             f"**体积范围**: {size_desc}\n"
             f"**包含关键词**: {include_keywords if include_keywords else '无'}\n"
             f"**排除关键词**: {exclude_keywords if exclude_keywords else '无'}\n\n"
-            "✅ 回复 yes 确认创建\n"
-            "❌ 回复 no 取消"
-        )
-        await event.reply(confirm_text, parse_mode='markdown')
-
-    async def _handle_history_time_input(self, event, user_id, message_text, state):
-        """处理历史时间区间输入（仅 history 模式）"""
-        text = message_text.strip()
-        start_dt = None
-        end_dt = None
-
-        if text.lower() != 'skip' and text:
-            raw = text.split('~', 1)
-            left = raw[0].strip()
-            right = raw[1].strip() if len(raw) > 1 else ''
-
-            def _parse_one(s: str) -> Optional[datetime]:
-                if not s:
-                    return None
-                for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d"):
-                    try:
-                        return datetime.strptime(s, fmt)
-                    except ValueError:
-                        continue
-                return None
-
-            start_dt = _parse_one(left)
-            end_dt = _parse_one(right)
-
-            if left and not start_dt:
-                await event.reply(
-                    "❌ 时间格式不正确，请使用 `YYYY-MM-DD HH:MM` 或 `YYYY-MM-DD`，"
-                    "例如：`2024-01-01 00:00~2024-01-31 23:59` 或回复 skip 跳过",
-                    parse_mode='markdown',
-                )
-                return
-            if right and not end_dt:
-                await event.reply(
-                    "❌ 结束时间格式不正确，请使用 `YYYY-MM-DD HH:MM` 或 `YYYY-MM-DD`，"
-                    "例如：`2024-01-01 00:00~2024-01-31 23:59` 或回复 skip 跳过",
-                    parse_mode='markdown',
-                )
-                return
-
-        rule_data = state['rule_data']
-        rule_data['start_time'] = start_dt.isoformat() if start_dt else None
-        rule_data['end_time'] = end_dt.isoformat() if end_dt else None
-
-        state['step'] = 'enter_history_message_id'
-        msg_id_text = (
-            "#️⃣ **历史消息 ID 区间（仅 history 模式，可选）**\n\n"
-            "请输入消息ID范围，格式示例：\n"
-            "- `100-200` 表示从 100 到 200 的消息\n"
-            "- `100-` 仅设置起始ID\n"
-            "- `-200` 仅设置结束ID\n"
-            "- 单独一个数字（如 `100`）表示从该ID开始\n\n"
-            "回复 `skip` 跳过ID限制"
-        )
-        await event.reply(msg_id_text, parse_mode='markdown')
-
-    async def _handle_history_message_id_input(self, event, user_id, message_text, state):
-        """处理历史消息ID区间输入（仅 history 模式）"""
-        text = message_text.strip()
-        min_id = None
-        max_id = None
-
-        if text.lower() != 'skip' and text:
-            if '-' in text:
-                left, right = text.split('-', 1)
-                left = left.strip()
-                right = right.strip()
-            else:
-                left, right = text, ''
-
-            if left:
-                try:
-                    min_id = int(left)
-                except ValueError:
-                    await event.reply("❌ 起始消息ID必须是数字，例如 100 或 100-200")
-                    return
-            if right:
-                try:
-                    max_id = int(right)
-                except ValueError:
-                    await event.reply("❌ 结束消息ID必须是数字，例如 100-200")
-                    return
-
-        rule_data = state['rule_data']
-        rule_data['min_message_id'] = min_id
-        rule_data['max_message_id'] = max_id
-
-        # 进入最终确认
-        state['step'] = 'confirm'
-
-        min_bytes = rule_data.get('min_size_bytes', 0)
-        max_bytes = rule_data.get('max_size_bytes', 0)
-        if min_bytes == 0 and max_bytes == 0:
-            size_desc = "不限制"
-        elif min_bytes > 0 and max_bytes > 0:
-            size_desc = f"{min_bytes / (1024 * 1024):.1f} MB ~ {max_bytes / (1024 * 1024):.1f} MB"
-        elif min_bytes > 0:
-            size_desc = f">= {min_bytes / (1024 * 1024):.1f} MB"
-        else:
-            size_desc = f"<= {max_bytes / (1024 * 1024):.1f} MB"
-
-        include_keywords = rule_data.get('include_keywords') or ''
-        exclude_keywords = rule_data.get('exclude_keywords') or ''
-
-        # 格式化时间区间
-        start_time = rule_data.get('start_time')
-        end_time = rule_data.get('end_time')
-        if start_time or end_time:
-            start_disp = start_time or '-'
-            end_disp = end_time or '-'
-            time_desc = f"{start_disp} ~ {end_disp}"
-        else:
-            time_desc = "不限制"
-
-        # 格式化消息ID区间
-        if min_id is not None or max_id is not None:
-            start_id_disp = str(min_id) if min_id is not None else '-'
-            end_id_disp = str(max_id) if max_id is not None else '-'
-            msg_id_desc = f"{start_id_disp} ~ {end_id_disp}"
-        else:
-            msg_id_desc = "不限制"
-
-        confirm_text = (
-            "📋 **规则配置预览**\n\n"
-            f"**群聊**: {rule_data['chat_title']}\n"
-            f"**模式**: {'监控模式' if rule_data['mode'] == 'monitor' else '历史模式'}\n"
-            f"**文件类型**: {rule_data['extensions'] if rule_data['extensions'] else '所有类型'}\n"
-            f"**体积范围**: {size_desc}\n"
-            f"**包含关键词**: {include_keywords if include_keywords else '无'}\n"
-            f"**排除关键词**: {exclude_keywords if exclude_keywords else '无'}\n"
-            f"**时间区间**: {time_desc}\n"
-            f"**消息ID区间**: {msg_id_desc}\n\n"
             "✅ 回复 yes 确认创建\n"
             "❌ 回复 no 取消"
         )
@@ -1527,11 +1359,6 @@ class BotCommandHandler:
                 size_range=rule_data.get('size_range', '0'),
                 include_keywords=rule_data['include_keywords'],
                 exclude_keywords=rule_data['exclude_keywords'],
-                match_mode=rule_data.get('match_mode', 'all'),
-                start_time=rule_data.get('start_time'),
-                end_time=rule_data.get('end_time'),
-                min_message_id=rule_data.get('min_message_id'),
-                max_message_id=rule_data.get('max_message_id'),
                 enabled=True
             )
             

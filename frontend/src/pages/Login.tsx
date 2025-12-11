@@ -7,8 +7,10 @@ const api = axios.create({
 });
 
 export default function Login() {
-  const [username, setUsername] = useState("admin");
-  const [password, setPassword] = useState("admin");
+  const [username, setUsername] = useState(
+    localStorage.getItem("last_username") || "admin"
+  );
+  const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const navigate = useNavigate();
@@ -24,6 +26,8 @@ export default function Login() {
       });
       if (data?.token) {
         localStorage.setItem("admin_token", data.token);
+        localStorage.setItem("last_username", username);
+        setPassword("");
         navigate("/", { replace: true });
       } else {
         setError("登录失败，请稍后重试");
@@ -69,17 +73,18 @@ export default function Login() {
           />
           <h2 style={{ margin: 0, fontSize: "1.25rem" }}>Telegram Depiler 控制台</h2>
           <p style={{ margin: "0.5rem 0 0", color: "#6b7280", fontSize: "0.9rem" }}>
-            请输入面板账号密码登录（默认 admin / admin）
+            请输入面板账号密码登录（默认账号/密码：admin / admin）
           </p>
         </div>
 
-        <form onSubmit={handleSubmit} style={{ display: "grid", gap: "0.75rem" }}>
+        <form onSubmit={handleSubmit} style={{ display: "grid", gap: "0.75rem" }} autoComplete="off">
           <label style={{ display: "grid", gap: "0.25rem", fontSize: "0.9rem" }}>
             <span>用户名</span>
             <input
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               autoComplete="username"
+              name="login-username"
               style={{
                 padding: "0.6rem 0.75rem",
                 borderRadius: "0.5rem",
@@ -95,7 +100,8 @@ export default function Login() {
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              autoComplete="current-password"
+              autoComplete="new-password"
+              name="login-password"
               style={{
                 padding: "0.6rem 0.75rem",
                 borderRadius: "0.5rem",

@@ -5,11 +5,14 @@ import logging
 import time
 import hashlib
 import secrets
+import os
+from pathlib import Path
 from contextlib import asynccontextmanager
 from typing import Optional
-from fastapi import FastAPI, HTTPException, Body, Header
+from fastapi import FastAPI, HTTPException, Body, Header, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from starlette.responses import FileResponse
 from telethon import events
 
 from .config import get_settings
@@ -58,6 +61,15 @@ def _ensure_default_admin() -> None:
 
 
 _ensure_default_admin()
+
+
+def _ensure_inside_download_dir(rel_path: str) -> Path:
+    """将相对路径限制在下载目录内，防止目录穿越。"""
+    root = Path(settings.download_dir).resolve()
+    target = (root / rel_path).resolve()
+    if not str(target).startswith(str(root)):
+        raise HTTPException(status_code=400, detail="路径不合法")
+    return target
 
 
 def _get_admin_credentials() -> tuple[str, str]:
@@ -638,19 +650,99 @@ async def delete_download(download_id: int) -> dict:
         elif bot_handler is not None:
             await bot_handler.pause_download(download_id)
     
-    # 删除数据库记录
-    database.delete_download(download_id)
-    
     # 删除文件（如果存在）
     if download.get('file_path'):
         import os
         try:
-            if os.path.exists(download['file_path']):
-                os.remove(download['file_path'])
+            file_path = download['file_path']
+            if os.path.exists(file_path):
+                os.remove(file_path)
+                logger.info(f"已删除文件: {file_path}")
+            else:
+                logger.debug(f"文件不存在，跳过删除: {file_path}")
         except Exception as e:
             logger.warning(f"删除文件失败: {e}")
+
+    # 删除数据库记录
+    database.delete_download(download_id)
     
     return {"success": True, "message": "已删除下载任务"}
+
+
+@api.get("/fs/dirs")
+async def list_dirs(
+    base: str = Query(default="", description="相对 downloads 根目录的子路径"),
+    admin_token: Optional[str] = Header(default=None, alias="X-Admin-Token"),
+) -> dict:
+    """列出下载目录下的所有子目录（递归），用于保存路径选择。"""
+    _require_admin(admin_token)
+    root = Path(settings.download_dir).resolve()
+    base_path = _ensure_inside_download_dir(base)
+    if not base_path.exists():
+        return {"items": []}
+
+    dirs: list[str] = []
+    for dirpath, dirnames, _ in os.walk(base_path):
+        for d in dirnames:
+            full = Path(dirpath) / d
+            rel = str(full.relative_to(root))
+            dirs.append(rel)
+    try:
+        rel_self = str(base_path.relative_to(root))
+        if rel_self not in ("", "."):
+            dirs.append(rel_self)
+    except ValueError:
+        pass
+
+    dirs = sorted(set(dirs))
+    return {"items": dirs}
+
+
+@api.post("/fs/dirs")
+async def create_dir(
+    body: dict = Body(default={}),
+    admin_token: Optional[str] = Header(default=None, alias="X-Admin-Token"),
+) -> dict:
+    """在下载目录下创建文件夹。"""
+    _require_admin(admin_token)
+    parent_path = body.get("parent_path", "") or ""
+    name = body.get("name", "")
+    if not name or "/" in name or "\\" in name:
+        raise HTTPException(status_code=400, detail="文件夹名称不合法")
+
+    parent = _ensure_inside_download_dir(parent_path)
+    parent.mkdir(parents=True, exist_ok=True)
+    target = parent / name
+    target.mkdir(parents=True, exist_ok=True)
+
+    rel = str(target.resolve().relative_to(Path(settings.download_dir).resolve()))
+    return {"success": True, "path": rel}
+
+
+@api.put("/fs/dirs/rename")
+async def rename_dir(
+    body: dict = Body(default={}),
+    admin_token: Optional[str] = Header(default=None, alias="X-Admin-Token"),
+) -> dict:
+    """重命名下载目录下的文件夹。"""
+    _require_admin(admin_token)
+    path = body.get("path", "")
+    new_name = body.get("new_name", "")
+    if not path:
+        raise HTTPException(status_code=400, detail="路径不能为空")
+    if not new_name or "/" in new_name or "\\" in new_name:
+        raise HTTPException(status_code=400, detail="新文件夹名称不合法")
+
+    target = _ensure_inside_download_dir(path)
+    if not target.exists() or not target.is_dir():
+        raise HTTPException(status_code=404, detail="目录不存在")
+
+    new_target = target.parent / new_name
+    new_target = _ensure_inside_download_dir(str(new_target.relative_to(Path(settings.download_dir).resolve())))
+    target.rename(new_target)
+
+    rel = str(new_target.resolve().relative_to(Path(settings.download_dir).resolve()))
+    return {"success": True, "path": rel}
 
 
 @api.get("/messages")
@@ -697,8 +789,6 @@ async def create_group_rule(body: GroupRuleCreate) -> dict:
         match_mode=body.match_mode,
         start_time=body.start_time.isoformat() if body.start_time else None,
         end_time=body.end_time.isoformat() if body.end_time else None,
-        min_message_id=body.min_message_id,
-        max_message_id=body.max_message_id,
     )
     rule = database.get_group_rule(rule_id)
     return {"id": rule_id, "rule": rule}
@@ -730,8 +820,6 @@ async def update_group_rule(rule_id: int, body: GroupRuleUpdate) -> dict:
         match_mode=body.match_mode,
         start_time=body.start_time.isoformat() if body.start_time else None,
         end_time=body.end_time.isoformat() if body.end_time else None,
-        min_message_id=body.min_message_id,
-        max_message_id=body.max_message_id,
     )
     rule = database.get_group_rule(rule_id)
     if not rule:
@@ -871,5 +959,24 @@ app = FastAPI(lifespan=lifespan)
 app.mount("/api", api)
 
 if settings.static_dir.exists():
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def serve_spa(full_path: str):
+        # 前端路由兜底：非 /api 请求全部返回 index.html
+        if full_path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="Not Found")
+
+        candidate = (settings.static_dir / full_path).resolve()
+        root = settings.static_dir.resolve()
+        try:
+            if candidate.is_file() and str(candidate).startswith(str(root)):
+                return FileResponse(candidate)
+        except Exception:
+            pass
+
+        index_file = settings.static_dir / "index.html"
+        if index_file.exists():
+            return FileResponse(index_file)
+        raise HTTPException(status_code=404, detail="Not Found")
+
     app.mount("/", StaticFiles(directory=settings.static_dir, html=True), name="frontend")
 
