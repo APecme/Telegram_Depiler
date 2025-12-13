@@ -1324,7 +1324,7 @@ export default function Dashboard() {
                         })}
                       {dirOptions.filter((p): p is string => typeof p === "string" && p !== "").length === 0 && (
                         <div style={{ padding: "1rem", textAlign: "center", color: "#999", fontSize: "0.85rem" }}>
-                          {currentBrowsePath ? "此目录下没有子目录" : "暂无目录，点击"新建文件夹"创建"}
+                          {currentBrowsePath ? "此目录下没有子目录" : '暂无目录，点击"新建文件夹"创建'}
                         </div>
                       )}
                     </div>
