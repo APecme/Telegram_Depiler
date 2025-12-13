@@ -606,13 +606,23 @@ async def resume_download(download_id: int) -> dict:
         raise HTTPException(status_code=404, detail="下载记录不存在")
 
     status = download.get("status")
-    if status != "paused":
+    if status not in ("paused", "queued"):
         return {"success": False, "message": f"当前状态({status})无法恢复"}
 
+    source = download.get("source") or "bot"
+    
     # 检查全局并发限制
     can_start = await download_queue_manager.try_start_download(download_id)
     
     if can_start:
+        # 如果是规则下载，需要实际触发下载
+        if source == "rule" and worker:
+            message_id = download.get("message_id")
+            chat_id = download.get("chat_id")
+            if message_id and chat_id:
+                # 在后台任务中恢复下载
+                asyncio.create_task(worker.restore_queued_download(download_id, message_id, chat_id))
+        # Bot下载的恢复逻辑在bot_handler中处理
         return {"success": True, "message": "已恢复下载"}
     else:
         return {"success": True, "message": "任务已加入队列，等待其他任务完成"}
@@ -699,28 +709,60 @@ async def delete_download(download_id: int) -> dict:
 
 @api.get("/fs/dirs")
 async def list_dirs(
-    base: str = Query(default="", description="相对 downloads 根目录的子路径"),
+    base: str = Query(default="", description="相对根目录的路径，空字符串表示从容器根目录开始"),
     admin_token: Optional[str] = Header(default=None, alias="X-Admin-Token"),
 ) -> dict:
-    """列出下载目录下的所有子目录（递归），用于保存路径选择。"""
+    """列出容器内的目录结构，用于保存路径选择。
+    
+    如果base为空，从/app开始列出所有目录。
+    如果base不为空，列出base路径下的子目录。
+    """
     _require_admin(admin_token)
-    root = Path(settings.download_dir).resolve()
-    base_path = _ensure_inside_download_dir(base)
-    if not base_path.exists():
+    
+    # 容器根目录限制为 /app，确保安全
+    container_root = Path("/app").resolve()
+    
+    if not base:
+        # 从容器根目录开始
+        base_path = container_root
+    else:
+        # 确保路径在容器根目录内
+        base_path = (container_root / base.lstrip("/")).resolve()
+        if not str(base_path).startswith(str(container_root)):
+            raise HTTPException(status_code=400, detail="路径不合法")
+    
+    if not base_path.exists() or not base_path.is_dir():
         return {"items": []}
 
     dirs: list[str] = []
-    for dirpath, dirnames, _ in os.walk(base_path):
-        for d in dirnames:
-            full = Path(dirpath) / d
-            rel = str(full.relative_to(root))
-            dirs.append(rel)
-    try:
-        rel_self = str(base_path.relative_to(root))
-        if rel_self not in ("", "."):
-            dirs.append(rel_self)
-    except ValueError:
-        pass
+    
+    # 如果base为空，列出/app下的所有目录
+    if not base:
+        try:
+            for item in base_path.iterdir():
+                if item.is_dir():
+                    # 返回相对于容器根目录的路径
+                    rel_path = str(item.relative_to(container_root))
+                    dirs.append(rel_path)
+        except PermissionError:
+            pass
+    else:
+        # 列出base路径下的子目录（递归）
+        for dirpath, dirnames, _ in os.walk(base_path):
+            for d in dirnames:
+                full = Path(dirpath) / d
+                try:
+                    rel = str(full.relative_to(container_root))
+                    dirs.append(rel)
+                except ValueError:
+                    pass
+        # 添加base路径本身
+        try:
+            rel_self = str(base_path.relative_to(container_root))
+            if rel_self not in ("", ".") and rel_self not in dirs:
+                dirs.append(rel_self)
+        except ValueError:
+            pass
 
     dirs = sorted(set(dirs))
     return {"items": dirs}

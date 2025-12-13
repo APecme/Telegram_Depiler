@@ -578,7 +578,7 @@ class TelegramWorker:
             logger.debug(f"清理下载任务时出错: {e}")
     
     async def restore_queued_download(self, download_id: int, message_id: int, chat_id: int) -> None:
-        """恢复队列中的下载任务"""
+        """恢复队列中的下载任务（不创建新记录，直接继续下载）"""
         try:
             # 获取下载记录
             downloads = self.database.list_downloads(limit=1000)
@@ -586,6 +586,12 @@ class TelegramWorker:
             
             if not download:
                 logger.warning(f"恢复下载任务失败：找不到下载记录 {download_id}")
+                return
+            
+            # 检查状态，确保是downloading（队列管理器已经标记为downloading）
+            current_status = download.get('status')
+            if current_status != 'downloading':
+                logger.warning(f"恢复下载任务失败：任务状态不是downloading，当前状态: {current_status}")
                 return
             
             # 获取规则信息
@@ -613,8 +619,8 @@ class TelegramWorker:
                 # 获取发送者信息
                 sender = await message.get_sender()
                 
-                # 重新触发下载（使用相同的逻辑）
-                await self._download_file_by_rule(message, rule, chat, sender)
+                # 直接执行下载逻辑，不创建新记录
+                await self._continue_download_from_queue(download_id, message, rule, chat, sender)
                 
             except Exception as e:
                 logger.exception(f"恢复下载任务失败: {e}")
@@ -622,6 +628,136 @@ class TelegramWorker:
                 
         except Exception as e:
             logger.exception(f"恢复队列下载任务失败: {e}")
+    
+    async def _continue_download_from_queue(self, download_id: int, message: Any, rule: dict, chat: Any, sender: Any) -> None:
+        """从队列继续下载（使用已有的下载记录）"""
+        try:
+            import time
+            from telethon.tl.custom.button import Button
+            
+            # 获取下载记录
+            downloads = self.database.list_downloads(limit=1000)
+            download = next((d for d in downloads if d.get('id') == download_id), None)
+            if not download:
+                return
+            
+            # 获取原始文件名
+            original_file_name = download.get('file_name') or f"file_{message.id}"
+            
+            # 应用文件名模板
+            filename_template = rule.get('filename_template') or "{message_id}_{file_name}"
+            chat_title = getattr(chat, 'title', 'Unknown').replace('/', '_').replace('\\', '_')
+            timestamp = int(time.time())
+            
+            # 替换模板变量
+            file_name = filename_template.replace('{task_id}', str(download_id))
+            file_name = file_name.replace('{message_id}', str(message.id))
+            file_name = file_name.replace('{chat_title}', chat_title)
+            file_name = file_name.replace('{timestamp}', str(timestamp))
+            file_name = file_name.replace('{file_name}', original_file_name)
+            
+            # 确保文件名有扩展名
+            if '.' in original_file_name and '.' not in file_name:
+                ext = original_file_name.split('.')[-1]
+                file_name = f"{file_name}.{ext}"
+            
+            # 应用保存路径
+            save_dir = rule.get('save_dir') or self.settings.download_dir
+            target_path = Path(save_dir) / file_name
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            logger.info("从队列恢复下载文件: %s -> %s", original_file_name, target_path)
+            
+            # 获取文件大小
+            file_size = 0
+            if message.file:
+                file_size = getattr(message.file, "size", 0) or 0
+            
+            # 注册当前任务以便跟踪和取消
+            current_task = asyncio.current_task()
+            if current_task:
+                self._download_tasks[download_id] = current_task
+            
+            # 下载文件并跟踪进度
+            downloaded_bytes = 0
+            last_update_time = time.time()
+            last_downloaded = 0
+            download_speed = 0.0
+            
+            def progress_callback(current: int, total: int) -> None:
+                nonlocal downloaded_bytes, last_update_time, last_downloaded, download_speed
+                
+                # 检查是否已取消
+                if download_id in self._cancelled_downloads:
+                    raise asyncio.CancelledError("下载已被用户取消")
+                
+                downloaded_bytes = current
+                progress = (current / total * 100) if total > 0 else 0
+                
+                # 计算下载速度
+                current_time = time.time()
+                if last_update_time is not None:
+                    time_diff = current_time - last_update_time
+                    if time_diff > 0:
+                        bytes_diff = current - last_downloaded
+                        download_speed = bytes_diff / time_diff
+                
+                last_update_time = current_time
+                last_downloaded = current
+                
+                # 更新数据库
+                try:
+                    self.database.update_download(
+                        download_id,
+                        progress=progress,
+                        download_speed=download_speed,
+                    )
+                except Exception as e:
+                    logger.debug("更新下载进度失败: %s", e)
+            
+            # 检查是否在开始前就被取消
+            if download_id in self._cancelled_downloads:
+                raise asyncio.CancelledError("下载已被用户取消")
+            
+            await message.download_media(
+                file=target_path,
+                progress_callback=progress_callback if file_size > 0 else None
+            )
+            
+            self.database.update_download(
+                download_id, 
+                status="completed", 
+                file_path=str(target_path),
+                progress=100.0,
+                download_speed=0.0
+            )
+            logger.info("从队列恢复下载完成: %s", file_name)
+            
+            # 通知队列管理器，尝试启动下一个任务
+            if self.queue_manager:
+                await self.queue_manager.on_download_finished(download_id)
+            
+            # 清理任务
+            self._download_tasks.pop(download_id, None)
+            self._cancelled_downloads.discard(download_id)
+            
+        except asyncio.CancelledError:
+            logger.info("从队列恢复的下载任务 %d 已被取消", download_id)
+            if 'target_path' in locals() and target_path.exists():
+                try:
+                    target_path.unlink()
+                except Exception:
+                    pass
+            raise
+        except Exception as exc:
+            logger.exception("从队列恢复下载文件失败: %s", exc)
+            self.database.update_download(
+                download_id, status="failed", error=str(exc)
+            )
+            if self.queue_manager:
+                await self.queue_manager.on_download_finished(download_id)
+            self._download_tasks.pop(download_id, None)
+            self._cancelled_downloads.discard(download_id)
 
     async def start_bot_listener(self, bot_username: str) -> None:
         client = await self._get_client()

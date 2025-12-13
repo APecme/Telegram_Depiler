@@ -82,6 +82,7 @@ export default function Dashboard() {
   const [formExcludeKeywords, setFormExcludeKeywords] = useState("");
   const [dirOptions, setDirOptions] = useState<string[]>([]);
   const [dirLoading, setDirLoading] = useState(false);
+  const [notification, setNotification] = useState<{message: string; type: "success" | "error" | "info"} | null>(null);
 
   useEffect(() => {
     fetchDownloads();
@@ -94,6 +95,12 @@ export default function Dashboard() {
     }, 2000);
     return () => clearInterval(interval);
   }, []);
+
+  // 显示通知
+  const showNotification = (message: string, type: "success" | "error" | "info" = "info") => {
+    setNotification({ message, type });
+    setTimeout(() => setNotification(null), 3000);
+  };
 
   const fetchDownloads = async () => {
     try {
@@ -133,10 +140,10 @@ export default function Dashboard() {
     }
   };
 
-  const fetchDirectories = async () => {
+  const fetchDirectories = async (basePath: string = "") => {
     try {
       setDirLoading(true);
-      const { data } = await api.get("/fs/dirs");
+      const { data } = await api.get(`/fs/dirs?base=${encodeURIComponent(basePath)}`);
       const items: string[] = data.items || [];
       // 确保包含空字符串（根目录选项）
       const allOptions = ["", ...items];
@@ -151,7 +158,7 @@ export default function Dashboard() {
   };
 
   const handleCreateDirectory = async () => {
-    const name = prompt("输入新建文件夹名称：");
+    const name = window.prompt("输入新建文件夹名称：");
     if (!name) return;
     try {
       const parent_path = formSaveDir || "";
@@ -160,19 +167,19 @@ export default function Dashboard() {
       if (data.path) {
         setFormSaveDir(data.path);
       }
-      alert("已创建文件夹");
+      showNotification("已创建文件夹", "success");
     } catch (error) {
       console.error("Failed to create directory:", error);
-      alert("创建文件夹失败");
+      showNotification("创建文件夹失败", "error");
     }
   };
 
   const handleRenameDirectory = async () => {
     if (!formSaveDir) {
-      alert("请选择要重命名的文件夹");
+      showNotification("请选择要重命名的文件夹", "info");
       return;
     }
-    const newName = prompt("输入新的文件夹名称：", formSaveDir.split("/").pop() || "");
+    const newName = window.prompt("输入新的文件夹名称：", formSaveDir.split("/").pop() || "");
     if (!newName) return;
     try {
       const { data } = await api.put("/fs/dirs/rename", { path: formSaveDir, new_name: newName });
@@ -180,10 +187,10 @@ export default function Dashboard() {
       if (data.path) {
         setFormSaveDir(data.path);
       }
-      alert("已重命名文件夹");
+      showNotification("已重命名文件夹", "success");
     } catch (error) {
       console.error("Failed to rename directory:", error);
-      alert("重命名失败");
+      showNotification("重命名失败", "error");
     }
   };
 
@@ -204,10 +211,10 @@ export default function Dashboard() {
     try {
       await api.post(`/downloads/${downloadId}/pause`);
       await fetchDownloads();
-      alert("已暂停下载");
+      showNotification("已暂停下载", "success");
     } catch (error) {
       console.error("Failed to pause download:", error);
-      alert("暂停失败");
+      showNotification("暂停失败", "error");
     }
   };
 
@@ -215,10 +222,10 @@ export default function Dashboard() {
     try {
       await api.post(`/downloads/${downloadId}/priority`);
       await fetchDownloads();
-      alert("已设置优先级");
+      showNotification("已设置优先级", "success");
     } catch (error) {
       console.error("Failed to set priority:", error);
-      alert("设置优先级失败");
+      showNotification("设置优先级失败", "error");
     }
   };
 
@@ -226,24 +233,74 @@ export default function Dashboard() {
     try {
       await api.post(`/downloads/${downloadId}/resume`);
       await fetchDownloads();
-      alert("已恢复下载");
+      showNotification("已恢复下载", "success");
     } catch (error) {
       console.error("Failed to resume download:", error);
-      alert("恢复失败");
+      showNotification("恢复失败", "error");
+    }
+  };
+
+  const handlePauseAll = async () => {
+    const activeDownloads = downloads.filter(
+      (d) => d.status === "downloading" || d.status === "queued"
+    );
+    if (activeDownloads.length === 0) {
+      showNotification("没有可暂停的任务", "info");
+      return;
+    }
+    try {
+      let successCount = 0;
+      for (const download of activeDownloads) {
+        try {
+          await api.post(`/downloads/${download.id}/pause`);
+          successCount++;
+        } catch (error) {
+          console.error(`Failed to pause download ${download.id}:`, error);
+        }
+      }
+      await fetchDownloads();
+      showNotification(`已暂停 ${successCount} 个任务`, "success");
+    } catch (error) {
+      console.error("Failed to pause all downloads:", error);
+      showNotification("批量暂停失败", "error");
+    }
+  };
+
+  const handleResumeAll = async () => {
+    const pausedDownloads = downloads.filter((d) => d.status === "paused");
+    if (pausedDownloads.length === 0) {
+      showNotification("没有可恢复的任务", "info");
+      return;
+    }
+    try {
+      let successCount = 0;
+      for (const download of pausedDownloads) {
+        try {
+          await api.post(`/downloads/${download.id}/resume`);
+          successCount++;
+        } catch (error) {
+          console.error(`Failed to resume download ${download.id}:`, error);
+        }
+      }
+      await fetchDownloads();
+      showNotification(`已恢复 ${successCount} 个任务`, "success");
+    } catch (error) {
+      console.error("Failed to resume all downloads:", error);
+      showNotification("批量恢复失败", "error");
     }
   };
 
   const handleDeleteDownload = async (downloadId: number) => {
-    if (!confirm("确定要删除此下载任务吗？")) {
+    if (!window.confirm("确定要删除此下载任务吗？")) {
       return;
     }
     try {
       await api.delete(`/downloads/${downloadId}`);
       await fetchDownloads();
-      alert("已删除下载任务");
+      showNotification("已删除下载任务", "success");
     } catch (error) {
       console.error("Failed to delete download:", error);
-      alert("删除失败");
+      showNotification("删除失败", "error");
     }
   };
 
@@ -277,7 +334,7 @@ export default function Dashboard() {
 
   const handleSaveRule = async () => {
     if (!formChatId) {
-      alert("请选择目标群聊");
+      showNotification("请选择目标群聊", "info");
       return;
     }
 
@@ -302,24 +359,35 @@ export default function Dashboard() {
       }
       await fetchGroupRules();
       setShowRuleModal(false);
-      alert(editingRuleId ? "规则更新成功！" : "规则创建成功！");
+      showNotification(editingRuleId ? "规则更新成功！" : "规则创建成功！", "success");
     } catch (error) {
       console.error("Failed to save rule:", error);
-      alert("保存规则失败");
+      showNotification("保存规则失败", "error");
     }
   };
 
   const handleDeleteRule = async (ruleId: number) => {
-    if (!confirm("确定要删除这条规则吗？")) {
+    if (!window.confirm("确定要删除这条规则吗？")) {
       return;
     }
     try {
       await api.delete(`/group-rules/${ruleId}`);
       await fetchGroupRules();
-      alert("规则删除成功！");
+      showNotification("规则删除成功！", "success");
     } catch (error) {
       console.error("Failed to delete rule:", error);
-      alert("删除规则失败");
+      showNotification("删除规则失败", "error");
+    }
+  };
+
+  const handleToggleRule = async (ruleId: number, enabled: boolean) => {
+    try {
+      await api.put(`/group-rules/${ruleId}`, { enabled: !enabled });
+      await fetchGroupRules();
+      showNotification(enabled ? "规则已禁用" : "规则已启用", "success");
+    } catch (error) {
+      console.error("Failed to toggle rule:", error);
+      showNotification("操作失败", "error");
     }
   };
 
@@ -440,6 +508,20 @@ export default function Dashboard() {
                     )}
                   </div>
                   <div style={{ display: "flex", gap: "0.5rem" }}>
+                    <button
+                      onClick={() => handleToggleRule(rule.id, rule.enabled)}
+                      style={{
+                        padding: "0.4rem 0.8rem",
+                        fontSize: "0.85rem",
+                        backgroundColor: rule.enabled ? "#fff3e0" : "#e8f5e9",
+                        color: rule.enabled ? "#e65100" : "#2e7d32",
+                        border: `1px solid ${rule.enabled ? "#ff9800" : "#4caf50"}`,
+                        borderRadius: "6px",
+                        cursor: "pointer",
+                      }}
+                    >
+                      {rule.enabled ? "⏸️ 禁用" : "▶️ 启用"}
+                    </button>
                     <button
                       onClick={() => handleEditRule(rule)}
                       style={{
