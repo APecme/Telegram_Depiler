@@ -662,7 +662,14 @@ class TelegramWorker:
                 file_name = f"{file_name}.{ext}"
             
             # 应用保存路径
-            save_dir = rule.get('save_dir') or self.settings.download_dir
+            # 应用保存路径：优先使用规则中的路径，否则使用默认下载路径
+            save_dir = rule.get('save_dir')
+            if not save_dir or save_dir.strip() == "":
+                # 从数据库获取默认下载路径
+                default_path = self.database.get_config("default_download_path")
+                if not default_path:
+                    default_path = str(self.settings.download_dir)
+                save_dir = default_path
             target_path = Path(save_dir) / file_name
             target_path.parent.mkdir(parents=True, exist_ok=True)
             
@@ -1444,8 +1451,14 @@ class TelegramWorker:
                 ext = original_file_name.split('.')[-1]
                 file_name = f"{file_name}.{ext}"
             
-            # 应用保存路径
-            save_dir = rule.get('save_dir') or self.settings.download_dir
+            # 应用保存路径：优先使用规则中的路径，否则使用默认下载路径
+            save_dir = rule.get('save_dir')
+            if not save_dir or save_dir.strip() == "":
+                # 从数据库获取默认下载路径
+                default_path = self.database.get_config("default_download_path")
+                if not default_path:
+                    default_path = str(self.settings.download_dir)
+                save_dir = default_path
             target_path = Path(save_dir) / file_name
             target_path.parent.mkdir(parents=True, exist_ok=True)
             

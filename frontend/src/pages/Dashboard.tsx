@@ -104,18 +104,29 @@ export default function Dashboard() {
   const [dirOptions, setDirOptions] = useState<string[]>([]);
   const [dirLoading, setDirLoading] = useState(false);
   const [notification, setNotification] = useState<{message: string; type: "success" | "error" | "info"} | null>(null);
+  const [defaultDownloadPath, setDefaultDownloadPath] = useState<string>("");
 
   useEffect(() => {
     fetchDownloads();
     fetchGroupRules();
     fetchDialogs();
     fetchLogs();
+    fetchDefaultDownloadPath();
     const interval = setInterval(() => {
       fetchDownloads();
       fetchLogs();
     }, 2000);
     return () => clearInterval(interval);
   }, []);
+
+  const fetchDefaultDownloadPath = async () => {
+    try {
+      const { data } = await api.get("/config/default-download-path");
+      setDefaultDownloadPath(data.path || "");
+    } catch (error) {
+      console.error("Failed to fetch default download path:", error);
+    }
+  };
 
   // 显示通知
   const showNotification = (message: string, type: "success" | "error" | "info" = "info") => {
@@ -461,6 +472,33 @@ export default function Dashboard() {
             ➕ 新建规则
           </button>
         </div>
+
+        {/* 默认下载路径显示 */}
+        {defaultDownloadPath && (
+          <div style={{ 
+            marginBottom: "1.5rem", 
+            padding: "0.75rem 1rem", 
+            backgroundColor: "#e3f2fd", 
+            border: "1px solid #2196f3", 
+            borderRadius: "6px",
+            display: "flex",
+            alignItems: "center",
+            gap: "0.5rem"
+          }}>
+            <span style={{ fontSize: "1.2rem" }}>📁</span>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: "600", marginBottom: "0.25rem", color: "#1976d2" }}>
+                默认下载路径（不可删除/禁用）
+              </div>
+              <div style={{ fontSize: "0.9rem", color: "#1565c0" }}>
+                /{defaultDownloadPath}
+              </div>
+              <div style={{ fontSize: "0.75rem", color: "#666", marginTop: "0.25rem" }}>
+                当规则未指定保存路径时，文件将保存到此路径
+              </div>
+            </div>
+          </div>
+        )}
 
         {groupRules.length === 0 ? (
           <div style={{ textAlign: "center", padding: "3rem", color: "#999" }}>
@@ -1331,8 +1369,15 @@ export default function Dashboard() {
                   )}
                 </div>
                 <small style={{ display: "block", marginTop: "0.25rem", color: "#666", fontSize: "0.8rem" }}>
-                  当前选择: {formSaveDir ? `/${formSaveDir}` : "未选择"}
+                  当前选择: {formSaveDir ? `/${formSaveDir}` : `默认路径: /${defaultDownloadPath}`}
                 </small>
+                {!formSaveDir && defaultDownloadPath && (
+                  <div style={{ marginTop: "0.5rem", padding: "0.5rem", backgroundColor: "#fff3cd", border: "1px solid #ffc107", borderRadius: "4px" }}>
+                    <small style={{ color: "#856404", fontSize: "0.8rem" }}>
+                      ⚠️ 未指定保存路径，将使用默认下载路径: <strong>/{defaultDownloadPath}</strong>
+                    </small>
+                  </div>
+                )}
               </div>
 
               <div>

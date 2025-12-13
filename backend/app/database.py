@@ -193,10 +193,15 @@ class Database:
             )
             conn.commit()
 
-    def get_config(self) -> Dict[str, str]:
+    def get_config(self, key: str | None = None) -> Dict[str, str] | str | None:
+        """获取配置项。如果提供key，返回单个值；否则返回所有配置的字典"""
         with self._connect() as conn:
-            rows = conn.execute("SELECT key, value FROM config").fetchall()
-            return {row["key"]: row["value"] for row in rows}
+            if key:
+                row = conn.execute("SELECT value FROM config WHERE key = ?", (key,)).fetchone()
+                return row["value"] if row else None
+            else:
+                rows = conn.execute("SELECT key, value FROM config").fetchall()
+                return {row["key"]: row["value"] for row in rows}
 
     # Download helpers ---------------------------------------------------
     def add_download(

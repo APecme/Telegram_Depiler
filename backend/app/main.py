@@ -841,6 +841,20 @@ async def list_dialogs() -> dict:
     return {"items": items}
 
 
+@api.get("/config/default-download-path")
+async def get_default_download_path(
+    x_admin_token: str | None = Header(default=None, alias="X-Admin-Token"),
+) -> dict:
+    """获取默认下载路径"""
+    _require_admin(x_admin_token)
+    default_path = database.get_config("default_download_path")
+    if not default_path:
+        default_path = str(settings.download_dir)
+        # 初始化默认路径到数据库
+        database.set_config({"default_download_path": default_path})
+    return {"path": default_path}
+
+
 @api.get("/group-rules")
 async def list_group_rules(chat_id: int | None = None, mode: str | None = None) -> dict:
     items = database.list_group_rules(chat_id=chat_id, mode=mode)
@@ -853,6 +867,14 @@ async def create_group_rule(body: GroupRuleCreate) -> dict:
     size_range = body.size_range or "0"
     min_size_bytes, max_size_bytes = database.parse_size_range(size_range)
     
+    # 如果保存路径为空，使用默认下载路径
+    save_dir = body.save_dir
+    if not save_dir or save_dir.strip() == "":
+        default_path = database.get_config("default_download_path")
+        if not default_path:
+            default_path = str(settings.download_dir)
+        save_dir = default_path
+    
     rule_id = database.add_group_rule(
         chat_id=body.chat_id,
         chat_title=body.chat_title,
@@ -862,7 +884,7 @@ async def create_group_rule(body: GroupRuleCreate) -> dict:
         min_size_bytes=min_size_bytes,
         max_size_bytes=max_size_bytes,
         size_range=size_range,
-        save_dir=body.save_dir,
+        save_dir=save_dir,
         filename_template=body.filename_template,
         include_keywords=body.include_keywords,
         exclude_keywords=body.exclude_keywords,
@@ -884,6 +906,14 @@ async def update_group_rule(rule_id: int, body: GroupRuleUpdate) -> dict:
     if size_range is not None:
         min_size_bytes, max_size_bytes = database.parse_size_range(size_range)
 
+    # 如果保存路径为空，使用默认下载路径
+    save_dir = body.save_dir
+    if save_dir is not None and (not save_dir or save_dir.strip() == ""):
+        default_path = database.get_config("default_download_path")
+        if not default_path:
+            default_path = str(settings.download_dir)
+        save_dir = default_path
+
     database.update_group_rule(
         rule_id,
         chat_title=body.chat_title,
@@ -893,7 +923,7 @@ async def update_group_rule(rule_id: int, body: GroupRuleUpdate) -> dict:
         min_size_bytes=min_size_bytes,
         max_size_bytes=max_size_bytes,
         size_range=size_range,
-        save_dir=body.save_dir,
+        save_dir=save_dir,
         filename_template=body.filename_template,
         include_keywords=body.include_keywords,
         exclude_keywords=body.exclude_keywords,
