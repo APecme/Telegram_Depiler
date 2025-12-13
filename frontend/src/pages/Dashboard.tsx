@@ -96,6 +96,7 @@ export default function Dashboard() {
   const [formExtensions, setFormExtensions] = useState("mp4,mp3,jpg");
   const [formSizeRange, setFormSizeRange] = useState("0");
   const [formSaveDir, setFormSaveDir] = useState("");
+  const [currentBrowsePath, setCurrentBrowsePath] = useState(""); // 当前浏览的路径（用于导航）
   const [formFilenameTemplate, setFormFilenameTemplate] = useState("{task_id}_{message_id}_{chat_title}");
   const [formMatchMode, setFormMatchMode] = useState<"all" | "include" | "exclude">("all");
   const [formIncludeKeywords, setFormIncludeKeywords] = useState("");
@@ -165,7 +166,6 @@ export default function Dashboard() {
       setDirLoading(true);
       const { data } = await api.get(`/fs/dirs?base=${encodeURIComponent(basePath)}`);
       const items: string[] = data.items || [];
-      // 不再包含空字符串，因为现在显示的是容器根目录下的所有目录
       setDirOptions(items);
     } catch (error: any) {
       console.error("Failed to fetch directories:", error);
@@ -180,9 +180,9 @@ export default function Dashboard() {
     const name = window.prompt("输入新建文件夹名称：");
     if (!name) return;
     try {
-      const parent_path = formSaveDir || "";
+      const parent_path = currentBrowsePath || "";
       const { data } = await api.post("/fs/dirs", { parent_path, name });
-      await fetchDirectories();
+      await fetchDirectories(currentBrowsePath);
       if (data.path) {
         setFormSaveDir(data.path);
       }
@@ -202,7 +202,7 @@ export default function Dashboard() {
     if (!newName) return;
     try {
       const { data } = await api.put("/fs/dirs/rename", { path: formSaveDir, new_name: newName });
-      await fetchDirectories();
+      await fetchDirectories(currentBrowsePath);
       if (data.path) {
         setFormSaveDir(data.path);
       }
@@ -323,6 +323,7 @@ export default function Dashboard() {
     setFormExtensions("mp4,mp3,jpg");
     setFormSizeRange("0");
     setFormSaveDir("");
+    setCurrentBrowsePath("");
     setFormFilenameTemplate("{task_id}_{message_id}_{chat_title}");
     setFormMatchMode("all");
     setFormIncludeKeywords("");
@@ -337,11 +338,19 @@ export default function Dashboard() {
     setFormExtensions(rule.include_extensions || "");
     setFormSizeRange(rule.size_range || "0");
     setFormSaveDir(rule.save_dir || "");
+    const parentPath = rule.save_dir ? rule.save_dir.split("/").slice(0, -1).join("/") : "";
+    setCurrentBrowsePath(parentPath);
     setFormFilenameTemplate(rule.filename_template || "{task_id}_{message_id}_{chat_title}");
     setFormMatchMode((rule.match_mode as "all" | "include" | "exclude") || "all");
     setFormIncludeKeywords(rule.include_keywords || "");
     setFormExcludeKeywords(rule.exclude_keywords || "");
     setShowRuleModal(true);
+    // 如果已有保存路径，加载该路径的父目录
+    if (rule.save_dir) {
+      fetchDirectories(parentPath);
+    } else {
+      fetchDirectories("");
+    }
   };
 
   const handleSaveRule = async () => {
@@ -1207,6 +1216,7 @@ export default function Dashboard() {
                   <div style={{ marginBottom: "0.5rem", display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
                     <button 
                       onClick={() => {
+                        setCurrentBrowsePath("");
                         setFormSaveDir("");
                         fetchDirectories("");
                       }}
@@ -1214,15 +1224,15 @@ export default function Dashboard() {
                         padding: "0.4rem 0.8rem",
                         fontSize: "0.85rem",
                         border: "1px solid #2196f3",
-                        backgroundColor: formSaveDir === "" ? "#2196f3" : "white",
-                        color: formSaveDir === "" ? "white" : "#2196f3",
+                        backgroundColor: "white",
+                        color: "#2196f3",
                         borderRadius: "4px",
                         cursor: "pointer"
                       }}
                     >
-                      🔄 刷新列表
+                      🏠 返回根目录
                     </button>
-                    <button onClick={() => fetchDirectories()} style={{ padding: "0.4rem 0.8rem", fontSize: "0.85rem" }}>🔄 刷新</button>
+                    <button onClick={() => fetchDirectories(currentBrowsePath)} style={{ padding: "0.4rem 0.8rem", fontSize: "0.85rem" }}>🔄 刷新</button>
                     <button onClick={handleCreateDirectory} style={{ padding: "0.4rem 0.8rem", fontSize: "0.85rem" }}>➕ 新建文件夹</button>
                     {formSaveDir && (
                       <button onClick={handleRenameDirectory} style={{ padding: "0.4rem 0.8rem", fontSize: "0.85rem" }}>✏️ 重命名</button>
@@ -1232,34 +1242,89 @@ export default function Dashboard() {
                     <div style={{ padding: "1rem", textAlign: "center", color: "#666" }}>加载中...</div>
                   ) : (
                     <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
-                      {dirOptions
-                        .filter((p): p is string => typeof p === "string" && p !== "")
-                        .map((path) => (
+                      {/* 面包屑导航 */}
+                      {currentBrowsePath && (
+                        <div style={{ marginBottom: "0.5rem", padding: "0.5rem", backgroundColor: "#f5f5f5", borderRadius: "4px", display: "flex", alignItems: "center", gap: "0.5rem" }}>
                           <button
-                            key={path}
                             type="button"
-                            onClick={() => setFormSaveDir(path)}
+                            onClick={() => {
+                              const parentPath = currentBrowsePath.split("/").slice(0, -1).join("/");
+                              setCurrentBrowsePath(parentPath);
+                              fetchDirectories(parentPath);
+                            }}
                             style={{
-                              padding: "0.5rem 0.75rem",
-                              textAlign: "left",
-                              border: "1px solid #e0e0e0",
+                              padding: "0.25rem 0.5rem",
+                              fontSize: "0.8rem",
+                              border: "1px solid #ddd",
                               borderRadius: "4px",
-                              backgroundColor: formSaveDir === path ? "#e3f2fd" : "white",
-                              color: formSaveDir === path ? "#1976d2" : "#333",
-                              cursor: "pointer",
-                              fontSize: "0.85rem",
-                              display: "flex",
-                              alignItems: "center",
-                              gap: "0.5rem"
+                              backgroundColor: "white",
+                              cursor: "pointer"
                             }}
                           >
-                            <span>{formSaveDir === path ? "✓" : "📁"}</span>
-                            <span style={{ flex: 1 }}>/{path}</span>
+                            ← 返回
                           </button>
-                        ))}
+                          <span style={{ fontSize: "0.85rem", color: "#666" }}>
+                            当前路径: /{currentBrowsePath || "根目录"}
+                          </span>
+                        </div>
+                      )}
+                      {/* 目录列表 */}
+                      {dirOptions
+                        .filter((p): p is string => typeof p === "string" && p !== "")
+                        .map((path) => {
+                          const pathParts = path.split("/");
+                          const displayName = pathParts[pathParts.length - 1];
+                          const isSelected = formSaveDir === path;
+                          return (
+                            <div key={path} style={{ display: "flex", gap: "0.25rem" }}>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  // 进入目录
+                                  setCurrentBrowsePath(path);
+                                  fetchDirectories(path);
+                                }}
+                                style={{
+                                  flex: 1,
+                                  padding: "0.5rem 0.75rem",
+                                  textAlign: "left",
+                                  border: "1px solid #e0e0e0",
+                                  borderRadius: "4px",
+                                  backgroundColor: "white",
+                                  color: "#333",
+                                  cursor: "pointer",
+                                  fontSize: "0.85rem",
+                                  display: "flex",
+                                  alignItems: "center",
+                                  gap: "0.5rem"
+                                }}
+                              >
+                                <span>📁</span>
+                                <span style={{ flex: 1 }}>{displayName}</span>
+                                <span style={{ color: "#999", fontSize: "0.75rem" }}>→</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setFormSaveDir(path)}
+                                style={{
+                                  padding: "0.5rem 0.75rem",
+                                  border: `1px solid ${isSelected ? "#2196f3" : "#e0e0e0"}`,
+                                  borderRadius: "4px",
+                                  backgroundColor: isSelected ? "#2196f3" : "white",
+                                  color: isSelected ? "white" : "#2196f3",
+                                  cursor: "pointer",
+                                  fontSize: "0.85rem",
+                                  whiteSpace: "nowrap"
+                                }}
+                              >
+                                {isSelected ? "✓ 已选择" : "选择"}
+                              </button>
+                            </div>
+                          );
+                        })}
                       {dirOptions.filter((p): p is string => typeof p === "string" && p !== "").length === 0 && (
                         <div style={{ padding: "1rem", textAlign: "center", color: "#999", fontSize: "0.85rem" }}>
-                          暂无目录，点击"新建文件夹"创建
+                          {currentBrowsePath ? "此目录下没有子目录" : "暂无目录，点击"新建文件夹"创建"}
                         </div>
                       )}
                     </div>

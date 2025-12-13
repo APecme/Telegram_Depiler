@@ -732,12 +732,16 @@ async def list_dirs(
     container_root = Path("/").resolve()
     app_dir = Path("/app").resolve()
     
+    # 系统目录列表（需要排除的）
+    system_dirs = {"bin", "boot", "dev", "etc", "lib", "lib32", "lib64", "libx32", "media", "mnt", "opt", 
+                   "proc", "root", "run", "sbin", "srv", "sys", "tmp", "usr", "var", "home"}
+    
     if not base:
-        # 从容器根目录开始，列出所有目录（排除/app）
+        # 从容器根目录开始，只列出用户相关的目录（排除系统目录和/app）
         dirs: list[str] = []
         try:
             for item in container_root.iterdir():
-                if item.is_dir() and item != app_dir:
+                if item.is_dir() and item != app_dir and item.name not in system_dirs:
                     # 返回相对于容器根目录的路径（去掉开头的/）
                     rel_path = str(item.relative_to(container_root)).lstrip("/")
                     if rel_path:  # 确保不是空字符串
@@ -756,22 +760,18 @@ async def list_dirs(
             return {"items": []}
 
         dirs: list[str] = []
-        # 列出base路径下的子目录（递归）
-        for dirpath, dirnames, _ in os.walk(base_path):
-            for d in dirnames:
-                full = Path(dirpath) / d
-                try:
-                    rel = str(full.relative_to(container_root)).lstrip("/")
-                    if rel:  # 确保不是空字符串
-                        dirs.append(rel)
-                except ValueError:
-                    pass
-        # 添加base路径本身（如果不在列表中）
+        # 只列出base路径下的直接子目录（不递归，用于浏览）
         try:
-            rel_self = str(base_path.relative_to(container_root)).lstrip("/")
-            if rel_self and rel_self not in ("", ".") and rel_self not in dirs:
-                dirs.append(rel_self)
-        except ValueError:
+            for item in base_path.iterdir():
+                if item.is_dir():
+                    full = item
+                    try:
+                        rel = str(full.relative_to(container_root)).lstrip("/")
+                        if rel:  # 确保不是空字符串
+                            dirs.append(rel)
+                    except ValueError:
+                        pass
+        except PermissionError:
             pass
 
         dirs = sorted(set(dirs))
