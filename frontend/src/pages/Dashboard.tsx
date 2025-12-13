@@ -1206,7 +1206,7 @@ export default function Dashboard() {
                     >
                       📁 根目录 (/app)
                     </button>
-                    <button onClick={fetchDirectories} style={{ padding: "0.4rem 0.8rem", fontSize: "0.85rem" }}>🔄 刷新</button>
+                    <button onClick={() => fetchDirectories()} style={{ padding: "0.4rem 0.8rem", fontSize: "0.85rem" }}>🔄 刷新</button>
                     <button onClick={handleCreateDirectory} style={{ padding: "0.4rem 0.8rem", fontSize: "0.85rem" }}>➕ 新建文件夹</button>
                     {formSaveDir && (
                       <button onClick={handleRenameDirectory} style={{ padding: "0.4rem 0.8rem", fontSize: "0.85rem" }}>✏️ 重命名</button>

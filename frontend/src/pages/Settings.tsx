@@ -35,10 +35,12 @@ const api = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL ?? "/api",
 });
 
-api.interceptors.request.use((config) => {
+api.interceptors.request.use((config: any) => {
   const token = localStorage.getItem("admin_token");
   if (token) {
-    config.headers = config.headers ?? {};
+    if (!config.headers) {
+      config.headers = {};
+    }
     (config.headers as Record<string, string>)["X-Admin-Token"] = token;
   }
   return config;
