@@ -576,6 +576,52 @@ class TelegramWorker:
                     break
         except Exception as e:
             logger.debug(f"清理下载任务时出错: {e}")
+    
+    async def restore_queued_download(self, download_id: int, message_id: int, chat_id: int) -> None:
+        """恢复队列中的下载任务"""
+        try:
+            # 获取下载记录
+            downloads = self.database.list_downloads(limit=1000)
+            download = next((d for d in downloads if d.get('id') == download_id), None)
+            
+            if not download:
+                logger.warning(f"恢复下载任务失败：找不到下载记录 {download_id}")
+                return
+            
+            # 获取规则信息
+            rules = self.database.get_group_rules_for_chat(chat_id=chat_id, mode='monitor', only_enabled=True)
+            if not rules:
+                logger.warning(f"恢复下载任务失败：找不到群聊规则 {chat_id}")
+                self.database.update_download(download_id, status="failed", error="找不到群聊规则")
+                return
+            
+            rule = rules[0]  # 使用第一个规则
+            
+            # 获取客户端
+            client = await self._get_client()
+            
+            # 获取消息
+            try:
+                chat = await client.get_entity(chat_id)
+                message = await client.get_messages(chat, ids=message_id)
+                
+                if not message:
+                    logger.warning(f"恢复下载任务失败：找不到消息 {message_id}")
+                    self.database.update_download(download_id, status="failed", error="找不到消息")
+                    return
+                
+                # 获取发送者信息
+                sender = await message.get_sender()
+                
+                # 重新触发下载（使用相同的逻辑）
+                await self._download_file_by_rule(message, rule, chat, sender)
+                
+            except Exception as e:
+                logger.exception(f"恢复下载任务失败: {e}")
+                self.database.update_download(download_id, status="failed", error=str(e))
+                
+        except Exception as e:
+            logger.exception(f"恢复队列下载任务失败: {e}")
 
     async def start_bot_listener(self, bot_username: str) -> None:
         client = await self._get_client()
@@ -1185,9 +1231,64 @@ class TelegramWorker:
                 # 没有队列管理器，直接标记为downloading
                 self.database.update_download(download_id, status="downloading")
             
-            # 如果任务进入队列，直接返回不执行下载
+            # 如果任务进入队列，发送通知但不执行下载
             if not can_start:
                 logger.info(f"规则下载任务 {download_id} 进入队列，等待其他任务完成")
+                
+                # 获取文件大小（用于通知）
+                file_size = 0
+                if message.file:
+                    file_size = getattr(message.file, "size", 0) or 0
+                
+                # 发送队列通知给管理员用户
+                if self._bot_client and self.settings.admin_user_ids:
+                    try:
+                        from telethon.tl.types import User as TgUser
+                        from telethon.tl.custom.button import Button
+
+                        sender_name = (
+                            getattr(sender, "username", None)
+                            or getattr(sender, "first_name", None)
+                            or f"ID:{getattr(sender, 'id', 'Unknown')}"
+                        )
+
+                        notification_text = (
+                            f"📋 **任务已加入队列**\n\n"
+                            f"**来源群聊：** {chat_title}\n"
+                            f"**发送者：** {sender_name}\n"
+                            f"**文件名：** {original_file_name}\n"
+                            f"**类型：** {media_type or '未知'}\n"
+                            f"**大小：** {self._format_size(file_size)}\n"
+                            f"**任务ID：** `{download_id}`\n"
+                            f"**规则ID：** {rule.get('id', 'Unknown')}\n\n"
+                            f"**状态：** 队列中\n"
+                            f"当前有5个任务正在下载，本任务将在队列中等待..."
+                        )
+
+                        buttons = [
+                            [
+                                Button.inline("⭐ 置顶优先", f"priority_{download_id}"),
+                            ],
+                            [Button.inline("🗑️ 删除", f"delete_{download_id}")],
+                        ]
+
+                        for admin_id in self.settings.admin_user_ids:
+                            try:
+                                entity = await self._bot_client.get_entity(admin_id)
+                                if isinstance(entity, TgUser):
+                                    await self._bot_client.send_message(
+                                        entity.id,
+                                        notification_text,
+                                        parse_mode="markdown",
+                                        buttons=buttons,
+                                    )
+                                    logger.info("已向管理员用户 %s 发送队列通知", entity.id)
+                                    break
+                            except Exception as inner_e:
+                                logger.warning("向管理员 %s 发送队列通知失败: %s", admin_id, inner_e)
+                    except Exception as e:
+                        logger.warning("发送队列通知失败: %s", e)
+                
                 return
             
             # 注册当前任务以便跟踪和取消

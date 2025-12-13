@@ -113,7 +113,7 @@ class DownloadQueueManager:
     async def on_download_finished(self, download_id: int):
         """下载完成/失败/取消时调用，尝试启动队列中的下一个任务"""
         async with self._lock:
-            # 查找最早的queued任务
+            # 查找最早的queued任务（按优先级和创建时间排序）
             downloads = self.database.list_downloads(limit=1000)
             queued_tasks = [
                 d for d in downloads 
@@ -124,26 +124,32 @@ class DownloadQueueManager:
                 logger.info(f"下载任务 {download_id} 完成，队列为空")
                 return
             
-            # 按创建时间排序，取最早的
-            queued_tasks.sort(key=lambda d: d.get('created_at') or '')
+            # 按优先级（降序）和创建时间（升序）排序
+            queued_tasks.sort(key=lambda d: (-(d.get('priority') or 0), d.get('created_at') or ''))
             next_task = queued_tasks[0]
             next_id = next_task.get('id')
             
             if next_id is None:
                 return
             
-            # 将队列中的任务标记为downloading，并触发实际下载
+            # 将队列中的任务标记为downloading
             self.database.update_download(next_id, status='downloading')
             logger.info(f"下载任务 {download_id} 完成，启动队列任务 {next_id}")
             
-            # 根据来源触发下载
+            # 根据来源触发下载恢复
             source = next_task.get('source', 'bot')
             if source == 'rule' and worker:
-                # 规则下载：需要重新触发（这里简化处理，实际可能需要更复杂的恢复逻辑）
-                logger.warning(f"规则下载任务 {next_id} 从队列恢复暂不支持自动重启")
-            elif bot_handler:
-                # Bot下载：同样需要恢复逻辑
-                logger.warning(f"Bot下载任务 {next_id} 从队列恢复暂不支持自动重启")
+                # 规则下载：通过message_id和chat_id恢复
+                message_id = next_task.get('message_id')
+                chat_id = next_task.get('chat_id')
+                if message_id and chat_id:
+                    # 在后台任务中恢复下载
+                    asyncio.create_task(worker.restore_queued_download(next_id, message_id, chat_id))
+                else:
+                    logger.warning(f"规则下载任务 {next_id} 缺少message_id或chat_id，无法恢复")
+            elif source == 'bot' and bot_handler:
+                # Bot下载：通过message_id恢复（需要保存原始event信息，这里简化处理）
+                logger.info(f"Bot下载任务 {next_id} 从队列恢复，需要手动触发")
 
 
 download_queue_manager = DownloadQueueManager(database)
@@ -588,6 +594,28 @@ async def pause_download(download_id: int) -> dict:
         return {"success": True, "message": "已暂停下载"}
 
     return {"success": False, "message": "暂停失败"}
+
+
+@api.post("/downloads/{download_id}/resume")
+async def resume_download(download_id: int) -> dict:
+    """恢复下载（支持 Bot 与群聊规则任务）。"""
+    downloads = database.list_downloads(limit=1000)
+    download = next((d for d in downloads if d.get("id") == download_id), None)
+
+    if not download:
+        raise HTTPException(status_code=404, detail="下载记录不存在")
+
+    status = download.get("status")
+    if status != "paused":
+        return {"success": False, "message": f"当前状态({status})无法恢复"}
+
+    # 检查全局并发限制
+    can_start = await download_queue_manager.try_start_download(download_id)
+    
+    if can_start:
+        return {"success": True, "message": "已恢复下载"}
+    else:
+        return {"success": True, "message": "任务已加入队列，等待其他任务完成"}
 
 
 @api.post("/downloads/{download_id}/priority")

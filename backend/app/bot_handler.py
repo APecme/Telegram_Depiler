@@ -270,7 +270,7 @@ class BotCommandHandler:
 
         # 获取最近的下载记录，并筛选出正在进行的任务
         downloads = self.database.list_downloads(limit=200)
-        active_status = {"downloading", "pending", "paused"}
+        active_status = {"downloading", "pending", "paused", "queued"}
         active_downloads = [d for d in downloads if d.get("status") in active_status]
 
         header_text = (
@@ -300,18 +300,36 @@ class BotCommandHandler:
             progress = float(d.get("progress") or 0.0)
             speed = float(d.get("download_speed") or 0.0)
             speed_text = self._format_speed(speed) if speed > 0 else "计算中..."
+            
+            # 状态显示文本
+            status_text = {
+                "downloading": "⏳ 下载中",
+                "paused": "⏸️ 已暂停",
+                "queued": "📋 队列中",
+                "pending": "⏳ 等待中"
+            }.get(status, status)
 
             lines.append(
-                f"• 任务ID: `{download_id}` | 状态: {status}\n"
+                f"• 任务ID: `{download_id}` | 状态: {status_text}\n"
                 f"  进度: {progress:.1f}% | 速度: {speed_text}\n"
                 f"  文件: {file_name}"
             )
 
-            buttons.append([
-                KeyboardButtonCallback("⏸️ 暂停", f"pause_{download_id}".encode("utf-8")),
-                KeyboardButtonCallback("⭐ 优先", f"priority_{download_id}".encode("utf-8")),
-                KeyboardButtonCallback("🗑 删除", f"delete_{download_id}".encode("utf-8")),
-            ])
+            # 根据状态显示不同的按钮
+            row_buttons = []
+            if status == "downloading":
+                row_buttons.append(KeyboardButtonCallback("⏸️ 暂停", f"pause_{download_id}".encode("utf-8")))
+            elif status == "paused":
+                row_buttons.append(KeyboardButtonCallback("▶️ 开始", f"resume_{download_id}".encode("utf-8")))
+            
+            # 队列中和等待中的任务也可以置顶
+            if status in ("downloading", "pending", "queued", "paused"):
+                row_buttons.append(KeyboardButtonCallback("⭐ 置顶", f"priority_{download_id}".encode("utf-8")))
+            
+            row_buttons.append(KeyboardButtonCallback("🗑️ 删除", f"delete_{download_id}".encode("utf-8")))
+            
+            if row_buttons:
+                buttons.append(row_buttons)
 
         text = header_text + "\n**正在进行的任务：**\n" + "\n\n".join(lines)
 
@@ -805,6 +823,9 @@ class BotCommandHandler:
             elif data.startswith("delete_"):
                 download_id = int(data.split("_")[1])
                 await self._handle_delete_download(event, download_id)
+            elif data.startswith("resume_"):
+                download_id = int(data.split("_")[1])
+                await self._handle_resume_download(event, download_id)
             elif data.startswith("retry_"):
                 download_id = int(data.split("_")[1])
                 await self._handle_retry_download(event, download_id)
@@ -973,6 +994,49 @@ class BotCommandHandler:
         except Exception as e:
             logger.exception(f"删除下载失败: {e}")
             await event.answer(f"❌ 删除失败: {str(e)}", alert=True)
+    
+    async def _handle_resume_download(self, event: events.CallbackQuery.Event, download_id: int) -> None:
+        """处理恢复下载"""
+        try:
+            # 获取下载记录
+            downloads = self.database.list_downloads(limit=1000)
+            download = next((d for d in downloads if d.get('id') == download_id), None)
+            
+            if not download:
+                await event.answer("❌ 下载记录不存在", alert=True)
+                return
+            
+            current_status = download.get('status')
+            
+            if current_status != 'paused':
+                await event.answer(f"ℹ️ 当前状态 ({current_status}) 无法恢复", alert=True)
+                return
+            
+            # 检查全局并发限制
+            can_start = True
+            if self.queue_manager:
+                can_start = await self.queue_manager.try_start_download(download_id)
+            
+            if can_start:
+                await event.answer("✅ 已恢复下载")
+                await event.edit(
+                    f"▶️ **已恢复下载**\n\n"
+                    f"文件: {download.get('file_name', '未知')}\n"
+                    f"状态: 下载中\n\n"
+                    f"使用 /download 命令查看所有下载"
+                )
+            else:
+                await event.answer("📋 任务已加入队列，等待其他任务完成")
+                await event.edit(
+                    f"📋 **任务已加入队列**\n\n"
+                    f"文件: {download.get('file_name', '未知')}\n"
+                    f"状态: 队列中\n\n"
+                    f"当前有5个任务正在下载，本任务将在队列中等待..."
+                )
+                
+        except Exception as e:
+            logger.exception(f"恢复下载失败: {e}")
+            await event.answer(f"❌ 恢复失败: {str(e)}", alert=True)
     
     async def _handle_retry_download(self, event: events.CallbackQuery.Event, download_id: int) -> None:
         """处理重试下载"""

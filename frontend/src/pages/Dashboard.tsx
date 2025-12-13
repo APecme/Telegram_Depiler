@@ -138,9 +138,13 @@ export default function Dashboard() {
       setDirLoading(true);
       const { data } = await api.get("/fs/dirs");
       const items: string[] = data.items || [];
-      setDirOptions(["", ...items]);
+      // 确保包含空字符串（根目录选项）
+      const allOptions = ["", ...items];
+      setDirOptions(allOptions);
     } catch (error) {
       console.error("Failed to fetch directories:", error);
+      // 即使失败也设置根目录选项
+      setDirOptions([""]);
     } finally {
       setDirLoading(false);
     }
@@ -188,6 +192,13 @@ export default function Dashboard() {
       fetchDirectories();
     }
   }, [showRuleModal]);
+  
+  // 当选择根目录时，确保dirOptions包含空字符串
+  useEffect(() => {
+    if (showRuleModal && dirOptions.length > 0 && !dirOptions.includes("")) {
+      setDirOptions(["", ...dirOptions]);
+    }
+  }, [showRuleModal, dirOptions]);
 
   const handlePauseDownload = async (downloadId: number) => {
     try {
@@ -208,6 +219,17 @@ export default function Dashboard() {
     } catch (error) {
       console.error("Failed to set priority:", error);
       alert("设置优先级失败");
+    }
+  };
+
+  const handleResumeDownload = async (downloadId: number) => {
+    try {
+      await api.post(`/downloads/${downloadId}/resume`);
+      await fetchDownloads();
+      alert("已恢复下载");
+    } catch (error) {
+      console.error("Failed to resume download:", error);
+      alert("恢复失败");
     }
   };
 
@@ -674,7 +696,24 @@ export default function Dashboard() {
                               ⏸️ 暂停
                             </button>
                           )}
-                          {(record.status === "downloading" || record.status === "pending") && (
+                          {record.status === "paused" && (
+                            <button
+                              onClick={() => handleResumeDownload(record.id)}
+                              style={{
+                                padding: "0.25rem 0.5rem",
+                                fontSize: "0.8rem",
+                                border: "1px solid #4caf50",
+                                backgroundColor: "#e8f5e9",
+                                color: "#2e7d32",
+                                borderRadius: "4px",
+                                cursor: "pointer",
+                              }}
+                              title="继续下载"
+                            >
+                              ▶️ 开始
+                            </button>
+                          )}
+                          {(record.status === "downloading" || record.status === "pending" || record.status === "queued" || record.status === "paused") && (
                             <button
                               onClick={() => handlePriorityDownload(record.id)}
                               style={{
@@ -1059,31 +1098,77 @@ export default function Dashboard() {
                 <label style={{ display: "block", marginBottom: "0.5rem", fontWeight: "500" }}>
                   保存路径（可选）
                 </label>
-                <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
-                  <input
-                    list="save-dir-list"
-                    value={formSaveDir}
-                    onFocus={fetchDirectories}
-                    onChange={(e) => setFormSaveDir(e.target.value)}
-                    placeholder={dirLoading ? "加载中..." : "留空使用默认 downloads"}
-                    style={{ flex: "1 1 240px", padding: "0.5rem", borderRadius: "4px", border: "1px solid #ddd" }}
-                  />
-                  <datalist id="save-dir-list">
-                    <option key="default" value=""></option>
-                    {dirOptions
-                      .filter((p) => p)
-                      .map((path) => (
-                        <option key={path} value={path}>
-                          {path}
-                        </option>
-                      ))}
-                  </datalist>
-                  <button onClick={fetchDirectories} style={{ padding: "0.5rem 0.75rem" }}>刷新</button>
-                  <button onClick={handleCreateDirectory} style={{ padding: "0.5rem 0.75rem" }}>新建文件夹</button>
-                  <button onClick={handleRenameDirectory} style={{ padding: "0.5rem 0.75rem" }}>重命名当前</button>
+                <div style={{ 
+                  border: "1px solid #ddd", 
+                  borderRadius: "4px", 
+                  padding: "0.5rem",
+                  maxHeight: "200px",
+                  overflowY: "auto",
+                  backgroundColor: "#fafafa"
+                }}>
+                  <div style={{ marginBottom: "0.5rem", display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
+                    <button 
+                      onClick={() => {
+                        setFormSaveDir("");
+                        fetchDirectories();
+                      }}
+                      style={{ 
+                        padding: "0.4rem 0.8rem",
+                        fontSize: "0.85rem",
+                        border: "1px solid #2196f3",
+                        backgroundColor: formSaveDir === "" ? "#2196f3" : "white",
+                        color: formSaveDir === "" ? "white" : "#2196f3",
+                        borderRadius: "4px",
+                        cursor: "pointer"
+                      }}
+                    >
+                      📁 根目录
+                    </button>
+                    <button onClick={fetchDirectories} style={{ padding: "0.4rem 0.8rem", fontSize: "0.85rem" }}>🔄 刷新</button>
+                    <button onClick={handleCreateDirectory} style={{ padding: "0.4rem 0.8rem", fontSize: "0.85rem" }}>➕ 新建文件夹</button>
+                    {formSaveDir && (
+                      <button onClick={handleRenameDirectory} style={{ padding: "0.4rem 0.8rem", fontSize: "0.85rem" }}>✏️ 重命名</button>
+                    )}
+                  </div>
+                  {dirLoading ? (
+                    <div style={{ padding: "1rem", textAlign: "center", color: "#666" }}>加载中...</div>
+                  ) : (
+                    <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+                      {dirOptions
+                        .filter((p) => p)
+                        .map((path) => (
+                          <button
+                            key={path}
+                            type="button"
+                            onClick={() => setFormSaveDir(path)}
+                            style={{
+                              padding: "0.5rem 0.75rem",
+                              textAlign: "left",
+                              border: "1px solid #e0e0e0",
+                              borderRadius: "4px",
+                              backgroundColor: formSaveDir === path ? "#e3f2fd" : "white",
+                              color: formSaveDir === path ? "#1976d2" : "#333",
+                              cursor: "pointer",
+                              fontSize: "0.85rem",
+                              display: "flex",
+                              alignItems: "center",
+                              gap: "0.5rem"
+                            }}
+                          >
+                            <span>{formSaveDir === path ? "✓" : "📁"}</span>
+                            <span style={{ flex: 1 }}>{path || "根目录 (downloads)"}</span>
+                          </button>
+                        ))}
+                      {dirOptions.filter((p) => p).length === 0 && (
+                        <div style={{ padding: "1rem", textAlign: "center", color: "#999", fontSize: "0.85rem" }}>
+                          暂无子目录，点击"新建文件夹"创建
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
                 <small style={{ display: "block", marginTop: "0.25rem", color: "#666", fontSize: "0.8rem" }}>
-                  点击输入框可展开 downloads 目录下的子目录列表，或新建/重命名文件夹
+                  当前选择: {formSaveDir || "根目录 (downloads)"}
                 </small>
               </div>
 
