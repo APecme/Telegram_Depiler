@@ -262,8 +262,15 @@ async def read_config() -> dict:
 
 
 def _require_admin(token: str | None) -> None:
-    if not token or token not in ADMIN_TOKENS:
+    """验证管理员token"""
+    logger.debug(f"验证管理员token: token存在={token is not None}, token长度={len(token) if token else 0}, ADMIN_TOKENS数量={len(ADMIN_TOKENS)}")
+    if not token:
+        logger.warning("管理员token为空")
         raise HTTPException(status_code=401, detail="未登录或会话已过期")
+    if token not in ADMIN_TOKENS:
+        logger.warning(f"管理员token无效: token前10位={token[:10] if len(token) > 10 else token}, ADMIN_TOKENS中的token数量={len(ADMIN_TOKENS)}")
+        raise HTTPException(status_code=401, detail="未登录或会话已过期")
+    logger.debug("管理员token验证通过")
 
 
 @api.post("/config")
@@ -351,6 +358,7 @@ async def admin_login(body: AdminLoginRequest) -> dict:
 
     token = secrets.token_hex(32)
     ADMIN_TOKENS.add(token)
+    logger.info(f"用户 {username} 登录成功，生成token: {token[:10]}... (长度: {len(token)}), ADMIN_TOKENS数量: {len(ADMIN_TOKENS)}")
     return {"token": token, "username": username}
 
 
@@ -717,6 +725,7 @@ async def list_dirs(
     如果base为空，列出容器根目录（/）下的所有目录（排除/app）。
     如果base不为空，列出base路径下的子目录。
     """
+    logger.debug(f"/fs/dirs 请求: base={base}, admin_token存在={admin_token is not None}, admin_token长度={len(admin_token) if admin_token else 0}")
     _require_admin(admin_token)
     
     # 容器根目录

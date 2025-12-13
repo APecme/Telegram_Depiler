@@ -10,11 +10,31 @@ const api = axios.create({
 api.interceptors.request.use((config: any) => {
   const token = localStorage.getItem("admin_token");
   if (token) {
-    config.headers = config.headers ?? {};
-    (config.headers as Record<string, string>)["X-Admin-Token"] = token;
+    if (!config.headers) {
+      config.headers = {};
+    }
+    config.headers["X-Admin-Token"] = token;
   }
   return config;
+}, (error) => {
+  return Promise.reject(error);
 });
+
+// 添加响应拦截器处理401错误
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error?.response?.status === 401) {
+      // 401错误：清除token并提示重新登录
+      localStorage.removeItem("admin_token");
+      // 如果不在登录页，跳转到登录页
+      if (window.location.pathname !== "/login") {
+        window.location.href = "/login";
+      }
+    }
+    return Promise.reject(error);
+  }
+);
 
 type DownloadRecord = {
   id: number;
@@ -147,9 +167,9 @@ export default function Dashboard() {
       const items: string[] = data.items || [];
       // 不再包含空字符串，因为现在显示的是容器根目录下的所有目录
       setDirOptions(items);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Failed to fetch directories:", error);
-      // 即使失败也设置空列表
+      // 401错误由响应拦截器统一处理，这里只设置空列表
       setDirOptions([]);
     } finally {
       setDirLoading(false);
@@ -944,169 +964,173 @@ export default function Dashboard() {
 
               <div>
                 <label style={{ display: "block", marginBottom: "0.5rem", fontWeight: "500" }}>
-                  文件类型
+                  文件类型（可选）
                 </label>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))", gap: "0.5rem" }}>
-                  {/* 视频 */}
-                  <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.5rem", border: "1px solid #ddd", borderRadius: "4px", cursor: "pointer" }}>
-                    <input
-                      type="checkbox"
-                      checked={formExtensions.includes("mp4")}
-                      onChange={(e) => {
-                        const exts = formExtensions.split(",").filter(x => x);
-                        if (e.target.checked) {
-                          setFormExtensions([...exts, "mp4"].join(","));
-                        } else {
-                          setFormExtensions(exts.filter(x => x !== "mp4").join(","));
-                        }
-                      }}
-                    />
-                    <span>📹 MP4</span>
-                  </label>
-                  <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.5rem", border: "1px solid #ddd", borderRadius: "4px", cursor: "pointer" }}>
-                    <input
-                      type="checkbox"
-                      checked={formExtensions.includes("mkv")}
-                      onChange={(e) => {
-                        const exts = formExtensions.split(",").filter(x => x);
-                        if (e.target.checked) {
-                          setFormExtensions([...exts, "mkv"].join(","));
-                        } else {
-                          setFormExtensions(exts.filter(x => x !== "mkv").join(","));
-                        }
-                      }}
-                    />
-                    <span>📹 MKV</span>
-                  </label>
-                  <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.5rem", border: "1px solid #ddd", borderRadius: "4px", cursor: "pointer" }}>
-                    <input
-                      type="checkbox"
-                      checked={formExtensions.includes("avi")}
-                      onChange={(e) => {
-                        const exts = formExtensions.split(",").filter(x => x);
-                        if (e.target.checked) {
-                          setFormExtensions([...exts, "avi"].join(","));
-                        } else {
-                          setFormExtensions(exts.filter(x => x !== "avi").join(","));
-                        }
-                      }}
-                    />
-                    <span>📹 AVI</span>
-                  </label>
-                  
-                  {/* 图片 */}
-                  <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.5rem", border: "1px solid #ddd", borderRadius: "4px", cursor: "pointer" }}>
-                    <input
-                      type="checkbox"
-                      checked={formExtensions.includes("jpg")}
-                      onChange={(e) => {
-                        const exts = formExtensions.split(",").filter(x => x);
-                        if (e.target.checked) {
-                          setFormExtensions([...exts, "jpg", "jpeg"].join(","));
-                        } else {
-                          setFormExtensions(exts.filter(x => x !== "jpg" && x !== "jpeg").join(","));
-                        }
-                      }}
-                    />
-                    <span>🖼️ JPG</span>
-                  </label>
-                  <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.5rem", border: "1px solid #ddd", borderRadius: "4px", cursor: "pointer" }}>
-                    <input
-                      type="checkbox"
-                      checked={formExtensions.includes("png")}
-                      onChange={(e) => {
-                        const exts = formExtensions.split(",").filter(x => x);
-                        if (e.target.checked) {
-                          setFormExtensions([...exts, "png"].join(","));
-                        } else {
-                          setFormExtensions(exts.filter(x => x !== "png").join(","));
-                        }
-                      }}
-                    />
-                    <span>🖼️ PNG</span>
-                  </label>
-                  <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.5rem", border: "1px solid #ddd", borderRadius: "4px", cursor: "pointer" }}>
-                    <input
-                      type="checkbox"
-                      checked={formExtensions.includes("gif")}
-                      onChange={(e) => {
-                        const exts = formExtensions.split(",").filter(x => x);
-                        if (e.target.checked) {
-                          setFormExtensions([...exts, "gif"].join(","));
-                        } else {
-                          setFormExtensions(exts.filter(x => x !== "gif").join(","));
-                        }
-                      }}
-                    />
-                    <span>🖼️ GIF</span>
-                  </label>
-                  
-                  {/* 音频 */}
-                  <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.5rem", border: "1px solid #ddd", borderRadius: "4px", cursor: "pointer" }}>
-                    <input
-                      type="checkbox"
-                      checked={formExtensions.includes("mp3")}
-                      onChange={(e) => {
-                        const exts = formExtensions.split(",").filter(x => x);
-                        if (e.target.checked) {
-                          setFormExtensions([...exts, "mp3"].join(","));
-                        } else {
-                          setFormExtensions(exts.filter(x => x !== "mp3").join(","));
-                        }
-                      }}
-                    />
-                    <span>🎵 MP3</span>
-                  </label>
-                  <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.5rem", border: "1px solid #ddd", borderRadius: "4px", cursor: "pointer" }}>
-                    <input
-                      type="checkbox"
-                      checked={formExtensions.includes("flac")}
-                      onChange={(e) => {
-                        const exts = formExtensions.split(",").filter(x => x);
-                        if (e.target.checked) {
-                          setFormExtensions([...exts, "flac"].join(","));
-                        } else {
-                          setFormExtensions(exts.filter(x => x !== "flac").join(","));
-                        }
-                      }}
-                    />
-                    <span>🎵 FLAC</span>
-                  </label>
-                  
-                  {/* 文档 */}
-                  <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.5rem", border: "1px solid #ddd", borderRadius: "4px", cursor: "pointer" }}>
-                    <input
-                      type="checkbox"
-                      checked={formExtensions.includes("pdf")}
-                      onChange={(e) => {
-                        const exts = formExtensions.split(",").filter(x => x);
-                        if (e.target.checked) {
-                          setFormExtensions([...exts, "pdf"].join(","));
-                        } else {
-                          setFormExtensions(exts.filter(x => x !== "pdf").join(","));
-                        }
-                      }}
-                    />
-                    <span>📄 PDF</span>
-                  </label>
-                  <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.5rem", border: "1px solid #ddd", borderRadius: "4px", cursor: "pointer" }}>
-                    <input
-                      type="checkbox"
-                      checked={formExtensions.includes("zip")}
-                      onChange={(e) => {
-                        const exts = formExtensions.split(",").filter(x => x);
-                        if (e.target.checked) {
-                          setFormExtensions([...exts, "zip"].join(","));
-                        } else {
-                          setFormExtensions(exts.filter(x => x !== "zip").join(","));
-                        }
-                      }}
-                    />
-                    <span>📦 ZIP</span>
-                  </label>
+                <input
+                  type="text"
+                  value={formExtensions}
+                  onChange={(e) => setFormExtensions(e.target.value)}
+                  placeholder="例如：mp4,mp3,jpg,png,zip"
+                  style={{
+                    width: "100%",
+                    padding: "0.5rem",
+                    border: "1px solid #ddd",
+                    borderRadius: "4px",
+                    fontSize: "0.9rem"
+                  }}
+                />
+                <div style={{ marginTop: "0.5rem", display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const exts = formExtensions.split(",").filter(x => x.trim());
+                      if (!exts.includes("mp4")) {
+                        setFormExtensions([...exts, "mp4"].join(","));
+                      }
+                    }}
+                    style={{
+                      padding: "0.3rem 0.6rem",
+                      fontSize: "0.8rem",
+                      border: "1px solid #ddd",
+                      borderRadius: "4px",
+                      backgroundColor: "white",
+                      cursor: "pointer"
+                    }}
+                  >
+                    + MP4
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const exts = formExtensions.split(",").filter(x => x.trim());
+                      if (!exts.includes("mkv")) {
+                        setFormExtensions([...exts, "mkv"].join(","));
+                      }
+                    }}
+                    style={{
+                      padding: "0.3rem 0.6rem",
+                      fontSize: "0.8rem",
+                      border: "1px solid #ddd",
+                      borderRadius: "4px",
+                      backgroundColor: "white",
+                      cursor: "pointer"
+                    }}
+                  >
+                    + MKV
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const exts = formExtensions.split(",").filter(x => x.trim());
+                      if (!exts.includes("mp3")) {
+                        setFormExtensions([...exts, "mp3"].join(","));
+                      }
+                    }}
+                    style={{
+                      padding: "0.3rem 0.6rem",
+                      fontSize: "0.8rem",
+                      border: "1px solid #ddd",
+                      borderRadius: "4px",
+                      backgroundColor: "white",
+                      cursor: "pointer"
+                    }}
+                  >
+                    + MP3
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const exts = formExtensions.split(",").filter(x => x.trim());
+                      if (!exts.includes("jpg") && !exts.includes("jpeg")) {
+                        setFormExtensions([...exts, "jpg", "jpeg"].join(","));
+                      }
+                    }}
+                    style={{
+                      padding: "0.3rem 0.6rem",
+                      fontSize: "0.8rem",
+                      border: "1px solid #ddd",
+                      borderRadius: "4px",
+                      backgroundColor: "white",
+                      cursor: "pointer"
+                    }}
+                  >
+                    + JPG
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const exts = formExtensions.split(",").filter(x => x.trim());
+                      if (!exts.includes("png")) {
+                        setFormExtensions([...exts, "png"].join(","));
+                      }
+                    }}
+                    style={{
+                      padding: "0.3rem 0.6rem",
+                      fontSize: "0.8rem",
+                      border: "1px solid #ddd",
+                      borderRadius: "4px",
+                      backgroundColor: "white",
+                      cursor: "pointer"
+                    }}
+                  >
+                    + PNG
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const exts = formExtensions.split(",").filter(x => x.trim());
+                      if (!exts.includes("zip")) {
+                        setFormExtensions([...exts, "zip"].join(","));
+                      }
+                    }}
+                    style={{
+                      padding: "0.3rem 0.6rem",
+                      fontSize: "0.8rem",
+                      border: "1px solid #ddd",
+                      borderRadius: "4px",
+                      backgroundColor: "white",
+                      cursor: "pointer"
+                    }}
+                  >
+                    + ZIP
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const exts = formExtensions.split(",").filter(x => x.trim());
+                      if (!exts.includes("pdf")) {
+                        setFormExtensions([...exts, "pdf"].join(","));
+                      }
+                    }}
+                    style={{
+                      padding: "0.3rem 0.6rem",
+                      fontSize: "0.8rem",
+                      border: "1px solid #ddd",
+                      borderRadius: "4px",
+                      backgroundColor: "white",
+                      cursor: "pointer"
+                    }}
+                  >
+                    + PDF
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFormExtensions("")}
+                    style={{
+                      padding: "0.3rem 0.6rem",
+                      fontSize: "0.8rem",
+                      border: "1px solid #f44336",
+                      borderRadius: "4px",
+                      backgroundColor: "white",
+                      color: "#f44336",
+                      cursor: "pointer"
+                    }}
+                  >
+                    清空
+                  </button>
                 </div>
-                <p style={{ fontSize: "0.8rem", color: "# 666", marginTop: "0.5rem" }}>
-                  选择要下载的文件类型
+                <p style={{ fontSize: "0.8rem", color: "#666", marginTop: "0.5rem" }}>
+                  输入文件扩展名，多个用逗号分隔（例如：mp4,mp3,jpg）。留空则下载所有类型文件。点击上方按钮可快速添加常用扩展名。
                 </p>
               </div>
 
