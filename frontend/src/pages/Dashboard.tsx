@@ -145,13 +145,12 @@ export default function Dashboard() {
       setDirLoading(true);
       const { data } = await api.get(`/fs/dirs?base=${encodeURIComponent(basePath)}`);
       const items: string[] = data.items || [];
-      // 确保包含空字符串（根目录选项）
-      const allOptions = ["", ...items];
-      setDirOptions(allOptions);
+      // 不再包含空字符串，因为现在显示的是容器根目录下的所有目录
+      setDirOptions(items);
     } catch (error) {
       console.error("Failed to fetch directories:", error);
-      // 即使失败也设置根目录选项
-      setDirOptions([""]);
+      // 即使失败也设置空列表
+      setDirOptions([]);
     } finally {
       setDirLoading(false);
     }
@@ -196,16 +195,9 @@ export default function Dashboard() {
 
   useEffect(() => {
     if (showRuleModal) {
-      fetchDirectories();
+      fetchDirectories("");
     }
   }, [showRuleModal]);
-  
-  // 当选择根目录时，确保dirOptions包含空字符串
-  useEffect(() => {
-    if (showRuleModal && dirOptions.length > 0 && !dirOptions.includes("")) {
-      setDirOptions(["", ...dirOptions]);
-    }
-  }, [showRuleModal, dirOptions]);
 
   const handlePauseDownload = async (downloadId: number) => {
     try {
@@ -1192,7 +1184,7 @@ export default function Dashboard() {
                     <button 
                       onClick={() => {
                         setFormSaveDir("");
-                        fetchDirectories();
+                        fetchDirectories("");
                       }}
                       style={{ 
                         padding: "0.4rem 0.8rem",
@@ -1204,7 +1196,7 @@ export default function Dashboard() {
                         cursor: "pointer"
                       }}
                     >
-                      📁 根目录 (/app)
+                      🔄 刷新列表
                     </button>
                     <button onClick={() => fetchDirectories()} style={{ padding: "0.4rem 0.8rem", fontSize: "0.85rem" }}>🔄 刷新</button>
                     <button onClick={handleCreateDirectory} style={{ padding: "0.4rem 0.8rem", fontSize: "0.85rem" }}>➕ 新建文件夹</button>
@@ -1217,10 +1209,10 @@ export default function Dashboard() {
                   ) : (
                     <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
                       {dirOptions
-                        .filter((p): p is string => typeof p === "string")
+                        .filter((p): p is string => typeof p === "string" && p !== "")
                         .map((path) => (
                           <button
-                            key={path || "__root__"}
+                            key={path}
                             type="button"
                             onClick={() => setFormSaveDir(path)}
                             style={{
@@ -1238,10 +1230,10 @@ export default function Dashboard() {
                             }}
                           >
                             <span>{formSaveDir === path ? "✓" : "📁"}</span>
-                            <span style={{ flex: 1 }}>{path ? `/app/${path}` : "根目录 (/app)"}</span>
+                            <span style={{ flex: 1 }}>/{path}</span>
                           </button>
                         ))}
-                      {dirOptions.filter((p): p is string => typeof p === "string").length === 0 && (
+                      {dirOptions.filter((p): p is string => typeof p === "string" && p !== "").length === 0 && (
                         <div style={{ padding: "1rem", textAlign: "center", color: "#999", fontSize: "0.85rem" }}>
                           暂无目录，点击"新建文件夹"创建
                         </div>
@@ -1250,7 +1242,7 @@ export default function Dashboard() {
                   )}
                 </div>
                 <small style={{ display: "block", marginTop: "0.25rem", color: "#666", fontSize: "0.8rem" }}>
-                  当前选择: {formSaveDir ? `/app/${formSaveDir}` : "根目录 (/app)"}
+                  当前选择: {formSaveDir ? `/${formSaveDir}` : "未选择"}
                 </small>
               </div>
 

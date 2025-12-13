@@ -714,58 +714,59 @@ async def list_dirs(
 ) -> dict:
     """列出容器内的目录结构，用于保存路径选择。
     
-    如果base为空，从/app开始列出所有目录。
+    如果base为空，列出容器根目录（/）下的所有目录（排除/app）。
     如果base不为空，列出base路径下的子目录。
     """
     _require_admin(admin_token)
     
-    # 容器根目录限制为 /app，确保安全
-    container_root = Path("/app").resolve()
+    # 容器根目录
+    container_root = Path("/").resolve()
+    app_dir = Path("/app").resolve()
     
     if not base:
-        # 从容器根目录开始
-        base_path = container_root
+        # 从容器根目录开始，列出所有目录（排除/app）
+        dirs: list[str] = []
+        try:
+            for item in container_root.iterdir():
+                if item.is_dir() and item != app_dir:
+                    # 返回相对于容器根目录的路径（去掉开头的/）
+                    rel_path = str(item.relative_to(container_root)).lstrip("/")
+                    if rel_path:  # 确保不是空字符串
+                        dirs.append(rel_path)
+        except PermissionError:
+            pass
+        dirs = sorted(set(dirs))
+        return {"items": dirs}
     else:
         # 确保路径在容器根目录内
         base_path = (container_root / base.lstrip("/")).resolve()
         if not str(base_path).startswith(str(container_root)):
             raise HTTPException(status_code=400, detail="路径不合法")
-    
-    if not base_path.exists() or not base_path.is_dir():
-        return {"items": []}
+        
+        if not base_path.exists() or not base_path.is_dir():
+            return {"items": []}
 
-    dirs: list[str] = []
-    
-    # 如果base为空，列出/app下的所有目录
-    if not base:
-        try:
-            for item in base_path.iterdir():
-                if item.is_dir():
-                    # 返回相对于容器根目录的路径
-                    rel_path = str(item.relative_to(container_root))
-                    dirs.append(rel_path)
-        except PermissionError:
-            pass
-    else:
+        dirs: list[str] = []
         # 列出base路径下的子目录（递归）
         for dirpath, dirnames, _ in os.walk(base_path):
             for d in dirnames:
                 full = Path(dirpath) / d
                 try:
-                    rel = str(full.relative_to(container_root))
-                    dirs.append(rel)
+                    rel = str(full.relative_to(container_root)).lstrip("/")
+                    if rel:  # 确保不是空字符串
+                        dirs.append(rel)
                 except ValueError:
                     pass
-        # 添加base路径本身
+        # 添加base路径本身（如果不在列表中）
         try:
-            rel_self = str(base_path.relative_to(container_root))
-            if rel_self not in ("", ".") and rel_self not in dirs:
+            rel_self = str(base_path.relative_to(container_root)).lstrip("/")
+            if rel_self and rel_self not in ("", ".") and rel_self not in dirs:
                 dirs.append(rel_self)
         except ValueError:
             pass
 
-    dirs = sorted(set(dirs))
-    return {"items": dirs}
+        dirs = sorted(set(dirs))
+        return {"items": dirs}
 
 
 @api.post("/fs/dirs")
