@@ -7,7 +7,7 @@ const api = axios.create({
   baseURL: import.meta.env.VITE_API_URL || "/api",
 });
 
-api.interceptors.request.use((config) => {
+api.interceptors.request.use((config: any) => {
   const token = localStorage.getItem("admin_token");
   if (token) {
     config.headers = config.headers ?? {};
@@ -242,7 +242,7 @@ export default function Dashboard() {
 
   const handlePauseAll = async () => {
     const activeDownloads = downloads.filter(
-      (d) => d.status === "downloading" || d.status === "queued"
+      (d: DownloadRecord) => d.status === "downloading" || d.status === "queued"
     );
     if (activeDownloads.length === 0) {
       showNotification("没有可暂停的任务", "info");
@@ -267,7 +267,7 @@ export default function Dashboard() {
   };
 
   const handleResumeAll = async () => {
-    const pausedDownloads = downloads.filter((d) => d.status === "paused");
+    const pausedDownloads = downloads.filter((d: DownloadRecord) => d.status === "paused");
     if (pausedDownloads.length === 0) {
       showNotification("没有可恢复的任务", "info");
       return;
@@ -649,12 +649,12 @@ export default function Dashboard() {
               </thead>
               <tbody>
                 {downloads
-                  .filter((record) =>
+                  .filter((record: DownloadRecord) =>
                     downloadTab === "downloading"
                       ? record.status !== "completed"
                       : record.status === "completed"
                   )
-                  .map((record) => (
+                  .map((record: DownloadRecord) => (
                     <tr key={record.id} style={{ borderBottom: "1px solid #f0f0f0" }}>
                       <td style={{ padding: "0.75rem" }}>{record.file_name}</td>
                       <td style={{ padding: "0.75rem" }}>
@@ -842,7 +842,7 @@ export default function Dashboard() {
         <div className="card" style={{ marginTop: "2rem", padding: "1.5rem", backgroundColor: "white", borderRadius: "8px", boxShadow: "0 2px 4px rgba(0,0,0,0.1)" }}>
           <h2 style={{ margin: "0 0 1rem 0" }}>📋 实时日志</h2>
           <div style={{ maxHeight: "400px", overflowY: "auto", backgroundColor: "#f5f5f5", padding: "1rem", borderRadius: "4px", fontFamily: "monospace", fontSize: "0.85rem" }}>
-            {logs.map((log, index) => (
+            {logs.map((log: LogEntry, index: number) => (
               <div key={index} style={{ marginBottom: "0.5rem", display: "flex", gap: "0.5rem" }}>
                 <span style={{ color: "#666" }}>{log.timestamp}</span>
                 <span style={{ color: log.level === "ERROR" ? "#f44336" : log.level === "WARNING" ? "#ff9800" : "#4caf50", fontWeight: "bold" }}>
@@ -1204,7 +1204,7 @@ export default function Dashboard() {
                         cursor: "pointer"
                       }}
                     >
-                      📁 根目录
+                      📁 根目录 (/app)
                     </button>
                     <button onClick={fetchDirectories} style={{ padding: "0.4rem 0.8rem", fontSize: "0.85rem" }}>🔄 刷新</button>
                     <button onClick={handleCreateDirectory} style={{ padding: "0.4rem 0.8rem", fontSize: "0.85rem" }}>➕ 新建文件夹</button>
@@ -1217,10 +1217,10 @@ export default function Dashboard() {
                   ) : (
                     <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
                       {dirOptions
-                        .filter((p) => p)
+                        .filter((p): p is string => typeof p === "string")
                         .map((path) => (
                           <button
-                            key={path}
+                            key={path || "__root__"}
                             type="button"
                             onClick={() => setFormSaveDir(path)}
                             style={{
@@ -1238,19 +1238,19 @@ export default function Dashboard() {
                             }}
                           >
                             <span>{formSaveDir === path ? "✓" : "📁"}</span>
-                            <span style={{ flex: 1 }}>{path || "根目录 (downloads)"}</span>
+                            <span style={{ flex: 1 }}>{path ? `/app/${path}` : "根目录 (/app)"}</span>
                           </button>
                         ))}
-                      {dirOptions.filter((p) => p).length === 0 && (
+                      {dirOptions.filter((p): p is string => typeof p === "string").length === 0 && (
                         <div style={{ padding: "1rem", textAlign: "center", color: "#999", fontSize: "0.85rem" }}>
-                          暂无子目录，点击"新建文件夹"创建
+                          暂无目录，点击"新建文件夹"创建
                         </div>
                       )}
                     </div>
                   )}
                 </div>
                 <small style={{ display: "block", marginTop: "0.25rem", color: "#666", fontSize: "0.8rem" }}>
-                  当前选择: {formSaveDir || "根目录 (downloads)"}
+                  当前选择: {formSaveDir ? `/app/${formSaveDir}` : "根目录 (/app)"}
                 </small>
               </div>
 
