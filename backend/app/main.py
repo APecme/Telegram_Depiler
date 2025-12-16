@@ -148,8 +148,8 @@ class DownloadQueueManager:
                 else:
                     logger.warning(f"规则下载任务 {next_id} 缺少message_id或chat_id，无法恢复")
             elif source == 'bot' and bot_handler:
-                # Bot下载：通过message_id恢复（需要保存原始event信息，这里简化处理）
-                logger.info(f"Bot下载任务 {next_id} 从队列恢复，需要手动触发")
+                # Bot 下载：通过数据库记录恢复
+                asyncio.create_task(bot_handler.restore_queued_download(next_task))
 
 
 download_queue_manager = DownloadQueueManager(database)
@@ -853,6 +853,40 @@ async def get_default_download_path(
         # 初始化默认路径到数据库
         database.set_config({"default_download_path": default_path})
     return {"path": default_path}
+
+
+@api.put("/config/default-download-path")
+async def update_default_download_path(
+    body: dict = Body(default={}),
+    x_admin_token: str | None = Header(default=None, alias="X-Admin-Token"),
+) -> dict:
+    """更新默认下载路径，支持自定义到任意挂载目录（如 /overwach）。"""
+    _require_admin(x_admin_token)
+
+    raw_path = (body or {}).get("path")
+    if not raw_path or not str(raw_path).strip():
+        raise HTTPException(status_code=400, detail="路径不能为空")
+
+    path_str = str(raw_path).strip()
+    # 统一转为绝对路径，避免相对路径导致下载到容器内部随机目录
+    from pathlib import Path as _Path
+
+    dl_path = _Path(path_str)
+    if not dl_path.is_absolute():
+        dl_path = _Path("/") / dl_path
+
+    try:
+        dl_path.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail=f"无法创建目录: {exc}") from exc
+
+    # 更新配置与运行时 settings
+    abs_str = str(dl_path)
+    database.set_config({"default_download_path": abs_str, "download_dir": abs_str})
+    settings.download_dir = dl_path
+    settings.ensure_directories()
+
+    return {"status": "updated", "path": abs_str}
 
 
 @api.get("/group-rules")

@@ -46,6 +46,10 @@ type DownloadRecord = {
   error?: string;
   bot_username?: string;
   source?: string;
+  file_size?: number;
+  save_dir?: string;
+  rule_id?: number;
+  rule_name?: string;
 };
 
 type GroupRule = {
@@ -105,6 +109,8 @@ export default function Dashboard() {
   const [dirLoading, setDirLoading] = useState(false);
   const [notification, setNotification] = useState<{message: string; type: "success" | "error" | "info"} | null>(null);
   const [defaultDownloadPath, setDefaultDownloadPath] = useState<string>("");
+  const [showDefaultPathModal, setShowDefaultPathModal] = useState(false);
+  const [selectedDefaultPath, setSelectedDefaultPath] = useState<string>("");
 
   useEffect(() => {
     fetchDownloads();
@@ -491,12 +497,32 @@ export default function Dashboard() {
                 默认下载路径（不可删除/禁用）
               </div>
               <div style={{ fontSize: "0.9rem", color: "#1565c0" }}>
-                /{defaultDownloadPath}
+                {defaultDownloadPath}
               </div>
               <div style={{ fontSize: "0.75rem", color: "#666", marginTop: "0.25rem" }}>
                 当规则未指定保存路径时，文件将保存到此路径
               </div>
             </div>
+            <button
+              onClick={() => {
+                setSelectedDefaultPath("");
+                setCurrentBrowsePath("");
+                fetchDirectories("");
+                setShowDefaultPathModal(true);
+              }}
+              style={{
+                padding: "0.4rem 0.8rem",
+                fontSize: "0.8rem",
+                borderRadius: "6px",
+                border: "1px solid #2196f3",
+                backgroundColor: "white",
+                color: "#2196f3",
+                cursor: "pointer",
+                whiteSpace: "nowrap",
+              }}
+            >
+              📂 选择路径
+            </button>
           </div>
         )}
 
@@ -698,6 +724,8 @@ export default function Dashboard() {
               <thead>
                 <tr style={{ borderBottom: "2px solid #e0e0e0" }}>
                   <th style={{ padding: "0.75rem", textAlign: "left" }}>文件名</th>
+                  <th style={{ padding: "0.75rem", textAlign: "left" }}>大小</th>
+                  <th style={{ padding: "0.75rem", textAlign: "left" }}>保存路径</th>
                   <th style={{ padding: "0.75rem", textAlign: "left" }}>来源</th>
                   <th style={{ padding: "0.75rem", textAlign: "left" }}>状态</th>
                   <th style={{ padding: "0.75rem", textAlign: "left" }}>进度</th>
@@ -716,6 +744,15 @@ export default function Dashboard() {
                   .map((record: DownloadRecord) => (
                     <tr key={record.id} style={{ borderBottom: "1px solid #f0f0f0" }}>
                       <td style={{ padding: "0.75rem" }}>{record.file_name}</td>
+                      <td style={{ padding: "0.75rem" }}>{record.file_name}</td>
+                      <td style={{ padding: "0.75rem" }}>
+                        {record.file_size && record.file_size > 0
+                          ? formatBytes(record.file_size)
+                          : <span style={{ color: "#999" }}>未知</span>}
+                      </td>
+                      <td style={{ padding: "0.75rem", maxWidth: "260px", wordBreak: "break-all", fontSize: "0.8rem", color: "#374151" }}>
+                        {record.save_dir || record.file_path || "-"}
+                      </td>
                       <td style={{ padding: "0.75rem" }}>
                         <span
                           style={{
@@ -727,7 +764,9 @@ export default function Dashboard() {
                             fontWeight: 500,
                           }}
                         >
-                          {record.source === "rule" ? "规则下载" : "机器人接收"}
+                          {record.source === "rule"
+                            ? (record.rule_name || `规则 #${record.rule_id ?? "-"}`)
+                            : "机器人接收"}
                         </span>
                       </td>
                       <td style={{ padding: "0.75rem" }}>
@@ -1507,6 +1546,206 @@ export default function Dashboard() {
                 }}
               >
                 {editingRuleId ? "保存修改" : "创建规则"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 默认下载路径选择模态框 */}
+      {showDefaultPathModal && (
+        <div style={{
+          position: "fixed",
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: "rgba(0,0,0,0.5)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          zIndex: 1000,
+        }}>
+          <div style={{
+            backgroundColor: "white",
+            borderRadius: "8px",
+            padding: "1.5rem",
+            maxWidth: "600px",
+            width: "90%",
+            maxHeight: "80vh",
+            overflowY: "auto",
+          }}>
+            <h2 style={{ marginTop: 0, marginBottom: "1rem" }}>选择默认下载路径</h2>
+            <p style={{ marginTop: 0, marginBottom: "0.75rem", fontSize: "0.9rem", color: "#555" }}>
+              该路径将作为所有未指定保存路径任务的默认保存位置，建议选择挂载到宿主机的目录（例如 <code>/overwach</code>）。
+            </p>
+            <div style={{ 
+              border: "1px solid #ddd", 
+              borderRadius: "4px", 
+              padding: "0.5rem",
+              maxHeight: "260px",
+              overflowY: "auto",
+              backgroundColor: "#fafafa"
+            }}>
+              <div style={{ marginBottom: "0.5rem", display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
+                <button 
+                  onClick={() => {
+                    setCurrentBrowsePath("");
+                    fetchDirectories("");
+                  }}
+                  style={{ 
+                    padding: "0.4rem 0.8rem",
+                    fontSize: "0.85rem",
+                    border: "1px solid #2196f3",
+                    backgroundColor: "white",
+                    color: "#2196f3",
+                    borderRadius: "4px",
+                    cursor: "pointer"
+                  }}
+                >
+                  🏠 根目录
+                </button>
+                <button onClick={() => fetchDirectories(currentBrowsePath)} style={{ padding: "0.4rem 0.8rem", fontSize: "0.85rem" }}>🔄 刷新</button>
+              </div>
+              {dirLoading ? (
+                <div style={{ padding: "1rem", textAlign: "center", color: "#666" }}>加载中...</div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+                  {/* 面包屑导航 */}
+                  {currentBrowsePath && (
+                    <div style={{ marginBottom: "0.5rem", padding: "0.5rem", backgroundColor: "#f5f5f5", borderRadius: "4px", display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const parentPath = currentBrowsePath.split("/").slice(0, -1).join("/");
+                          setCurrentBrowsePath(parentPath);
+                          fetchDirectories(parentPath);
+                        }}
+                        style={{
+                          padding: "0.25rem 0.5rem",
+                          fontSize: "0.8rem",
+                          border: "1px solid #ddd",
+                          borderRadius: "4px",
+                          backgroundColor: "white",
+                          cursor: "pointer"
+                        }}
+                      >
+                        ← 返回
+                      </button>
+                      <span style={{ fontSize: "0.85rem", color: "#666" }}>
+                        当前路径: /{currentBrowsePath || "根目录"}
+                      </span>
+                    </div>
+                  )}
+                  {/* 目录列表 */}
+                  {dirOptions
+                    .filter((p): p is string => typeof p === "string" && p !== "")
+                    .map((path) => {
+                      const pathParts = path.split("/");
+                      const displayName = pathParts[pathParts.length - 1];
+                      const isSelected = selectedDefaultPath === path;
+                      return (
+                        <div key={path} style={{ display: "flex", gap: "0.25rem" }}>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              // 进入目录
+                              setCurrentBrowsePath(path);
+                              fetchDirectories(path);
+                            }}
+                            style={{
+                              flex: 1,
+                              padding: "0.5rem 0.75rem",
+                              textAlign: "left",
+                              border: "1px solid #e0e0e0",
+                              borderRadius: "4px",
+                              backgroundColor: "white",
+                              color: "#333",
+                              cursor: "pointer",
+                              fontSize: "0.85rem",
+                              display: "flex",
+                              alignItems: "center",
+                              gap: "0.5rem"
+                            }}
+                          >
+                            <span>📁</span>
+                            <span style={{ flex: 1 }}>{displayName}</span>
+                            <span style={{ color: "#999", fontSize: "0.75rem" }}>→</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setSelectedDefaultPath(path)}
+                            style={{
+                              padding: "0.5rem 0.75rem",
+                              border: `1px solid ${isSelected ? "#2196f3" : "#e0e0e0"}`,
+                              borderRadius: "4px",
+                              backgroundColor: isSelected ? "#2196f3" : "white",
+                              color: isSelected ? "white" : "#2196f3",
+                              cursor: "pointer",
+                              fontSize: "0.85rem",
+                              whiteSpace: "nowrap"
+                            }}
+                          >
+                            {isSelected ? "✓ 已选择" : "选择"}
+                          </button>
+                        </div>
+                      );
+                    })}
+                  {dirOptions.filter((p): p is string => typeof p === "string" && p !== "").length === 0 && (
+                    <div style={{ padding: "1rem", textAlign: "center", color: "#999", fontSize: "0.85rem" }}>
+                      {currentBrowsePath ? "此目录下没有子目录" : '暂无目录，请在宿主机中创建或挂载目录后再刷新'}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+            <small style={{ display: "block", marginTop: "0.5rem", color: "#666", fontSize: "0.8rem" }}>
+              当前选择：{selectedDefaultPath ? `/${selectedDefaultPath}` : defaultDownloadPath ? `保持现有：${defaultDownloadPath}` : "未选择"}
+            </small>
+            <div style={{ marginTop: "1.5rem", display: "flex", justifyContent: "flex-end", gap: "0.75rem" }}>
+              <button
+                onClick={() => setShowDefaultPathModal(false)}
+                style={{
+                  padding: "0.5rem 1.2rem",
+                  backgroundColor: "#f5f5f5",
+                  borderRadius: "6px",
+                  border: "none",
+                  cursor: "pointer",
+                }}
+              >
+                取消
+              </button>
+              <button
+                onClick={async () => {
+                  try {
+                    // 如果选择了目录，用 / + 相对路径 作为绝对路径；否则保持原值
+                    const targetPath = selectedDefaultPath
+                      ? `/${selectedDefaultPath}`
+                      : defaultDownloadPath;
+                    if (!targetPath) {
+                      showNotification("请先选择一个目录", "info");
+                      return;
+                    }
+                    await api.put("/config/default-download-path", { path: targetPath });
+                    await fetchDefaultDownloadPath();
+                    showNotification("默认下载路径已更新", "success");
+                    setShowDefaultPathModal(false);
+                  } catch (error) {
+                    console.error("Failed to update default download path:", error);
+                    showNotification("更新默认下载路径失败", "error");
+                  }
+                }}
+                style={{
+                  padding: "0.5rem 1.5rem",
+                  backgroundColor: "#2196f3",
+                  color: "white",
+                  borderRadius: "6px",
+                  border: "none",
+                  cursor: "pointer",
+                  fontWeight: 500,
+                }}
+              >
+                保存为默认路径
               </button>
             </div>
           </div>

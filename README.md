@@ -21,7 +21,7 @@ docker run -d \
   --name telegram-depiler \
   -p 8000:8000 \
   -v ./data:/app/data \
-  -v ./downloads:/app/downloads \
+  -v ./downloads:/downloads \
   apecme/telegram-depiler:latest
 ```
 
@@ -84,7 +84,7 @@ services:
       dockerfile: Dockerfile
     container_name: telegram-manager
     volumes:
-      - ./downloads:/app/downloads  # 下载文件存储
+      - ./downloads:/downloads      # 下载文件存储
       - ./data:/app/data            # 配置和数据库
     ports:
       - "8000:8000"                 # Web 界面端口

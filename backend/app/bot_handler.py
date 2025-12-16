@@ -31,6 +31,7 @@ class BotCommandHandler:
         self._download_tasks: dict[int, asyncio.Task] = {}
         self._cancelled_downloads: set[int] = set()
         self._conversation_states: dict[int, dict] = {}  # 用户对话状态
+        self._logger = logger
         
     async def start(self) -> None:
         """启动Bot命令处理器"""
@@ -442,15 +443,18 @@ class BotCommandHandler:
             completed = stats.get("completed", 0)
             failed = stats.get("failed", 0)
             
-            # 添加下载记录（初始状态为pending）
+            # 添加下载记录（初始状态为pending），记录文件大小与保存路径，便于前端展示
             download_id = self.database.add_download(
                 message_id=event.message.id,
                 chat_id=event.chat_id or 0,
                 bot_username=self._bot_username or "unknown",
                 file_name=file_name,
                 status="pending",
+                source="bot",
                 tg_file_id=tg_file_id,
                 tg_access_hash=tg_access_hash,
+                file_size=file_size,
+                save_dir=str(self.settings.download_dir),
             )
             
             # 检查全局并发限制
@@ -722,6 +726,256 @@ class BotCommandHandler:
         except Exception as e:
             logger.exception(f"处理媒体消息失败: {e}")
             
+    async def restore_queued_download(self, download: dict) -> None:
+        """从全局队列恢复 Bot 触发的下载任务。
+
+        说明：
+        - DownloadQueueManager 会先把任务状态置为 downloading，然后调用本方法；
+        - 这里重新拉取原始消息并开始实际下载流程；
+        - 为了简化实现，进度更新只做数据库更新，以及在开始/完成/失败时编辑一条 Bot 消息。
+        """
+        try:
+            if not self._bot_client:
+                logger.warning("Bot 客户端尚未就绪，无法恢复队列中的下载任务")
+                return
+
+            download_id = download.get("id")
+            message_id = download.get("message_id")
+            chat_id = download.get("chat_id")
+            if not download_id or not message_id or not chat_id:
+                logger.warning("恢复队列任务字段缺失: id=%s message_id=%s chat_id=%s", download_id, message_id, chat_id)
+                return
+
+            file_name = download.get("file_name") or f"telegram_{message_id}"
+            file_size = int(download.get("file_size") or 0)
+            media_type = "unknown"
+
+            # 获取原始消息
+            chat = await self._bot_client.get_entity(chat_id)
+            msg = await self._bot_client.get_messages(chat, ids=message_id)
+            if not msg:
+                logger.warning("无法恢复队列任务 %s：找不到原始消息 %s", download_id, message_id)
+                self.database.update_download(download_id, status="failed", error="找不到原始消息")
+                return
+
+            if msg.video:
+                media_type = "video"
+            elif msg.document:
+                media_type = "document"
+
+            # 计算保存路径
+            from pathlib import Path as _Path
+
+            save_dir = download.get("save_dir") or str(self.settings.download_dir)
+            save_path = _Path(save_dir)
+            if not save_path.is_absolute():
+                save_path = _Path("/") / save_path
+            target_path = save_path / file_name
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+
+            # 如果数据库中尚未记录 save_dir，则补写一份
+            if not download.get("save_dir"):
+                self.database.update_download(download_id, save_dir=str(save_path))
+
+            # 统计信息用于展示
+            stats = self.database.get_download_stats()
+            total = stats.get("total", 0)
+            completed = stats.get("completed", 0)
+            failed = stats.get("failed", 0)
+
+            # 找到需要更新的 Bot 消息（队列时的那条），找不到就新发一条
+            reply_message_id = download.get("reply_message_id")
+            reply_chat_id = download.get("reply_chat_id") or chat_id
+            reply_msg = None
+            try:
+                if reply_message_id:
+                    reply_msg = await self._bot_client.get_messages(reply_chat_id, ids=reply_message_id)
+            except Exception:
+                reply_msg = None
+
+            start_text = (
+                f"📥 **开始下载**\n\n"
+                f"**文件ID：** `{message_id}`\n"
+                f"**任务ID：** `{download_id}`\n"
+                f"**文件名：** {file_name}\n"
+                f"**大小：** {self._format_size(file_size)}\n"
+                f"**类型：** {media_type}\n"
+                f"**速度：** 计算中...\n\n"
+                f"**下载统计：**\n"
+                f"总计：{total} | 成功：{completed} | 失败：{failed}"
+            )
+
+            buttons = [
+                [
+                    KeyboardButtonCallback("⏸️ 暂停", f"pause_{download_id}".encode("utf-8")),
+                    KeyboardButtonCallback("⭐ 置顶优先", f"priority_{download_id}".encode("utf-8")),
+                ],
+                [
+                    KeyboardButtonCallback("🗑️ 删除", f"delete_{download_id}".encode("utf-8")),
+                ],
+            ]
+
+            if reply_msg:
+                try:
+                    await self._bot_client.edit_message(
+                        reply_chat_id,
+                        reply_message_id,
+                        start_text,
+                        parse_mode="markdown",
+                        buttons=buttons,
+                    )
+                except Exception as e:  # pragma: no cover - 防御性
+                    logger.debug("编辑队列提示消息失败，将发送新消息: %s", e)
+                    reply_msg = None
+
+            if not reply_msg:
+                reply_msg = await self._bot_client.send_message(
+                    reply_chat_id,
+                    start_text,
+                    buttons=buttons,
+                    parse_mode="markdown",
+                )
+                # 回写回复消息ID到数据库，便于后续再次恢复
+                try:
+                    self.database.update_download(
+                        download_id,
+                        reply_message_id=reply_msg.id,
+                        reply_chat_id=reply_msg.chat_id or reply_chat_id,
+                    )
+                except Exception as e:
+                    logger.debug("更新下载记录的回复消息ID失败: %s", e)
+
+            # 开始实际下载
+            import time
+
+            start_time = time.time()
+            downloaded_bytes = 0
+            last_update_time = time.time()
+            last_downloaded = 0
+            download_speed = 0.0
+
+            async with self._download_semaphore:
+                current_task = asyncio.current_task()
+                if current_task:
+                    self._download_tasks[download_id] = current_task
+                self._active_downloads[download_id] = True
+                try:
+                    def progress_callback(current: int, total: int) -> None:
+                        nonlocal downloaded_bytes, last_update_time, last_downloaded, download_speed
+
+                        if download_id in self._cancelled_downloads:
+                            raise asyncio.CancelledError("下载已被用户暂停")
+
+                        downloaded_bytes = current
+                        progress = (current / total * 100) if total > 0 else 0
+
+                        now = time.time()
+                        if last_update_time is not None:
+                            dt = now - last_update_time
+                            if dt > 0:
+                                bytes_diff = current - last_downloaded
+                                download_speed = bytes_diff / dt
+                        last_update_time = now
+                        last_downloaded = current
+
+                        # 只更新数据库，不频繁编辑消息，以减轻负载
+                        self.database.update_download(
+                            download_id,
+                            progress=progress,
+                            download_speed=download_speed,
+                        )
+
+                    await self._bot_client.download_media(
+                        msg,
+                        file=target_path,
+                        progress_callback=progress_callback if file_size > 0 else None,
+                    )
+
+                    elapsed = time.time() - start_time
+                    avg_speed = (file_size / elapsed) if elapsed > 0 else 0.0
+
+                    self.database.update_download(
+                        download_id,
+                        file_path=str(target_path),
+                        status="completed",
+                        progress=100.0,
+                        download_speed=avg_speed,
+                    )
+
+                    # 通知队列管理器，启动下一个任务
+                    if self.queue_manager:
+                        await self.queue_manager.on_download_finished(download_id)
+
+                    success_text = (
+                        f"✅ **下载完成**\n\n"
+                        f"**文件ID：** `{message_id}`\n"
+                        f"**任务ID：** `{download_id}`\n"
+                        f"**文件名：** {file_name}\n"
+                        f"**大小：** {self._format_size(file_size)}\n"
+                        f"**平均速度：** {self._format_speed(avg_speed)}\n"
+                        f"**耗时：** {elapsed:.1f}秒\n\n"
+                        f"**下载统计：**\n"
+                        f"总计：{total} | 成功：{completed} | 失败：{failed}"
+                    )
+                    finished_buttons = [
+                        [KeyboardButtonCallback("🗑️ 删除", f"delete_{download_id}".encode("utf-8"))]
+                    ]
+
+                    await self._bot_client.edit_message(
+                        reply_chat_id,
+                        reply_msg.id,
+                        success_text,
+                        parse_mode="markdown",
+                        buttons=finished_buttons,
+                    )
+
+                    self._active_downloads[download_id] = False
+                    self._download_tasks.pop(download_id, None)
+                    self._cancelled_downloads.discard(download_id)
+
+                except asyncio.CancelledError:
+                    self._active_downloads[download_id] = False
+                    self._download_tasks.pop(download_id, None)
+                    self._cancelled_downloads.discard(download_id)
+                    raise
+                except Exception as e:
+                    logger.exception("恢复队列中的 Bot 下载任务失败: %s", e)
+                    self.database.update_download(
+                        download_id,
+                        status="failed",
+                        error=str(e),
+                    )
+                    if self.queue_manager:
+                        await self.queue_manager.on_download_finished(download_id)
+
+                    error_text = (
+                        f"❌ **下载失败**\n\n"
+                        f"**文件ID：** `{message_id}`\n"
+                        f"**文件名：** {file_name}\n"
+                        f"**错误：** {str(e)}\n\n"
+                        f"**下载统计：**\n"
+                        f"总计：{total} | 成功：{completed} | 失败：{failed}"
+                    )
+                    failed_buttons = [
+                        [KeyboardButtonCallback("🗑️ 删除", f"delete_{download_id}".encode("utf-8"))]
+                    ]
+                    try:
+                        await self._bot_client.edit_message(
+                            reply_chat_id,
+                            reply_msg.id,
+                            error_text,
+                            parse_mode="markdown",
+                            buttons=failed_buttons,
+                        )
+                    except Exception:
+                        pass
+                    self._active_downloads[download_id] = False
+                    self._download_tasks.pop(download_id, None)
+                    self._cancelled_downloads.discard(download_id)
+
+        except Exception as e:
+            logger.exception("restore_queued_download 执行出错: %s", e)
+
     def _format_size(self, size: int) -> str:
         """格式化文件大小"""
         for unit in ['B', 'KB', 'MB', 'GB', 'TB']:

@@ -40,6 +40,12 @@ class Database:
                     tg_access_hash INTEGER,
                     priority INTEGER DEFAULT 0,
                     error TEXT,
+                    file_size INTEGER,
+                    save_dir TEXT,
+                    rule_id INTEGER,
+                    rule_name TEXT,
+                    reply_message_id INTEGER,
+                    reply_chat_id INTEGER,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 );
@@ -111,7 +117,7 @@ class Database:
             rows = cur.fetchall()
             return any(row[1] == column or (isinstance(row, sqlite3.Row) and row["name"] == column) for row in rows)
 
-        # downloads 表 - 确保文件路径、进度、下载速度、来源字段、错误信息和时间戳字段存在
+        # downloads 表 - 确保文件路径、进度、下载速度、来源字段、错误信息和时间戳等字段存在
         if has_column("downloads", "id"):
             if not has_column("downloads", "file_path"):
                 conn.execute("ALTER TABLE downloads ADD COLUMN file_path TEXT")
@@ -139,6 +145,18 @@ class Database:
                 conn.execute(
                     "ALTER TABLE downloads ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP"
                 )
+            if not has_column("downloads", "file_size"):
+                conn.execute("ALTER TABLE downloads ADD COLUMN file_size INTEGER")
+            if not has_column("downloads", "save_dir"):
+                conn.execute("ALTER TABLE downloads ADD COLUMN save_dir TEXT")
+            if not has_column("downloads", "rule_id"):
+                conn.execute("ALTER TABLE downloads ADD COLUMN rule_id INTEGER")
+            if not has_column("downloads", "rule_name"):
+                conn.execute("ALTER TABLE downloads ADD COLUMN rule_name TEXT")
+            if not has_column("downloads", "reply_message_id"):
+                conn.execute("ALTER TABLE downloads ADD COLUMN reply_message_id INTEGER")
+            if not has_column("downloads", "reply_chat_id"):
+                conn.execute("ALTER TABLE downloads ADD COLUMN reply_chat_id INTEGER")
 
         # messages 表 - 确保媒体及转发相关字段和时间戳存在
         if has_column("messages", "id"):
@@ -214,6 +232,12 @@ class Database:
         source: str = "bot",
         tg_file_id: int | None = None,
         tg_access_hash: int | None = None,
+        file_size: int | None = None,
+        save_dir: str | None = None,
+        rule_id: int | None = None,
+        rule_name: str | None = None,
+        reply_message_id: int | None = None,
+        reply_chat_id: int | None = None,
     ) -> int:
         with self._connect() as conn:
             cur = conn.execute(
@@ -221,9 +245,11 @@ class Database:
                 INSERT INTO downloads (
                     message_id, chat_id, bot_username, file_name,
                     file_path, status, progress, download_speed,
-                    source, tg_file_id, tg_access_hash
+                    source, tg_file_id, tg_access_hash,
+                    file_size, save_dir, rule_id, rule_name,
+                    reply_message_id, reply_chat_id
                 )
-                VALUES (?, ?, ?, ?, '', ?, 0, 0, ?, ?, ?)
+                VALUES (?, ?, ?, ?, '', ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     message_id,
@@ -234,6 +260,12 @@ class Database:
                     source,
                     tg_file_id,
                     tg_access_hash,
+                    int(file_size or 0),
+                    save_dir or "",
+                    rule_id,
+                    rule_name,
+                    reply_message_id,
+                    reply_chat_id,
                 ),
             )
             conn.commit()
@@ -249,6 +281,12 @@ class Database:
         download_speed: float | None = None,
         priority: int | None = None,
         error: str | None = None,
+        file_size: int | None = None,
+        save_dir: str | None = None,
+        rule_id: int | None = None,
+        rule_name: str | None = None,
+        reply_message_id: int | None = None,
+        reply_chat_id: int | None = None,
     ) -> None:
         updates = []
         params: List[Any] = []
@@ -271,6 +309,24 @@ class Database:
         if error is not None:
             updates.append("error = ?")
             params.append(error)
+        if file_size is not None:
+            updates.append("file_size = ?")
+            params.append(int(file_size))
+        if save_dir is not None:
+            updates.append("save_dir = ?")
+            params.append(save_dir)
+        if rule_id is not None:
+            updates.append("rule_id = ?")
+            params.append(int(rule_id))
+        if rule_name is not None:
+            updates.append("rule_name = ?")
+            params.append(rule_name)
+        if reply_message_id is not None:
+            updates.append("reply_message_id = ?")
+            params.append(int(reply_message_id))
+        if reply_chat_id is not None:
+            updates.append("reply_chat_id = ?")
+            params.append(int(reply_chat_id))
 
         if not updates:
             return

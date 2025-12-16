@@ -1010,20 +1010,24 @@ class TelegramWorker:
                 file_name = file_name or getattr(event.message.file, "name", None) or f"telegram_{event.message.id}"
                 bot_username = self._bot_username
                 logger.info("开始下载文件: %s (消息ID: %d)", file_name, event.message.id)
+
+                # 获取文件大小
+                file_size = 0
+                if event.message.file:
+                    file_size = getattr(event.message.file, "size", 0) or 0
+
                 download_id = self.database.add_download(
                     message_id=event.message.id,
                     chat_id=event.chat_id or 0,
                     bot_username=bot_username or "unknown",
                     file_name=file_name,
                     status="downloading",
+                    source="bot",
+                    file_size=file_size,
+                    save_dir=str(self.settings.download_dir),
                 )
                 try:
                     target_path = Path(self.settings.download_dir) / file_name
-                    
-                    # 获取文件大小
-                    file_size = 0
-                    if event.message.file:
-                        file_size = getattr(event.message.file, "size", 0) or 0
                     
                     # 下载文件并跟踪进度
                     import time
@@ -1354,7 +1358,12 @@ class TelegramWorker:
             chat_title = getattr(chat, 'title', 'Unknown').replace('/', '_').replace('\\', '_')
             timestamp = int(time.time())
             
-            # 先创建下载记录（初始状态为pending）
+            # 获取文件大小（用于记录和通知）
+            file_size = 0
+            if message.file:
+                file_size = getattr(message.file, "size", 0) or 0
+
+            # 先创建下载记录（初始状态为pending），记录规则信息与保存路径
             download_id = self.database.add_download(
                 message_id=message.id,
                 chat_id=chat.id,
@@ -1364,6 +1373,10 @@ class TelegramWorker:
                 source="rule",
                 tg_file_id=tg_file_id,
                 tg_access_hash=tg_access_hash,
+                file_size=file_size,
+                save_dir=rule.get("save_dir") or "",
+                rule_id=rule.get("id"),
+                rule_name=rule.get("chat_title"),
             )
             
             # 检查全局并发限制
@@ -1377,11 +1390,6 @@ class TelegramWorker:
             # 如果任务进入队列，发送通知但不执行下载
             if not can_start:
                 logger.info(f"规则下载任务 {download_id} 进入队列，等待其他任务完成")
-                
-                # 获取文件大小（用于通知）
-                file_size = 0
-                if message.file:
-                    file_size = getattr(message.file, "size", 0) or 0
                 
                 # 发送队列通知给管理员用户
                 if self._bot_client and self.settings.admin_user_ids:

@@ -77,6 +77,22 @@ class Settings:
         self.proxy_user = config.get("proxy_user") or self.proxy_user
         self.proxy_password = config.get("proxy_password") or self.proxy_password
 
+        # 下载目录 / 默认下载路径配置
+        download_dir = config.get("default_download_path") or config.get("download_dir")
+        if download_dir:
+            try:
+                dl_path = Path(str(download_dir))
+                # 确保是绝对路径，便于在 Docker 中与宿主机挂载目录对应
+                if not dl_path.is_absolute():
+                    dl_path = Path("/") / dl_path
+                self.download_dir = dl_path
+            except Exception:
+                # 保留原有 download_dir，避免因配置错误导致崩溃
+                pass
+
+        # 重新确保目录存在（尤其是当 download_dir 被配置覆盖时）
+        self.ensure_directories()
+
 
 @lru_cache
 def get_settings() -> Settings:
