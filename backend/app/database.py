@@ -31,6 +31,7 @@ class Database:
                     chat_id INTEGER,
                     bot_username TEXT,
                     file_name TEXT,
+                    origin_file_name TEXT,
                     file_path TEXT,
                     status TEXT,
                     progress REAL,
@@ -157,6 +158,8 @@ class Database:
                 conn.execute("ALTER TABLE downloads ADD COLUMN reply_message_id INTEGER")
             if not has_column("downloads", "reply_chat_id"):
                 conn.execute("ALTER TABLE downloads ADD COLUMN reply_chat_id INTEGER")
+            if not has_column("downloads", "origin_file_name"):
+                conn.execute("ALTER TABLE downloads ADD COLUMN origin_file_name TEXT")
 
         # messages 表 - 确保媒体及转发相关字段和时间戳存在
         if has_column("messages", "id"):
@@ -228,6 +231,7 @@ class Database:
         chat_id: int,
         bot_username: str,
         file_name: str,
+        origin_file_name: str | None = None,
         status: str = "pending",
         source: str = "bot",
         tg_file_id: int | None = None,
@@ -243,19 +247,20 @@ class Database:
             cur = conn.execute(
                 """
                 INSERT INTO downloads (
-                    message_id, chat_id, bot_username, file_name,
+                    message_id, chat_id, bot_username, file_name, origin_file_name,
                     file_path, status, progress, download_speed,
                     source, tg_file_id, tg_access_hash,
                     file_size, save_dir, rule_id, rule_name,
                     reply_message_id, reply_chat_id
                 )
-                VALUES (?, ?, ?, ?, '', ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, '', ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     message_id,
                     chat_id,
                     bot_username,
                     file_name,
+                    origin_file_name or file_name,
                     status,
                     source,
                     tg_file_id,
@@ -287,6 +292,7 @@ class Database:
         rule_name: str | None = None,
         reply_message_id: int | None = None,
         reply_chat_id: int | None = None,
+        origin_file_name: str | None = None,
     ) -> None:
         updates = []
         params: List[Any] = []
@@ -327,6 +333,9 @@ class Database:
         if reply_chat_id is not None:
             updates.append("reply_chat_id = ?")
             params.append(int(reply_chat_id))
+        if origin_file_name is not None:
+            updates.append("origin_file_name = ?")
+            params.append(origin_file_name)
 
         if not updates:
             return

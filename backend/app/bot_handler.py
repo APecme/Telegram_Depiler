@@ -449,6 +449,7 @@ class BotCommandHandler:
                 chat_id=event.chat_id or 0,
                 bot_username=self._bot_username or "unknown",
                 file_name=file_name,
+                origin_file_name=file_name,
                 status="pending",
                 source="bot",
                 tg_file_id=tg_file_id,
@@ -1239,11 +1240,15 @@ class BotCommandHandler:
                     logger.warning(f"删除文件失败: {e}")
             
             # 删除数据库记录
-            # TODO: 添加 database.delete_download 方法
+            self.database.delete_download(download_id)
             await event.answer("✅ 已删除下载任务")
             
             # 更新消息
             await event.edit("🗑️ **已删除**\n\n此下载任务已被删除。")
+            
+            # 通知队列管理器，尝试启动下一个任务
+            if self.queue_manager:
+                await self.queue_manager.on_download_finished(download_id)
             
         except Exception as e:
             logger.exception(f"删除下载失败: {e}")

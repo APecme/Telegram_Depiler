@@ -681,8 +681,11 @@ async def set_download_priority(download_id: int) -> dict:
 
 
 @api.delete("/downloads/{download_id}")
-async def delete_download(download_id: int) -> dict:
-    """删除下载任务"""
+async def delete_download(
+    download_id: int,
+    delete_file: bool = Query(default=False, description="是否同时删除已下载的文件"),
+) -> dict:
+    """删除下载任务，可选择是否删除已下载文件"""
     downloads = database.list_downloads(limit=1000)
     download = next((d for d in downloads if d.get('id') == download_id), None)
     
@@ -696,8 +699,8 @@ async def delete_download(download_id: int) -> dict:
         elif bot_handler is not None:
             await bot_handler.pause_download(download_id)
     
-    # 删除文件（如果存在）
-    if download.get('file_path'):
+    # 删除文件（可选）
+    if delete_file and download.get('file_path'):
         import os
         try:
             file_path = download['file_path']
@@ -709,10 +712,24 @@ async def delete_download(download_id: int) -> dict:
         except Exception as e:
             logger.warning(f"删除文件失败: {e}")
 
+    # 如果有 Bot 回复消息，尝试更新为“已删除”
+    reply_msg_id = download.get("reply_message_id")
+    reply_chat_id = download.get("reply_chat_id")
+    if bot_handler and reply_msg_id and reply_chat_id:
+        try:
+            if bot_handler._bot_client:
+                await bot_handler._bot_client.edit_message(
+                    reply_chat_id,
+                    reply_msg_id,
+                    "🗑️ 此下载任务已删除",
+                )
+        except Exception as exc:
+            logger.debug("更新 Bot 消息为已删除失败: %s", exc)
+
     # 删除数据库记录
     database.delete_download(download_id)
     
-    return {"success": True, "message": "已删除下载任务"}
+    return {"success": True, "message": "已删除下载任务", "delete_file": delete_file}
 
 
 @api.get("/fs/dirs")
