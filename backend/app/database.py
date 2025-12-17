@@ -253,7 +253,7 @@ class Database:
                     file_size, save_dir, rule_id, rule_name,
                     reply_message_id, reply_chat_id
                 )
-                VALUES (?, ?, ?, ?, ?, '', ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, '', ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     message_id,

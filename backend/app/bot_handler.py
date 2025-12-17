@@ -1312,13 +1312,20 @@ class BotCommandHandler:
             from telethon.tl.types import Channel, Chat
             dialogs = await self.user_client.get_dialogs()
             
-            # 过滤出群聊和频道
+            # 过滤出群聊和频道，并去重
             groups = []
+            seen_chat_ids = set()
             for dialog in dialogs:
                 entity = dialog.entity
                 if isinstance(entity, (Channel, Chat)):
+                    chat_id = entity.id
+                    # 去重：如果这个 chat_id 已经处理过，跳过
+                    if chat_id in seen_chat_ids:
+                        continue
+                    seen_chat_ids.add(chat_id)
+                    
                     groups.append({
-                        'id': entity.id,
+                        'id': chat_id,
                         'title': getattr(entity, 'title', 'Unknown'),
                         'type': 'channel' if isinstance(entity, Channel) else 'group'
                     })
@@ -1408,10 +1415,11 @@ class BotCommandHandler:
         # 构建内联键盘
         buttons = []
         for group in page_groups:
-            # 截断过长的标题
-            title = group['title'][:30] + '...' if len(group['title']) > 30 else group['title']
+            # 显示标题和ID，截断过长的标题
+            title = group['title'][:25] + '...' if len(group['title']) > 25 else group['title']
+            display_text = f"{title} (ID:{group['id']})"
             button_data = f"group_{group['id']}".encode('utf-8')
-            buttons.append([KeyboardButtonCallback(title, button_data)])
+            buttons.append([KeyboardButtonCallback(display_text, button_data)])
         
         # 添加分页按钮
         nav_buttons = []

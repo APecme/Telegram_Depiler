@@ -799,15 +799,22 @@ class TelegramWorker:
 
         dialogs = await client.get_dialogs()
         results: list[dict[str, Any]] = []
+        seen_chat_ids: set[int] = set()  # 用于去重
 
         for d in dialogs:
             try:
                 entity = d.entity
                 # 与 BotCommandHandler._handle_createrule_command 中保持一致：
-                # 只要是 Channel 或 Chat，就认为是可选的“群聊/频道”
+                # 只要是 Channel 或 Chat，就认为是可选的"群聊/频道"
                 is_group_like = isinstance(entity, (Channel, Chat))
                 if not is_group_like:
                     continue
+
+                chat_id = getattr(entity, "id", 0)
+                # 去重：如果这个 chat_id 已经处理过，跳过
+                if chat_id in seen_chat_ids:
+                    continue
+                seen_chat_ids.add(chat_id)
 
                 title = (
                     getattr(d, "name", None)
@@ -819,7 +826,7 @@ class TelegramWorker:
 
                 results.append(
                     {
-                        "id": getattr(entity, "id", 0),
+                        "id": chat_id,
                         "title": title,
                         "username": username,
                         # 前端使用 is_group 过滤，这里对群和频道统一标记为 true
@@ -1450,16 +1457,23 @@ class TelegramWorker:
                 self._download_tasks[download_id] = current_task
             
             # 替换模板变量
+            now = datetime.now()
             file_name = filename_template.replace('{task_id}', str(download_id))
             file_name = file_name.replace('{message_id}', str(message.id))
             file_name = file_name.replace('{chat_title}', chat_title)
             file_name = file_name.replace('{timestamp}', str(timestamp))
             file_name = file_name.replace('{file_name}', original_file_name)
+            file_name = file_name.replace('{year}', str(now.year))
+            file_name = file_name.replace('{month}', str(now.month).zfill(2))
+            file_name = file_name.replace('{day}', str(now.day).zfill(2))
             
-            # 确保文件名有扩展名
-            if '.' in original_file_name and '.' not in file_name:
+            # 确保文件名有扩展名（检查最后一个路径部分）
+            file_name_parts = file_name.split('/')
+            final_name = file_name_parts[-1]
+            if '.' in original_file_name and '.' not in final_name:
                 ext = original_file_name.split('.')[-1]
-                file_name = f"{file_name}.{ext}"
+                file_name_parts[-1] = f"{final_name}.{ext}"
+                file_name = '/'.join(file_name_parts)
             
             # 应用保存路径：优先使用规则中的路径，否则使用默认下载路径
             save_dir = rule.get('save_dir')
@@ -1470,6 +1484,7 @@ class TelegramWorker:
                     default_path = str(self.settings.download_dir)
                 save_dir = default_path
             target_path = Path(save_dir) / file_name
+            # 确保所有父目录都存在（支持文件名模板中的子目录）
             target_path.parent.mkdir(parents=True, exist_ok=True)
             
             logger.info("开始下载文件: %s -> %s", original_file_name, target_path)

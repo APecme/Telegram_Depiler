@@ -1075,8 +1075,8 @@ export default function Dashboard() {
                     .filter((d) => d.is_group)
                     .map((d) => (
                       <option key={d.id} value={d.id}>
-                        {d.title || d.username || `ID:${d.id}`}
-                        {d.username ? ` (@${d.username})` : ""}
+                        {d.title || d.username || "未知群聊"} (ID: {d.id})
+                        {d.username ? ` [@${d.username}]` : ""}
                       </option>
                     ))}
                 </select>
@@ -1500,6 +1500,9 @@ export default function Dashboard() {
                       { key: "{chat_title}", desc: "群聊名称" },
                       { key: "{timestamp}", desc: "时间戳" },
                       { key: "{file_name}", desc: "原始文件名" },
+                      { key: "{year}", desc: "年份" },
+                      { key: "{month}", desc: "月份(01-12)" },
+                      { key: "{day}", desc: "日期(01-31)" },
                     ].map((item) => (
                       <button
                         key={item.key}
@@ -1518,13 +1521,16 @@ export default function Dashboard() {
                         }}
                         title="点击复制变量"
                       >
-                        <span style={{ fontFamily: "monospace" }}>{item.key}</span>
-                        <span style={{ color: "#666", fontSize: "0.85rem" }}>{item.desc}</span>
+                        <span style={{ fontFamily: "monospace", fontSize: "0.8rem" }}>{item.key}</span>
+                        <span style={{ color: "#666", fontSize: "0.75rem" }}>{item.desc}</span>
                       </button>
                     ))}
                   </div>
-                  <small style={{ display: "block", marginTop: "0.35rem", color: "#666", fontSize: "0.8rem" }}>
-                    示例：{`{task_id}_{message_id}_{file_name}`}
+                  <small style={{ display: "block", marginTop: "0.5rem", color: "#666", fontSize: "0.8rem" }}>
+                    💡 支持文件夹：<code style={{ background: "#f0f0f0", padding: "0.1rem 0.3rem", borderRadius: "3px" }}>{`{chat_title}/{year}-{month}/{file_name}`}</code>
+                  </small>
+                  <small style={{ display: "block", marginTop: "0.25rem", color: "#666", fontSize: "0.8rem" }}>
+                    示例：<code style={{ background: "#f0f0f0", padding: "0.1rem 0.3rem", borderRadius: "3px" }}>{`{task_id}_{message_id}_{file_name}`}</code>
                   </small>
                 </div>
               </div>
