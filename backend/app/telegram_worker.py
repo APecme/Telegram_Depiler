@@ -645,9 +645,11 @@ class TelegramWorker:
             original_file_name = download.get('file_name') or f"file_{message.id}"
             
             # 应用文件名模板
+            from datetime import datetime
             filename_template = rule.get('filename_template') or "{message_id}_{file_name}"
             chat_title = getattr(chat, 'title', 'Unknown').replace('/', '_').replace('\\', '_')
             timestamp = int(time.time())
+            now = datetime.now()
             
             # 替换模板变量
             file_name = filename_template.replace('{task_id}', str(download_id))
@@ -655,13 +657,18 @@ class TelegramWorker:
             file_name = file_name.replace('{chat_title}', chat_title)
             file_name = file_name.replace('{timestamp}', str(timestamp))
             file_name = file_name.replace('{file_name}', original_file_name)
+            file_name = file_name.replace('{year}', str(now.year))
+            file_name = file_name.replace('{month}', str(now.month).zfill(2))
+            file_name = file_name.replace('{day}', str(now.day).zfill(2))
             
-            # 确保文件名有扩展名
-            if '.' in original_file_name and '.' not in file_name:
+            # 确保文件名有扩展名（检查最后一个路径部分）
+            file_name_parts = file_name.split('/')
+            final_name = file_name_parts[-1]
+            if '.' in original_file_name and '.' not in final_name:
                 ext = original_file_name.split('.')[-1]
-                file_name = f"{file_name}.{ext}"
+                file_name_parts[-1] = f"{final_name}.{ext}"
+                file_name = '/'.join(file_name_parts)
             
-            # 应用保存路径
             # 应用保存路径：优先使用规则中的路径，否则使用默认下载路径
             save_dir = rule.get('save_dir')
             if not save_dir or save_dir.strip() == "":
@@ -670,7 +677,14 @@ class TelegramWorker:
                 if not default_path:
                     default_path = str(self.settings.download_dir)
                 save_dir = default_path
-            target_path = Path(save_dir) / file_name
+            
+            # 将路径规范化为绝对路径（如果是相对路径，加上根目录前缀）
+            save_path = Path(save_dir)
+            if not save_path.is_absolute():
+                save_path = Path("/") / save_path
+            
+            target_path = save_path / file_name
+            # 确保所有父目录都存在（支持文件名模板中的子目录）
             target_path.parent.mkdir(parents=True, exist_ok=True)
             
             logger.info("从队列恢复下载文件: %s -> %s", original_file_name, target_path)
@@ -1483,7 +1497,13 @@ class TelegramWorker:
                 if not default_path:
                     default_path = str(self.settings.download_dir)
                 save_dir = default_path
-            target_path = Path(save_dir) / file_name
+            
+            # 将路径规范化为绝对路径（如果是相对路径，加上根目录前缀）
+            save_path = Path(save_dir)
+            if not save_path.is_absolute():
+                save_path = Path("/") / save_path
+            
+            target_path = save_path / file_name
             # 确保所有父目录都存在（支持文件名模板中的子目录）
             target_path.parent.mkdir(parents=True, exist_ok=True)
             

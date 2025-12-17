@@ -926,6 +926,13 @@ async def create_group_rule(body: GroupRuleCreate) -> dict:
             default_path = str(settings.download_dir)
         save_dir = default_path
     
+    # 规范化保存路径为绝对路径
+    if save_dir:
+        save_path_obj = Path(save_dir)
+        if not save_path_obj.is_absolute():
+            save_path_obj = Path("/") / save_path_obj
+        save_dir = str(save_path_obj)
+    
     rule_id = database.add_group_rule(
         chat_id=body.chat_id,
         chat_title=body.chat_title,
@@ -964,6 +971,13 @@ async def update_group_rule(rule_id: int, body: GroupRuleUpdate) -> dict:
         if not default_path:
             default_path = str(settings.download_dir)
         save_dir = default_path
+    
+    # 规范化保存路径为绝对路径
+    if save_dir is not None and save_dir:
+        save_path_obj = Path(save_dir)
+        if not save_path_obj.is_absolute():
+            save_path_obj = Path("/") / save_path_obj
+        save_dir = str(save_path_obj)
 
     database.update_group_rule(
         rule_id,
