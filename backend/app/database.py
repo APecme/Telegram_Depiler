@@ -281,6 +281,7 @@ class Database:
         download_id: int,
         *,
         file_path: str | None = None,
+        file_name: str | None = None,
         status: str | None = None,
         progress: float | None = None,
         download_speed: float | None = None,
@@ -300,6 +301,9 @@ class Database:
         if file_path is not None:
             updates.append("file_path = ?")
             params.append(file_path)
+        if file_name is not None:
+            updates.append("file_name = ?")
+            params.append(file_name)
         if status is not None:
             updates.append("status = ?")
             params.append(status)
@@ -349,12 +353,101 @@ class Database:
             conn.commit()
 
     def list_downloads(self, limit: int = 50) -> List[Dict[str, Any]]:
-        """按时间倒序列出最近的下载记录。"""
+        """按时间倒序列出最近的下载记录（简单接口，供内部使用）。"""
         with self._connect() as conn:
             rows = conn.execute(
                 "SELECT * FROM downloads ORDER BY created_at DESC LIMIT ?", (limit,)
             ).fetchall()
             return [dict(row) for row in rows]
+
+    def search_downloads(
+        self,
+        *,
+        page: int = 1,
+        page_size: int = 50,
+        statuses: Optional[List[str]] = None,
+        rule_id: Optional[int] = None,
+        save_dir_like: Optional[str] = None,
+        min_size_bytes: Optional[int] = None,
+        max_size_bytes: Optional[int] = None,
+        start_time: Optional[str] = None,
+        end_time: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """带筛选和分页的下载记录查询，供 Web 面板使用。
+
+        :return: dict(total=int, page=int, page_size=int, items=list[dict])
+        """
+        if page < 1:
+            page = 1
+        if page_size < 1:
+            page_size = 1
+
+        where_clauses: List[str] = []
+        params: List[Any] = []
+
+        # 状态筛选
+        if statuses:
+            placeholders = ",".join("?" for _ in statuses)
+            where_clauses.append(f"status IN ({placeholders})")
+            params.extend(statuses)
+
+        # 规则筛选
+        if rule_id is not None:
+            where_clauses.append("rule_id = ?")
+            params.append(int(rule_id))
+
+        # 路径模糊匹配
+        if save_dir_like:
+            where_clauses.append("(save_dir LIKE ? OR file_path LIKE ?)")
+            like = f"%{save_dir_like}%"
+            params.extend([like, like])
+
+        # 大小区间（字节）
+        if min_size_bytes is not None:
+            where_clauses.append("file_size >= ?")
+            params.append(int(min_size_bytes))
+        if max_size_bytes is not None:
+            where_clauses.append("file_size <= ?")
+            params.append(int(max_size_bytes))
+
+        # 时间区间（基于 created_at 文本比较）
+        if start_time:
+            where_clauses.append("created_at >= ?")
+            params.append(start_time)
+        if end_time:
+            where_clauses.append("created_at <= ?")
+            params.append(end_time)
+
+        where_sql = " WHERE " + " AND ".join(where_clauses) if where_clauses else ""
+
+        offset = (page - 1) * page_size
+
+        with self._connect() as conn:
+            # 总数
+            count_row = conn.execute(
+                f"SELECT COUNT(*) AS cnt FROM downloads{where_sql}",
+                tuple(params),
+            ).fetchone()
+            total = int(count_row["cnt"] if count_row and count_row["cnt"] is not None else 0)
+
+            # 当前页数据
+            rows = conn.execute(
+                f"""
+                SELECT * FROM downloads
+                {where_sql}
+                ORDER BY created_at DESC, id DESC
+                LIMIT ? OFFSET ?
+                """,
+                tuple(params) + (page_size, offset),
+            ).fetchall()
+
+        items = [dict(row) for row in rows]
+        return {
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "items": items,
+        }
 
     def delete_download(self, download_id: int) -> None:
         """删除指定的下载记录。"""
@@ -388,7 +481,8 @@ class Database:
                     COUNT(*) AS total,
                     SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS completed,
                     SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed,
-                    SUM(CASE WHEN status = 'downloading' THEN 1 ELSE 0 END) AS downloading
+                    SUM(CASE WHEN status = 'downloading' THEN 1 ELSE 0 END) AS downloading,
+                    SUM(CASE WHEN status = 'queued' THEN 1 ELSE 0 END) AS queued
                 FROM downloads
                 """
             ).fetchone()
@@ -398,6 +492,7 @@ class Database:
             "completed": (row["completed"] or 0) if row is not None else 0,
             "failed": (row["failed"] or 0) if row is not None else 0,
             "downloading": (row["downloading"] or 0) if row is not None else 0,
+            "queued": (row["queued"] or 0) if row is not None else 0,
         }
 
     # Message helpers ---------------------------------------------------

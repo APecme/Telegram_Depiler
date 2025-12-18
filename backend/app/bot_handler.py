@@ -261,80 +261,39 @@ class BotCommandHandler:
         await event.reply(help_text, parse_mode='markdown')
         
     async def _handle_download_command(self, event: events.NewMessage.Event) -> None:
-        """处理/download命令"""
-        # 全局统计
+        """处理/download命令：只显示总体统计 + 三个查看按钮。"""
+        from . import bot_messages as bm
+
         stats = self.database.get_download_stats()
         total = stats.get("total", 0)
         completed = stats.get("completed", 0)
         failed = stats.get("failed", 0)
         downloading = stats.get("downloading", 0)
+        queued = stats.get("queued", 0)
 
-        # 获取最近的下载记录，并筛选出正在进行的任务
-        downloads = self.database.list_downloads(limit=200)
-        active_status = {"downloading", "pending", "paused", "queued"}
-        active_downloads = [d for d in downloads if d.get("status") in active_status]
-
-        header_text = (
-            "📊 **下载概览**\n\n"
-            f"**总计：** {total}\n"
-            f"✅ **成功：** {completed}\n"
-            f"⏳ **下载中：** {downloading}\n"
-            f"❌ **失败：** {failed}\n\n"
+        header = bm.DOWNLOAD_OVERVIEW_HEADER.format(
+            total=total,
+            completed=completed,
+            downloading=downloading,
+            queued=queued,
+            failed=failed,
         )
 
-        if not active_downloads:
-            header_text += "当前没有正在进行的下载任务。"
-            await event.reply(header_text, parse_mode='markdown')
-            return
+        buttons = [
+            [
+                KeyboardButtonCallback("⏳ 查看下载中", b"view_dl_downloading"),
+                KeyboardButtonCallback("📋 查看队列中", b"view_dl_queued"),
+            ],
+            [
+                KeyboardButtonCallback("❌ 查看失败", b"view_dl_failed"),
+            ],
+        ]
 
-        # 构建正在下载列表和操作按钮
-        lines: list[str] = []
-        buttons: list[list[KeyboardButtonCallback]] = []
-
-        for d in active_downloads[:10]:
-            download_id = d.get("id")
-            if download_id is None:
-                continue
-
-            file_name = d.get("file_name") or "未知"
-            status = d.get("status") or "unknown"
-            progress = float(d.get("progress") or 0.0)
-            speed = float(d.get("download_speed") or 0.0)
-            speed_text = self._format_speed(speed) if speed > 0 else "计算中..."
-            
-            # 状态显示文本
-            status_text = {
-                "downloading": "⏳ 下载中",
-                "paused": "⏸️ 已暂停",
-                "queued": "📋 队列中",
-                "pending": "⏳ 等待中"
-            }.get(status, status)
-
-            lines.append(
-                f"• 任务ID: `{download_id}` | 状态: {status_text}\n"
-                f"  进度: {progress:.1f}% | 速度: {speed_text}\n"
-                f"  文件: {file_name}"
-            )
-
-            # 根据状态显示不同的按钮
-            row_buttons = []
-            if status == "downloading":
-                row_buttons.append(KeyboardButtonCallback("⏸️ 暂停", f"pause_{download_id}".encode("utf-8")))
-            elif status == "paused":
-                row_buttons.append(KeyboardButtonCallback("▶️ 开始", f"resume_{download_id}".encode("utf-8")))
-            
-            # 队列中和等待中的任务也可以置顶
-            if status in ("downloading", "pending", "queued", "paused"):
-                row_buttons.append(KeyboardButtonCallback("⭐ 置顶", f"priority_{download_id}".encode("utf-8")))
-            
-            row_buttons.append(KeyboardButtonCallback("🗑️ 删除", f"delete_{download_id}".encode("utf-8")))
-            
-            if row_buttons:
-                buttons.append(row_buttons)
-
-        text = header_text + "\n**正在进行的任务：**\n" + "\n\n".join(lines)
-
-        await event.reply(text, buttons=buttons, parse_mode='markdown')
+        await event.reply(
+            header + "请选择要查看的任务类型：",
+            buttons=buttons,
+            parse_mode="markdown",
+        )
         
     async def _handle_bot_message(self, event: events.NewMessage.Event) -> None:
         """处理Bot收到的消息（非命令）"""
@@ -345,7 +304,7 @@ class BotCommandHandler:
         if event.message.text and event.message.text.startswith('/'):
             return
         
-        # 检查是否是对话过程中的消息
+        # 检查是否是对话过程中的消息（规则创建等）
         sender = await event.get_sender()
         if not isinstance(sender, User):
             return
@@ -355,6 +314,39 @@ class BotCommandHandler:
             return
             
         sender_id = sender.id
+
+        # 支持在 /download 之后，通过发送“任务ID”选择要操作的任务
+        text = (event.message.message or "").strip()
+        if text.isdigit() and sender_id in (self.settings.admin_user_ids or []):
+            download_id = int(text)
+            downloads = self.database.list_downloads(limit=1000)
+            d = next((x for x in downloads if x.get("id") == download_id), None)
+            if not d:
+                await event.reply(f"❌ 未找到任务ID {download_id} 对应的下载记录")
+                return
+
+            status = d.get("status") or "unknown"
+            file_name = d.get("file_name") or d.get("origin_file_name") or "未知文件"
+
+            buttons = []
+            # 根据状态添加“暂停/开始”按钮
+            if status == "downloading":
+                buttons.append(KeyboardButtonCallback("⏸️ 暂停", f"pause_{download_id}".encode("utf-8")))
+            elif status == "paused":
+                buttons.append(KeyboardButtonCallback("▶️ 开始", f"resume_{download_id}".encode("utf-8")))
+            # 队列中/等待中的任务可以直接置顶
+            if status in ("downloading", "pending", "queued", "paused"):
+                buttons.append(KeyboardButtonCallback("⭐ 置顶", f"priority_{download_id}".encode("utf-8")))
+            # 始终允许删除
+            buttons.append(KeyboardButtonCallback("🗑️ 删除", f"delete_{download_id}".encode("utf-8")))
+
+            await event.reply(
+                f"已选择任务ID `{download_id}`：\n\n文件: {file_name}\n当前状态: {status}\n\n"
+                "请通过下方按钮执行暂停 / 置顶 / 删除操作。",
+                buttons=[buttons],
+                parse_mode="markdown",
+            )
+            return
         
         # 验证管理员权限
         if self.settings.admin_user_ids and sender_id not in self.settings.admin_user_ids:
@@ -1069,6 +1061,12 @@ class BotCommandHandler:
                 # 模式选择回调
                 mode = "monitor" if data == "mode_monitor" else "history"
                 await self._handle_mode_callback(event, user_id, mode)
+            elif data == "view_dl_downloading":
+                await self._handle_view_downloads_by_status(event, "downloading")
+            elif data == "view_dl_queued":
+                await self._handle_view_downloads_by_status(event, "queued")
+            elif data == "view_dl_failed":
+                await self._handle_view_downloads_by_status(event, "failed")
             elif data.startswith("pause_"):
                 download_id = int(data.split("_")[1])
                 await self._handle_pause_download(event, download_id)
@@ -1086,6 +1084,54 @@ class BotCommandHandler:
                 await self._handle_retry_download(event, download_id)
             else:
                 await event.answer("❓ 未知操作", alert=True)
+
+    async def _handle_view_downloads_by_status(self, event: events.CallbackQuery.Event, status: str) -> None:
+        """根据状态查看下载任务列表，并提示用户发送任务ID进行操作。"""
+        try:
+            # 只查看最近的部分任务，按时间倒序
+            downloads = self.database.list_downloads(limit=200)
+            filtered = [d for d in downloads if d.get("status") == status]
+
+            status_text = {
+                "downloading": "下载中",
+                "queued": "队列中",
+                "failed": "失败",
+            }.get(status, status)
+
+            if not filtered:
+                await event.edit(f"ℹ️ 当前没有处于 **{status_text}** 状态的任务。", parse_mode="markdown")
+                return
+
+            # 只展示前 15 条，避免过长
+            lines: list[str] = []
+            for d in filtered[:15]:
+                download_id = d.get("id")
+                if download_id is None:
+                    continue
+                file_name = d.get("file_name") or d.get("origin_file_name") or "未知文件"
+                progress = float(d.get("progress") or 0.0)
+                speed = float(d.get("download_speed") or 0.0)
+                speed_text = self._format_speed(speed) if speed > 0 else "计算中..."
+                lines.append(
+                    f"• 任务ID: `{download_id}`\n"
+                    f"  进度: {progress:.1f}% | 速度: {speed_text}\n"
+                    f"  文件: {file_name}"
+                )
+
+            text = (
+                f"📋 **{status_text} 任务列表（最多显示前 15 条）**\n\n"
+                + "\n\n".join(lines)
+                + "\n\n"
+                "✏️ 发送 **任务ID**（纯数字）即可对该任务进行操作：\n"
+                "• Bot 将回复一条带有【暂停/开始、置顶、删除】按钮的消息。\n"
+                "• 例如：发送 `123` 表示选择任务ID 123。"
+            )
+
+            await event.edit(text, parse_mode="markdown")
+
+        except Exception as exc:
+            logger.exception("查看特定状态任务列表失败: %s", exc)
+            await event.answer(f"❌ 查看失败: {exc}", alert=True)
                 
         except Exception as e:
             logger.exception(f"处理回调查询失败: {e}")

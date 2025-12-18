@@ -95,6 +95,17 @@ export default function Dashboard() {
   const [showRuleModal, setShowRuleModal] = useState(false);
   const [editingRuleId, setEditingRuleId] = useState<number | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
+  // 下载记录筛选 & 分页
+  const [downloadPage, setDownloadPage] = useState<number>(1);
+  const [downloadPageSize, setDownloadPageSize] = useState<number>(20);
+  const [downloadTotal, setDownloadTotal] = useState<number>(0);
+  const [downloadStatusFilter, setDownloadStatusFilter] = useState<string>("all");
+  const [downloadRuleFilter, setDownloadRuleFilter] = useState<number | "all">("all");
+  const [downloadPathFilter, setDownloadPathFilter] = useState<string>("");
+  const [downloadMinSize, setDownloadMinSize] = useState<string>(""); // MB
+  const [downloadMaxSize, setDownloadMaxSize] = useState<string>(""); // MB
+  const [downloadStartTime, setDownloadStartTime] = useState<string>(""); // datetime-local
+  const [downloadEndTime, setDownloadEndTime] = useState<string>("");
   
   // 规则表单状态
   const [formChatId, setFormChatId] = useState<number | "">("");
@@ -116,6 +127,9 @@ export default function Dashboard() {
 
   useEffect(() => {
     fetchDownloads();
+  }, [downloadPage, downloadPageSize, downloadStatusFilter, downloadRuleFilter, downloadPathFilter, downloadMinSize, downloadMaxSize, downloadStartTime, downloadEndTime]);
+
+  useEffect(() => {
     fetchGroupRules();
     fetchDialogs();
     fetchLogs();
@@ -144,8 +158,42 @@ export default function Dashboard() {
 
   const fetchDownloads = async () => {
     try {
-      const { data } = await api.get("/downloads");
+      const params: any = {
+        page: downloadPage,
+        page_size: downloadPageSize,
+      };
+
+      if (downloadStatusFilter && downloadStatusFilter !== "all") {
+        params.status = downloadStatusFilter;
+      }
+      if (downloadRuleFilter !== "all") {
+        params.rule_id = downloadRuleFilter;
+      }
+      if (downloadPathFilter.trim()) {
+        params.save_dir = downloadPathFilter.trim();
+      }
+      if (downloadMinSize.trim()) {
+        const v = Number(downloadMinSize.trim());
+        if (!Number.isNaN(v) && v >= 0) {
+          params.min_size_mb = v;
+        }
+      }
+      if (downloadMaxSize.trim()) {
+        const v = Number(downloadMaxSize.trim());
+        if (!Number.isNaN(v) && v >= 0) {
+          params.max_size_mb = v;
+        }
+      }
+      if (downloadStartTime) {
+        params.start_time = downloadStartTime.replace("T", " ") + ":00";
+      }
+      if (downloadEndTime) {
+        params.end_time = downloadEndTime.replace("T", " ") + ":59";
+      }
+
+      const { data } = await api.get("/downloads", { params });
       setDownloads(data.items || []);
+      setDownloadTotal(data.total || 0);
     } catch (error) {
       console.error("Failed to fetch downloads:", error);
     }
@@ -708,6 +756,123 @@ export default function Dashboard() {
       {/* 下载记录 */}
       <div className="card" style={{ padding: "1.5rem", backgroundColor: "white", borderRadius: "8px", boxShadow: "0 2px 4px rgba(0,0,0,0.1)" }}>
         <h2 style={{ margin: "0 0 1rem 0" }}>📥 下载记录</h2>
+
+        {/* 筛选条件 */}
+        <div
+          style={{
+            marginBottom: "0.75rem",
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+            gap: "0.5rem",
+            alignItems: "center",
+          }}
+        >
+          <div>
+            <label style={{ fontSize: "0.8rem", color: "#555" }}>状态</label>
+            <select
+              value={downloadStatusFilter}
+              onChange={(e) => {
+                setDownloadStatusFilter(e.target.value);
+                setDownloadPage(1);
+              }}
+              style={{ width: "100%", padding: "0.35rem", borderRadius: "4px", border: "1px solid #ddd", fontSize: "0.85rem" }}
+            >
+              <option value="all">全部状态</option>
+              <option value="downloading">下载中</option>
+              <option value="queued">队列中</option>
+              <option value="completed">已完成</option>
+              <option value="paused">已暂停</option>
+              <option value="failed">失败</option>
+              <option value="pending">待开始</option>
+            </select>
+          </div>
+          <div>
+            <label style={{ fontSize: "0.8rem", color: "#555" }}>规则</label>
+            <select
+              value={downloadRuleFilter === "all" ? "all" : String(downloadRuleFilter)}
+              onChange={(e) => {
+                const v = e.target.value === "all" ? "all" : Number(e.target.value);
+                setDownloadRuleFilter(v);
+                setDownloadPage(1);
+              }}
+              style={{ width: "100%", padding: "0.35rem", borderRadius: "4px", border: "1px solid #ddd", fontSize: "0.85rem" }}
+            >
+              <option value="all">全部规则 / Bot</option>
+              {groupRules.map((rule) => (
+                <option key={rule.id} value={rule.id}>
+                  {rule.chat_title || `群聊ID:${rule.chat_id}`} (规则ID:{rule.id})
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label style={{ fontSize: "0.8rem", color: "#555" }}>保存路径包含</label>
+            <input
+              type="text"
+              value={downloadPathFilter}
+              onChange={(e) => {
+                setDownloadPathFilter(e.target.value);
+                setDownloadPage(1);
+              }}
+              placeholder="例如：/overwach"
+              style={{ width: "100%", padding: "0.35rem", borderRadius: "4px", border: "1px solid #ddd", fontSize: "0.85rem" }}
+            />
+          </div>
+          <div>
+            <label style={{ fontSize: "0.8rem", color: "#555" }}>大小区间 (MB)</label>
+            <div style={{ display: "flex", gap: "0.25rem" }}>
+              <input
+                type="number"
+                min={0}
+                value={downloadMinSize}
+                onChange={(e) => {
+                  setDownloadMinSize(e.target.value);
+                  setDownloadPage(1);
+                }}
+                placeholder="最小"
+                style={{ flex: 1, padding: "0.35rem", borderRadius: "4px", border: "1px solid #ddd", fontSize: "0.85rem" }}
+              />
+              <span style={{ alignSelf: "center", fontSize: "0.8rem", color: "#666" }}>~</span>
+              <input
+                type="number"
+                min={0}
+                value={downloadMaxSize}
+                onChange={(e) => {
+                  setDownloadMaxSize(e.target.value);
+                  setDownloadPage(1);
+                }}
+                placeholder="最大"
+                style={{ flex: 1, padding: "0.35rem", borderRadius: "4px", border: "1px solid #ddd", fontSize: "0.85rem" }}
+              />
+            </div>
+          </div>
+          <div>
+            <label style={{ fontSize: "0.8rem", color: "#555" }}>开始时间</label>
+            <input
+              type="datetime-local"
+              value={downloadStartTime}
+              onChange={(e) => {
+                setDownloadStartTime(e.target.value);
+                setDownloadPage(1);
+              }}
+              style={{ width: "100%", padding: "0.35rem", borderRadius: "4px", border: "1px solid #ddd", fontSize: "0.85rem" }}
+            />
+          </div>
+          <div>
+            <label style={{ fontSize: "0.8rem", color: "#555" }}>结束时间</label>
+            <input
+              type="datetime-local"
+              value={downloadEndTime}
+              onChange={(e) => {
+                setDownloadEndTime(e.target.value);
+                setDownloadPage(1);
+              }}
+              style={{ width: "100%", padding: "0.35rem", borderRadius: "4px", border: "1px solid #ddd", fontSize: "0.85rem" }}
+            />
+          </div>
+        </div>
+
+        {/* 操作工具栏 */}
         <div style={{ marginBottom: "0.75rem", display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "center" }}>
           <button
             onClick={handlePauseAll}
@@ -738,7 +903,7 @@ export default function Dashboard() {
             🗑️ 删除记录并删除文件
           </button>
         </div>
-        <div style={{ maxHeight: "400px", overflowY: "auto" }}>
+        <div>
           {downloads.length === 0 ? (
             <p style={{ textAlign: "center", color: "#666", padding: "2rem" }}>
               暂无下载记录
@@ -787,7 +952,21 @@ export default function Dashboard() {
                         }}
                       />
                     </td>
-                    <td style={{ padding: "0.75rem" }}>{record.file_name}</td>
+                    <td style={{ padding: "0.75rem", maxWidth: "260px" }}>
+                      <div
+                        style={{
+                          display: "inline-block",
+                          maxWidth: "260px",
+                          whiteSpace: "nowrap",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          verticalAlign: "top",
+                        }}
+                        title={record.file_name}
+                      >
+                        {record.file_name}
+                      </div>
+                    </td>
                     <td style={{ padding: "0.75rem" }}>{record.origin_file_name || "-"}</td>
                     <td style={{ padding: "0.75rem" }}>
                       {record.file_size && record.file_size > 0
@@ -993,6 +1172,65 @@ export default function Dashboard() {
               </tbody>
             </table>
           )}
+        </div>
+
+        {/* 分页控制 */}
+        <div style={{ marginTop: "0.75rem", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "0.5rem" }}>
+          <div style={{ fontSize: "0.85rem", color: "#555" }}>
+            共 {downloadTotal} 条记录，每页
+            <select
+              value={downloadPageSize}
+              onChange={(e) => {
+                setDownloadPageSize(Number(e.target.value));
+                setDownloadPage(1);
+              }}
+              style={{ margin: "0 0.35rem", padding: "0.1rem 0.3rem", fontSize: "0.85rem" }}
+            >
+              <option value={10}>10</option>
+              <option value={20}>20</option>
+              <option value={50}>50</option>
+              <option value={100}>100</option>
+            </select>
+            条
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+            <button
+              onClick={() => setDownloadPage((p) => Math.max(1, p - 1))}
+              disabled={downloadPage <= 1}
+              style={{
+                padding: "0.25rem 0.6rem",
+                borderRadius: "4px",
+                border: "1px solid #ddd",
+                backgroundColor: downloadPage <= 1 ? "#f5f5f5" : "white",
+                color: "#333",
+                cursor: downloadPage <= 1 ? "not-allowed" : "pointer",
+                fontSize: "0.85rem",
+              }}
+            >
+              上一页
+            </button>
+            <span style={{ fontSize: "0.85rem", color: "#555" }}>
+              第 {downloadPage} 页
+            </span>
+            <button
+              onClick={() => {
+                const maxPage = downloadTotal > 0 ? Math.ceil(downloadTotal / downloadPageSize) : 1;
+                setDownloadPage((p) => Math.min(maxPage, p + 1));
+              }}
+              disabled={downloadTotal <= downloadPage * downloadPageSize}
+              style={{
+                padding: "0.25rem 0.6rem",
+                borderRadius: "4px",
+                border: "1px solid #ddd",
+                backgroundColor: downloadTotal <= downloadPage * downloadPageSize ? "#f5f5f5" : "white",
+                color: "#333",
+                cursor: downloadTotal <= downloadPage * downloadPageSize ? "not-allowed" : "pointer",
+                fontSize: "0.85rem",
+              }}
+            >
+              下一页
+            </button>
+          </div>
         </div>
       </div>
 

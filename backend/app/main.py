@@ -157,6 +157,76 @@ worker = TelegramWorker(settings, database, queue_manager=download_queue_manager
 bot_handler: Optional[BotCommandHandler] = None
 
 
+async def _resume_incomplete_downloads() -> None:
+    """容器重启后，自动继续之前的 downloading / queued / pending 任务。
+
+    策略：
+    - 将 status 为 downloading/pending 的任务统一重置为 queued；
+    - 然后按优先级和创建时间排序，依次交给 DownloadQueueManager.try_start_download；
+    - 由来源 source 决定调用 TelegramWorker 或 BotCommandHandler 进行实际恢复。
+    """
+    # 先获取尽量多的记录（与队列管理器保持一致，最多 1000 条）
+    downloads = database.list_downloads(limit=1000)
+    if not downloads:
+        return
+
+    # 需要恢复的状态
+    resume_statuses = {"downloading", "queued", "pending"}
+    candidates = [d for d in downloads if d.get("status") in resume_statuses]
+    if not candidates:
+        return
+
+    logger.info("检测到 %s 个未完成的下载任务，准备尝试自动恢复", len(candidates))
+
+    # 第一步：将 downloading/pending 状态统一重置为 queued，避免误判为正在下载但实际上任务已丢失
+    for d in candidates:
+        status = d.get("status")
+        if status in ("downloading", "pending"):
+            try:
+                database.update_download(int(d["id"]), status="queued")
+            except Exception as exc:  # pragma: no cover - 防御性
+                logger.warning("重置下载任务 %s 状态失败: %s", d.get("id"), exc)
+
+    # 重新拉取一遍，拿到最新的 queued 列表
+    downloads = database.list_downloads(limit=1000)
+    queued_tasks = [d for d in downloads if d.get("status") == "queued"]
+    if not queued_tasks:
+        logger.info("状态重置后队列为空，无需恢复任务")
+        return
+
+    # 按优先级（降序）和创建时间（升序）排序
+    queued_tasks.sort(key=lambda d: (-(d.get("priority") or 0), d.get("created_at") or ""))
+
+    started_count = 0
+    for task in queued_tasks:
+        download_id = task.get("id")
+        if download_id is None:
+            continue
+
+        can_start = await download_queue_manager.try_start_download(int(download_id))
+        if not can_start:
+            # 并发已满，后续任务保持 queued，等运行中的任务完成后由 on_download_finished 接力
+            continue
+
+        source = task.get("source", "bot")
+        try:
+            if source == "rule" and worker:
+                message_id = task.get("message_id")
+                chat_id = task.get("chat_id")
+                if message_id and chat_id:
+                    asyncio.create_task(worker.restore_queued_download(int(download_id), int(message_id), int(chat_id)))
+                    started_count += 1
+                else:
+                    logger.warning("规则下载任务 %s 缺少 message_id 或 chat_id，无法自动恢复", download_id)
+            elif source == "bot" and bot_handler:
+                asyncio.create_task(bot_handler.restore_queued_download(task))
+                started_count += 1
+        except Exception as exc:  # pragma: no cover - 防御性
+            logger.warning("自动恢复下载任务 %s 失败: %s", download_id, exc)
+
+    logger.info("自动恢复下载任务完成，本次共启动 %s 个任务", started_count)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用启动和关闭时的生命周期管理"""
@@ -167,13 +237,18 @@ async def lifespan(app: FastAPI):
     logger.info("  - Bot Token: %s", "已配置" if settings.bot_token else "未配置")
     logger.info("  - Bot Username: %s", settings.bot_username or "未配置")
     logger.info("  - 管理员用户ID列表: %s", settings.admin_user_ids if settings.admin_user_ids else "未配置")
-    
+
     # 启动时：尝试自动启动 Bot 命令处理器（如果满足条件）
     try:
         await _ensure_bot_handler_running()
     except Exception as e:
         logger.warning(f"初始化 Bot 命令处理器失败: {e}")
-    
+    # 启动时：自动尝试恢复未完成的下载任务
+    try:
+        await _resume_incomplete_downloads()
+    except Exception as e:  # pragma: no cover - 防御性
+        logger.warning("自动恢复未完成下载任务失败: %s", e)
+
     yield
     
     # 关闭时：断开连接
@@ -570,8 +645,37 @@ async def bot_status() -> dict:
 
 
 @api.get("/downloads")
-async def list_downloads() -> dict:
-    return {"items": database.list_downloads()}
+async def list_downloads(
+    page: int = Query(1, ge=1, description="页码（从1开始）"),
+    page_size: int = Query(20, ge=1, le=200, description="每页数量"),
+    status: str | None = Query(default=None, description="状态筛选，多值用逗号分隔，如 completed,downloading,queued"),
+    rule_id: int | None = Query(default=None, description="按规则ID筛选"),
+    save_dir: str | None = Query(default=None, description="按保存路径模糊匹配"),
+    min_size_mb: float | None = Query(default=None, description="最小大小（MB）"),
+    max_size_mb: float | None = Query(default=None, description="最大大小（MB）"),
+    start_time: str | None = Query(default=None, description="开始时间，格式 YYYY-MM-DD HH:MM:SS"),
+    end_time: str | None = Query(default=None, description="结束时间，格式 YYYY-MM-DD HH:MM:SS"),
+) -> dict:
+    """带筛选和分页的下载记录列表。"""
+    statuses: list[str] | None = None
+    if status:
+        statuses = [s.strip() for s in status.split(",") if s.strip()]
+
+    min_size_bytes = int(min_size_mb * 1024 * 1024) if min_size_mb is not None else None
+    max_size_bytes = int(max_size_mb * 1024 * 1024) if max_size_mb is not None else None
+
+    result = database.search_downloads(
+        page=page,
+        page_size=page_size,
+        statuses=statuses,
+        rule_id=rule_id,
+        save_dir_like=save_dir,
+        min_size_bytes=min_size_bytes,
+        max_size_bytes=max_size_bytes,
+        start_time=start_time,
+        end_time=end_time,
+    )
+    return result
 
 
 @api.post("/downloads/{download_id}/pause")

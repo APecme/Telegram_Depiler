@@ -46,6 +46,7 @@ DOWNLOAD_OVERVIEW_HEADER = (
     "**总计：** {total}\n"
     "✅ **成功：** {completed}\n"
     "⏳ **下载中：** {downloading}\n"
+    "📋 **队列中：** {queued}\n"
     "❌ **失败：** {failed}\n\n"
 )
 

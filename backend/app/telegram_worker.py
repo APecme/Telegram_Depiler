@@ -686,6 +686,17 @@ class TelegramWorker:
             target_path = save_path / file_name
             # 确保所有父目录都存在（支持文件名模板中的子目录）
             target_path.parent.mkdir(parents=True, exist_ok=True)
+
+            # 将最终保存路径和文件名写回数据库
+            try:
+                self.database.update_download(
+                    download_id,
+                    file_path=str(target_path),
+                    file_name=file_name,
+                    save_dir=str(save_path),
+                )
+            except Exception as e:
+                logger.debug("更新队列下载记录保存路径失败: %s", e)
             
             logger.info("从队列恢复下载文件: %s -> %s", original_file_name, target_path)
             
@@ -1506,6 +1517,17 @@ class TelegramWorker:
             target_path = save_path / file_name
             # 确保所有父目录都存在（支持文件名模板中的子目录）
             target_path.parent.mkdir(parents=True, exist_ok=True)
+
+            # 将最终保存路径和文件名写回数据库，便于前端展示“文件名/源文件名”
+            try:
+                self.database.update_download(
+                    download_id,
+                    file_path=str(target_path),
+                    file_name=file_name,
+                    save_dir=str(save_path),
+                )
+            except Exception as e:
+                logger.debug("更新下载记录保存路径失败: %s", e)
             
             logger.info("开始下载文件: %s -> %s", original_file_name, target_path)
             
