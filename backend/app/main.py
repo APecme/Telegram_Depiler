@@ -237,7 +237,7 @@ async def lifespan(app: FastAPI):
     logger.info("  - Bot Token: %s", "已配置" if settings.bot_token else "未配置")
     logger.info("  - Bot Username: %s", settings.bot_username or "未配置")
     logger.info("  - 管理员用户ID列表: %s", settings.admin_user_ids if settings.admin_user_ids else "未配置")
-
+    
     # 启动时：尝试自动启动 Bot 命令处理器（如果满足条件）
     try:
         await _ensure_bot_handler_running()
@@ -248,7 +248,7 @@ async def lifespan(app: FastAPI):
         await _resume_incomplete_downloads()
     except Exception as e:  # pragma: no cover - 防御性
         logger.warning("自动恢复未完成下载任务失败: %s", e)
-
+    
     yield
     
     # 关闭时：断开连接

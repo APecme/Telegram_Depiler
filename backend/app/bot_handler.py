@@ -968,7 +968,7 @@ class BotCommandHandler:
 
         except Exception as e:
             logger.exception("restore_queued_download 执行出错: %s", e)
-
+            
     def _format_size(self, size: int) -> str:
         """格式化文件大小"""
         for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
@@ -1084,8 +1084,13 @@ class BotCommandHandler:
                 await self._handle_retry_download(event, download_id)
             else:
                 await event.answer("❓ 未知操作", alert=True)
+        except Exception as e:
+            logger.exception(f"处理回调查询失败: {e}")
+            await event.answer(f"❌ 操作失败: {str(e)}", alert=True)
 
-    async def _handle_view_downloads_by_status(self, event: events.CallbackQuery.Event, status: str) -> None:
+    async def _handle_view_downloads_by_status(
+        self, event: events.CallbackQuery.Event, status: str
+    ) -> None:
         """根据状态查看下载任务列表，并提示用户发送任务ID进行操作。"""
         try:
             # 只查看最近的部分任务，按时间倒序
@@ -1132,10 +1137,6 @@ class BotCommandHandler:
         except Exception as exc:
             logger.exception("查看特定状态任务列表失败: %s", exc)
             await event.answer(f"❌ 查看失败: {exc}", alert=True)
-                
-        except Exception as e:
-            logger.exception(f"处理回调查询失败: {e}")
-            await event.answer(f"❌ 操作失败: {str(e)}", alert=True)
 
     async def pause_download(self, download_id: int) -> bool:
         downloads = self.database.list_downloads(limit=1000)

@@ -759,7 +759,7 @@ export default function Dashboard() {
 
         {/* 筛选条件 */}
         <div
-          style={{
+            style={{
             marginBottom: "0.75rem",
             display: "grid",
             gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
@@ -938,8 +938,8 @@ export default function Dashboard() {
               </thead>
               <tbody>
                 {downloads.map((record: DownloadRecord) => (
-                  <tr key={record.id} style={{ borderBottom: "1px solid #f0f0f0" }}>
-                    <td style={{ padding: "0.75rem" }}>
+                    <tr key={record.id} style={{ borderBottom: "1px solid #f0f0f0" }}>
+                      <td style={{ padding: "0.75rem" }}>
                       <input
                         type="checkbox"
                         checked={selectedIds.includes(record.id)}
@@ -1034,108 +1034,108 @@ export default function Dashboard() {
                             : record.status}
                         </span>
                       </div>
-                    </td>
-                    <td style={{ padding: "0.75rem" }}>
+                      </td>
+                      <td style={{ padding: "0.75rem" }}>
                       {typeof record.progress === "number" ? (
-                        <div style={{ minWidth: "150px" }}>
-                          <div
-                            style={{
-                              width: "100%",
-                              height: "20px",
-                              backgroundColor: "#e0e0e0",
-                              borderRadius: "10px",
-                              overflow: "hidden",
-                            }}
-                          >
+                          <div style={{ minWidth: "150px" }}>
                             <div
                               style={{
-                                width: `${Math.min(100, Math.max(0, record.progress || 0))}%`,
-                                height: "100%",
-                                backgroundColor:
-                                  record.status === "completed" ? "#4caf50" : "#2196f3",
-                                transition: "width 0.3s ease",
-                                display: "flex",
-                                alignItems: "center",
-                                justifyContent: "center",
-                                color: "#fff",
-                                fontSize: "0.75em",
-                                fontWeight: "bold",
+                                width: "100%",
+                                height: "20px",
+                                backgroundColor: "#e0e0e0",
+                                borderRadius: "10px",
+                                overflow: "hidden",
                               }}
                             >
-                              {record.progress ? `${Math.round(record.progress)}%` : "0%"}
+                              <div
+                                style={{
+                                  width: `${Math.min(100, Math.max(0, record.progress || 0))}%`,
+                                  height: "100%",
+                                  backgroundColor:
+                                    record.status === "completed" ? "#4caf50" : "#2196f3",
+                                  transition: "width 0.3s ease",
+                                  display: "flex",
+                                  alignItems: "center",
+                                  justifyContent: "center",
+                                  color: "#fff",
+                                  fontSize: "0.75em",
+                                  fontWeight: "bold",
+                                }}
+                              >
+                                {record.progress ? `${Math.round(record.progress)}%` : "0%"}
+                              </div>
                             </div>
                           </div>
-                        </div>
-                      ) : (
-                        <span style={{ color: "#999" }}>-</span>
-                      )}
-                    </td>
-                    <td style={{ padding: "0.75rem" }}>
-                      {record.download_speed && record.download_speed > 0 ? (
-                        <span style={{ fontSize: "0.9em" }}>
-                          {formatBytes(record.download_speed)}/s
-                        </span>
-                      ) : (
-                        <span style={{ color: "#999" }}>-</span>
-                      )}
-                    </td>
-                    <td style={{ padding: "0.75rem", fontSize: "0.85rem", color: "#666" }}>
-                      {new Date(record.created_at).toLocaleString()}
-                    </td>
-                    <td style={{ padding: "0.75rem", textAlign: "center" }}>
+                        ) : (
+                          <span style={{ color: "#999" }}>-</span>
+                        )}
+                      </td>
+                      <td style={{ padding: "0.75rem" }}>
+                        {record.download_speed && record.download_speed > 0 ? (
+                          <span style={{ fontSize: "0.9em" }}>
+                            {formatBytes(record.download_speed)}/s
+                          </span>
+                        ) : (
+                          <span style={{ color: "#999" }}>-</span>
+                        )}
+                      </td>
+                      <td style={{ padding: "0.75rem", fontSize: "0.85rem", color: "#666" }}>
+                        {new Date(record.created_at).toLocaleString()}
+                      </td>
+                      <td style={{ padding: "0.75rem", textAlign: "center" }}>
                       <div style={{ display: "flex", gap: "0.5rem", justifyContent: "center", flexWrap: "wrap" }}>
-                        {record.status === "downloading" && (
+                          {record.status === "downloading" && (
+                            <button
+                              onClick={() => handlePauseDownload(record.id)}
+                              style={{
+                                padding: "0.25rem 0.5rem",
+                                fontSize: "0.8rem",
+                                border: "1px solid #ff9800",
+                                backgroundColor: "#fff3e0",
+                                color: "#e65100",
+                                borderRadius: "4px",
+                                cursor: "pointer",
+                              }}
+                              title="暂停下载"
+                            >
+                              ⏸️ 暂停
+                            </button>
+                          )}
+                          {record.status === "paused" && (
+                            <button
+                              onClick={() => handleResumeDownload(record.id)}
+                              style={{
+                                padding: "0.25rem 0.5rem",
+                                fontSize: "0.8rem",
+                                border: "1px solid #4caf50",
+                                backgroundColor: "#e8f5e9",
+                                color: "#2e7d32",
+                                borderRadius: "4px",
+                                cursor: "pointer",
+                              }}
+                              title="继续下载"
+                            >
+                              ▶️ 开始
+                            </button>
+                          )}
+                          {(record.status === "downloading" || record.status === "pending" || record.status === "queued" || record.status === "paused") && (
+                            <button
+                              onClick={() => handlePriorityDownload(record.id)}
+                              style={{
+                                padding: "0.25rem 0.5rem",
+                                fontSize: "0.8rem",
+                                border: "1px solid #ffc107",
+                                backgroundColor: "#fff8e1",
+                                color: "#f57f17",
+                                borderRadius: "4px",
+                                cursor: "pointer",
+                              }}
+                              title="设置优先级"
+                            >
+                              ⭐ 置顶
+                            </button>
+                          )}
                           <button
-                            onClick={() => handlePauseDownload(record.id)}
-                            style={{
-                              padding: "0.25rem 0.5rem",
-                              fontSize: "0.8rem",
-                              border: "1px solid #ff9800",
-                              backgroundColor: "#fff3e0",
-                              color: "#e65100",
-                              borderRadius: "4px",
-                              cursor: "pointer",
-                            }}
-                            title="暂停下载"
-                          >
-                            ⏸️ 暂停
-                          </button>
-                        )}
-                        {record.status === "paused" && (
-                          <button
-                            onClick={() => handleResumeDownload(record.id)}
-                            style={{
-                              padding: "0.25rem 0.5rem",
-                              fontSize: "0.8rem",
-                              border: "1px solid #4caf50",
-                              backgroundColor: "#e8f5e9",
-                              color: "#2e7d32",
-                              borderRadius: "4px",
-                              cursor: "pointer",
-                            }}
-                            title="继续下载"
-                          >
-                            ▶️ 开始
-                          </button>
-                        )}
-                        {(record.status === "downloading" || record.status === "pending" || record.status === "queued" || record.status === "paused") && (
-                          <button
-                            onClick={() => handlePriorityDownload(record.id)}
-                            style={{
-                              padding: "0.25rem 0.5rem",
-                              fontSize: "0.8rem",
-                              border: "1px solid #ffc107",
-                              backgroundColor: "#fff8e1",
-                              color: "#f57f17",
-                              borderRadius: "4px",
-                              cursor: "pointer",
-                            }}
-                            title="设置优先级"
-                          >
-                            ⭐ 置顶
-                          </button>
-                        )}
-                        <button
                           onClick={() => handleDeleteDownload(record.id, false)}
                           style={{
                             padding: "0.25rem 0.5rem",
@@ -1152,23 +1152,23 @@ export default function Dashboard() {
                         </button>
                         <button
                           onClick={() => handleDeleteDownload(record.id, true)}
-                          style={{
-                            padding: "0.25rem 0.5rem",
-                            fontSize: "0.8rem",
-                            border: "1px solid #f44336",
-                            backgroundColor: "#ffebee",
-                            color: "#c62828",
-                            borderRadius: "4px",
-                            cursor: "pointer",
-                          }}
+                            style={{
+                              padding: "0.25rem 0.5rem",
+                              fontSize: "0.8rem",
+                              border: "1px solid #f44336",
+                              backgroundColor: "#ffebee",
+                              color: "#c62828",
+                              borderRadius: "4px",
+                              cursor: "pointer",
+                            }}
                           title="删除记录和文件"
-                        >
+                          >
                           🗑️ 记录+文件
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
               </tbody>
             </table>
           )}
