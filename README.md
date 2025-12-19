@@ -4,7 +4,7 @@
 
 # Telegram Depiler
 
-[![Version](https://img.shields.io/badge/version-1.0.5-blue)](https://github.com/APecme/Telegram_Depiler/releases/tag/v1.0.5)
+[![Version](https://img.shields.io/badge/version-1.0.29-blue)](https://github.com/APecme/Telegram_Depiler/releases/tag/v1.0.29)
 [![Docker Image](https://img.shields.io/docker/v/apecme/telegram-depiler?label=Docker&logo=docker)](https://hub.docker.com/r/apecme/telegram-depiler)
 [![Docker Pulls](https://img.shields.io/docker/pulls/apecme/telegram-depiler)](https://hub.docker.com/r/apecme/telegram-depiler)
 [![GitHub Stars](https://img.shields.io/github/stars/APecme/Telegram_Depiler)](https://github.com/APecme/Telegram_Depiler)
