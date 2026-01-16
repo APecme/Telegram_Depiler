@@ -103,6 +103,7 @@ class Database:
                     end_time DATETIME,
                     min_message_id INTEGER,
                     max_message_id INTEGER,
+                    add_download_suffix BOOLEAN DEFAULT 0, -- 是否为未完成文件添加.download后缀
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 );
@@ -202,6 +203,8 @@ class Database:
                 conn.execute("ALTER TABLE group_download_rules ADD COLUMN min_message_id INTEGER")
             if not has_column("group_download_rules", "max_message_id"):
                 conn.execute("ALTER TABLE group_download_rules ADD COLUMN max_message_id INTEGER")
+            if not has_column("group_download_rules", "add_download_suffix"):
+                conn.execute("ALTER TABLE group_download_rules ADD COLUMN add_download_suffix BOOLEAN DEFAULT 0")
 
         conn.commit()
 
@@ -635,6 +638,7 @@ class Database:
         end_time: str | None = None,
         min_message_id: int | None = None,
         max_message_id: int | None = None,
+        add_download_suffix: bool = False,
     ) -> int:
         """新增一条群聊下载规则，返回规则ID。"""
         with self._connect() as conn:
@@ -645,9 +649,9 @@ class Database:
                     include_extensions, min_size_bytes, max_size_bytes, size_range, save_dir,
                     filename_template, include_keywords, exclude_keywords,
                     match_mode, start_time, end_time,
-                    min_message_id, max_message_id
+                    min_message_id, max_message_id, add_download_suffix
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     chat_id,
@@ -667,6 +671,7 @@ class Database:
                     end_time,
                     min_message_id,
                     max_message_id,
+                    1 if add_download_suffix else 0,
                 ),
             )
             conn.commit()
@@ -692,6 +697,7 @@ class Database:
         end_time: str | None = None,
         min_message_id: int | None = None,
         max_message_id: int | None = None,
+        add_download_suffix: bool | None = None,
     ) -> None:
         """更新一条群聊下载规则。"""
         updates: list[str] = []
@@ -745,6 +751,9 @@ class Database:
         if max_message_id is not None:
             updates.append("max_message_id = ?")
             params.append(int(max_message_id))
+        if add_download_suffix is not None:
+            updates.append("add_download_suffix = ?")
+            params.append(1 if add_download_suffix else 0)
 
         if not updates:
             return

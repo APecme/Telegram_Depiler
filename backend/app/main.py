@@ -262,7 +262,7 @@ async def _ensure_bot_handler_running() -> None:
 
     条件：
     - 已配置 bot_token 和 bot_username
-    - 用户账户已登录（is_user_authorized 为 True）
+    - 用户账户已登录（is_user_authorized 为 True 或数据库中有登录状态）
     - 当前没有正在运行的 bot_handler
     """
     global bot_handler
@@ -274,6 +274,10 @@ async def _ensure_bot_handler_running() -> None:
         logger.info("Bot Token 或 Bot Username 未配置，跳过自动启动 Bot 命令处理器")
         return
 
+    # 检查数据库中的登录状态，如果客户端连接失败但数据库中有状态，说明可能是连接问题
+    login_state = database.get_login_state()
+    user_logged_in_db = login_state and login_state.get("is_authorized", False)
+
     try:
         client = await worker._get_client()
     except Exception as exc:  # pragma: no cover - 防御性
@@ -281,7 +285,25 @@ async def _ensure_bot_handler_running() -> None:
         return
 
     try:
-        if not await client.is_user_authorized():
+        user_authorized = await client.is_user_authorized()
+
+        # 如果客户端说未授权，但数据库中有登录状态，可能需要重新连接
+        if not user_authorized and user_logged_in_db:
+            logger.info("客户端连接状态与数据库不一致，尝试重新连接...")
+            # 重新获取客户端（可能重建连接）
+            try:
+                client = await worker._get_client()
+                user_authorized = await client.is_user_authorized()
+                if user_authorized:
+                    logger.info("重新连接成功，用户账户已确认登录")
+                else:
+                    logger.warning("重新连接后仍未授权，清除数据库登录状态")
+                    database.clear_login_state()
+                    return
+            except Exception as reconnect_exc:
+                logger.warning("重新连接失败: %s", reconnect_exc)
+                return
+        elif not user_authorized:
             logger.info("用户账户未登录，暂不自动启动 Bot 命令处理器")
             return
 
@@ -291,10 +313,10 @@ async def _ensure_bot_handler_running() -> None:
         bot_handler = BotCommandHandler(settings, database, client, worker, queue_manager=download_queue_manager)
         await bot_handler.start()
         logger.info("Bot 命令处理器已自动启动")
-        
+
         # 设置Bot客户端到worker，用于发送群聊下载通知
         worker.set_bot_client(bot_handler._bot_client)
-        
+
         # 同时启动用户账户的事件监听器，用于监控群聊消息
         await worker.start_bot_listener(settings.bot_username)
         logger.info("用户账户事件监听器已自动启动，开始监控群聊消息")
@@ -976,6 +998,36 @@ async def get_default_download_path(
     return {"path": default_path}
 
 
+@api.get("/config/default-filename-template")
+async def get_default_filename_template(
+    x_admin_token: str | None = Header(default=None, alias="X-Admin-Token"),
+) -> dict:
+    """获取默认文件名模板"""
+    _require_admin(x_admin_token)
+    template = database.get_config("default_filename_template")
+    if not template:
+        template = "{task_id}_{file_name}"
+        # 初始化默认模板到数据库
+        database.set_config({"default_filename_template": template})
+    return {"template": template}
+
+
+@api.put("/config/default-filename-template")
+async def update_default_filename_template(
+    body: dict = Body(default={}),
+    x_admin_token: str | None = Header(default=None, alias="X-Admin-Token"),
+) -> dict:
+    """更新默认文件名模板"""
+    _require_admin(x_admin_token)
+
+    template = (body or {}).get("template", "").strip()
+    if not template:
+        raise HTTPException(status_code=400, detail="文件名模板不能为空")
+
+    database.set_config({"default_filename_template": template})
+    return {"status": "updated", "template": template}
+
+
 @api.put("/config/default-download-path")
 async def update_default_download_path(
     body: dict = Body(default={}),
@@ -1053,6 +1105,7 @@ async def create_group_rule(body: GroupRuleCreate) -> dict:
         match_mode=body.match_mode,
         start_time=body.start_time.isoformat() if body.start_time else None,
         end_time=body.end_time.isoformat() if body.end_time else None,
+        add_download_suffix=body.add_download_suffix,
     )
     rule = database.get_group_rule(rule_id)
     return {"id": rule_id, "rule": rule}
@@ -1099,6 +1152,7 @@ async def update_group_rule(rule_id: int, body: GroupRuleUpdate) -> dict:
         match_mode=body.match_mode,
         start_time=body.start_time.isoformat() if body.start_time else None,
         end_time=body.end_time.isoformat() if body.end_time else None,
+        add_download_suffix=body.add_download_suffix,
     )
     rule = database.get_group_rule(rule_id)
     if not rule:

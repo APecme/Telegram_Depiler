@@ -1518,7 +1518,13 @@ class TelegramWorker:
             # 确保所有父目录都存在（支持文件名模板中的子目录）
             target_path.parent.mkdir(parents=True, exist_ok=True)
 
-            # 将最终保存路径和文件名写回数据库，便于前端展示“文件名/源文件名”
+            # 如果启用了添加下载后缀功能，修改下载路径为带后缀的文件名
+            actual_target_path = target_path
+            if rule.get('add_download_suffix', False):
+                actual_target_path = target_path.with_name(target_path.name + '.download')
+                logger.debug("启用下载后缀，临时文件路径: %s", actual_target_path)
+
+            # 将最终保存路径和文件名写回数据库，便于前端展示"文件名/源文件名"
             try:
                 self.database.update_download(
                     download_id,
@@ -1528,8 +1534,8 @@ class TelegramWorker:
                 )
             except Exception as e:
                 logger.debug("更新下载记录保存路径失败: %s", e)
-            
-            logger.info("开始下载文件: %s -> %s", original_file_name, target_path)
+
+            logger.info("开始下载文件: %s -> %s", original_file_name, actual_target_path)
             
             # 获取文件大小
             file_size = 0
@@ -1633,13 +1639,21 @@ class TelegramWorker:
                 raise asyncio.CancelledError("下载已被用户取消")
             
             await message.download_media(
-                file=target_path,
+                file=actual_target_path,
                 progress_callback=progress_callback if file_size > 0 else None
             )
-            
+
+            # 如果使用了下载后缀，下载完成后重命名文件移除后缀
+            if rule.get('add_download_suffix', False) and actual_target_path != target_path:
+                try:
+                    actual_target_path.rename(target_path)
+                    logger.debug("下载完成，重命名文件移除后缀: %s -> %s", actual_target_path, target_path)
+                except Exception as e:
+                    logger.warning("重命名文件失败，文件可能仍带有.download后缀: %s", e)
+
             self.database.update_download(
-                download_id, 
-                status="completed", 
+                download_id,
+                status="completed",
                 file_path=str(target_path),
                 progress=100.0,
                 download_speed=0.0
@@ -1687,14 +1701,21 @@ class TelegramWorker:
             # 下载被取消
             logger.info("下载任务 %d 已被取消", download_id if 'download_id' in locals() else 0)
             if 'download_id' in locals():
-                # 删除未完成的文件
-                if 'target_path' in locals() and target_path.exists():
-                    try:
-                        target_path.unlink()
-                        logger.info("已删除未完成的文件: %s", target_path)
-                    except Exception as e:
-                        logger.warning("删除未完成文件失败: %s", e)
-                
+                # 删除未完成的文件（包括带后缀的临时文件）
+                cleanup_paths = []
+                if 'target_path' in locals():
+                    cleanup_paths.append(target_path)
+                if 'actual_target_path' in locals() and actual_target_path != target_path:
+                    cleanup_paths.append(actual_target_path)
+
+                for path in cleanup_paths:
+                    if path.exists():
+                        try:
+                            path.unlink()
+                            logger.info("已删除未完成的文件: %s", path)
+                        except Exception as e:
+                            logger.warning("删除未完成文件失败: %s", e)
+
                 # 数据库状态已在 cancel_download 中更新，这里不需要再更新
                 # Bot消息已在 _handle_delete_download 中更新
             raise  # 重新抛出以便任务正确结束
@@ -1702,10 +1723,25 @@ class TelegramWorker:
         except Exception as exc:
             logger.exception("按规则下载文件失败: %s", exc)
             if 'download_id' in locals():
+                # 删除失败的下载文件
+                cleanup_paths = []
+                if 'target_path' in locals():
+                    cleanup_paths.append(target_path)
+                if 'actual_target_path' in locals() and actual_target_path != target_path:
+                    cleanup_paths.append(actual_target_path)
+
+                for path in cleanup_paths:
+                    if path.exists():
+                        try:
+                            path.unlink()
+                            logger.info("已删除失败的下载文件: %s", path)
+                        except Exception as e:
+                            logger.warning("删除失败的下载文件失败: %s", e)
+
                 self.database.update_download(
                     download_id, status="failed", error=str(exc)
                 )
-                
+
                 # 通知队列管理器，尝试启动下一个任务
                 if self.queue_manager:
                     await self.queue_manager.on_download_finished(download_id)

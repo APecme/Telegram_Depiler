@@ -87,6 +87,7 @@ class GroupRuleCreate(BaseModel):
     end_time: Optional[datetime] = None  # 仅 history 模式使用
     min_message_id: Optional[int] = None  # 仅 history 模式使用：消息ID起始
     max_message_id: Optional[int] = None  # 仅 history 模式使用：消息ID结束
+    add_download_suffix: bool = False  # 是否为未完成文件添加.download后缀
 
 
 class GroupRuleUpdate(BaseModel):
@@ -104,6 +105,7 @@ class GroupRuleUpdate(BaseModel):
     end_time: Optional[datetime] = None
     min_message_id: Optional[int] = None
     max_message_id: Optional[int] = None
+    add_download_suffix: Optional[bool] = None  # 是否为未完成文件添加.download后缀
 
 
 class AdminLoginRequest(BaseModel):

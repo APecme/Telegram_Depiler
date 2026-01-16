@@ -71,6 +71,7 @@ type GroupRule = {
   start_time?: string;
   end_time?: string;
   enabled: boolean;
+  add_download_suffix?: boolean;
   created_at: string;
 };
 
@@ -118,11 +119,14 @@ export default function Dashboard() {
   const [formMatchMode, setFormMatchMode] = useState<"all" | "include" | "exclude">("all");
   const [formIncludeKeywords, setFormIncludeKeywords] = useState("");
   const [formExcludeKeywords, setFormExcludeKeywords] = useState("");
+  const [formAddDownloadSuffix, setFormAddDownloadSuffix] = useState(false);
   const [dirOptions, setDirOptions] = useState<string[]>([]);
   const [dirLoading, setDirLoading] = useState(false);
   const [notification, setNotification] = useState<{message: string; type: "success" | "error" | "info"} | null>(null);
   const [defaultDownloadPath, setDefaultDownloadPath] = useState<string>("");
+  const [defaultFilenameTemplate, setDefaultFilenameTemplate] = useState<string>("{task_id}_{file_name}");
   const [showDefaultPathModal, setShowDefaultPathModal] = useState(false);
+  const [showFilenameTemplateModal, setShowFilenameTemplateModal] = useState(false);
   const [selectedDefaultPath, setSelectedDefaultPath] = useState<string>("");
 
   useEffect(() => {
@@ -134,6 +138,7 @@ export default function Dashboard() {
     fetchDialogs();
     fetchLogs();
     fetchDefaultDownloadPath();
+    fetchDefaultFilenameTemplate();
     const interval = setInterval(() => {
       fetchDownloads();
       fetchLogs();
@@ -147,6 +152,15 @@ export default function Dashboard() {
       setDefaultDownloadPath(data.path || "");
     } catch (error) {
       console.error("Failed to fetch default download path:", error);
+    }
+  };
+
+  const fetchDefaultFilenameTemplate = async () => {
+    try {
+      const { data } = await api.get("/config/default-filename-template");
+      setDefaultFilenameTemplate(data.template || "{task_id}_{file_name}");
+    } catch (error) {
+      console.error("Failed to fetch default filename template:", error);
     }
   };
 
@@ -433,6 +447,7 @@ export default function Dashboard() {
     setFormMatchMode((rule.match_mode as "all" | "include" | "exclude") || "all");
     setFormIncludeKeywords(rule.include_keywords || "");
     setFormExcludeKeywords(rule.exclude_keywords || "");
+    setFormAddDownloadSuffix(rule.add_download_suffix || false);
     setShowRuleModal(true);
     // 如果已有保存路径，加载该路径的父目录
     if (rule.save_dir) {
@@ -459,6 +474,7 @@ export default function Dashboard() {
       include_keywords: formMatchMode === "include" ? formIncludeKeywords : null,
       exclude_keywords: formMatchMode === "exclude" ? formExcludeKeywords : null,
       enabled: true,
+      add_download_suffix: formAddDownloadSuffix,
     };
 
     try {
@@ -553,11 +569,11 @@ export default function Dashboard() {
 
         {/* 默认下载路径显示 */}
         {defaultDownloadPath && (
-          <div style={{ 
-            marginBottom: "1.5rem", 
-            padding: "0.75rem 1rem", 
-            backgroundColor: "#e3f2fd", 
-            border: "1px solid #2196f3", 
+          <div style={{
+            marginBottom: "1.5rem",
+            padding: "0.75rem 1rem",
+            backgroundColor: "#e3f2fd",
+            border: "1px solid #2196f3",
             borderRadius: "6px",
             display: "flex",
             alignItems: "center",
@@ -572,29 +588,49 @@ export default function Dashboard() {
                 {defaultDownloadPath}
               </div>
               <div style={{ fontSize: "0.75rem", color: "#666", marginTop: "0.25rem" }}>
+                默认文件名模板：{defaultFilenameTemplate}
+              </div>
+              <div style={{ fontSize: "0.75rem", color: "#666", marginTop: "0.25rem" }}>
                 当规则未指定保存路径时，文件将保存到此路径
               </div>
             </div>
-            <button
-              onClick={() => {
-                setSelectedDefaultPath("");
-                setCurrentBrowsePath("");
-                fetchDirectories("");
-                setShowDefaultPathModal(true);
-              }}
-              style={{
-                padding: "0.4rem 0.8rem",
-                fontSize: "0.8rem",
-                borderRadius: "6px",
-                border: "1px solid #2196f3",
-                backgroundColor: "white",
-                color: "#2196f3",
-                cursor: "pointer",
-                whiteSpace: "nowrap",
-              }}
-            >
-              📂 选择路径
-            </button>
+            <div style={{ display: "flex", gap: "0.5rem" }}>
+              <button
+                onClick={() => setShowFilenameTemplateModal(true)}
+                style={{
+                  padding: "0.4rem 0.8rem",
+                  fontSize: "0.8rem",
+                  borderRadius: "6px",
+                  border: "1px solid #2196f3",
+                  backgroundColor: "white",
+                  color: "#2196f3",
+                  cursor: "pointer",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                ✏️ 编辑模板
+              </button>
+              <button
+                onClick={() => {
+                  setSelectedDefaultPath("");
+                  setCurrentBrowsePath("");
+                  fetchDirectories("");
+                  setShowDefaultPathModal(true);
+                }}
+                style={{
+                  padding: "0.4rem 0.8rem",
+                  fontSize: "0.8rem",
+                  borderRadius: "6px",
+                  border: "1px solid #2196f3",
+                  backgroundColor: "white",
+                  color: "#2196f3",
+                  cursor: "pointer",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                📂 选择路径
+              </button>
+            </div>
           </div>
         )}
 
@@ -1822,6 +1858,20 @@ export default function Dashboard() {
                   />
                 )}
               </div>
+
+              <div>
+                <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontWeight: "500" }}>
+                  <input
+                    type="checkbox"
+                    checked={formAddDownloadSuffix}
+                    onChange={(e) => setFormAddDownloadSuffix(e.target.checked)}
+                  />
+                  为未完成文件添加 .download 后缀
+                </label>
+                <small style={{ display: "block", marginTop: "0.25rem", color: "#666", fontSize: "0.8rem" }}>
+                  下载过程中会在文件名末尾添加 .download 后缀，下载完成后自动移除
+                </small>
+              </div>
             </div>
 
             <div style={{ marginTop: "2rem", display: "flex", gap: "1rem", justifyContent: "flex-end" }}>
@@ -2051,6 +2101,119 @@ export default function Dashboard() {
                 }}
               >
                 保存为默认路径
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 默认文件名模板编辑模态框 */}
+      {showFilenameTemplateModal && (
+        <div style={{
+          position: "fixed",
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: "rgba(0,0,0,0.5)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          zIndex: 1000,
+        }}>
+          <div style={{
+            backgroundColor: "white",
+            borderRadius: "8px",
+            padding: "1.5rem",
+            maxWidth: "500px",
+            width: "90%",
+          }}>
+            <h2 style={{ marginTop: 0, marginBottom: "1rem" }}>编辑默认文件名模板</h2>
+            <p style={{ marginTop: 0, marginBottom: "1rem", fontSize: "0.9rem", color: "#555" }}>
+              设置默认的文件名模板，当规则未指定文件名模板时将使用此模板。
+            </p>
+
+            <div style={{ marginBottom: "1rem" }}>
+              <label style={{ display: "block", marginBottom: "0.5rem", fontWeight: 600 }}>
+                文件名模板
+              </label>
+              <input
+                type="text"
+                value={defaultFilenameTemplate}
+                onChange={(e) => setDefaultFilenameTemplate(e.target.value)}
+                placeholder="{task_id}_{file_name}"
+                style={{
+                  width: "100%",
+                  padding: "0.5rem",
+                  border: "1px solid #ddd",
+                  borderRadius: "4px",
+                  fontSize: "0.9rem",
+                }}
+              />
+            </div>
+
+            <div style={{ marginBottom: "1rem", padding: "0.75rem", backgroundColor: "#f8f9fa", borderRadius: "4px" }}>
+              <h4 style={{ margin: "0 0 0.5rem 0", fontSize: "0.9rem", color: "#333" }}>可用变量</h4>
+              <div style={{ fontSize: "0.85rem", color: "#666", lineHeight: "1.4" }}>
+                <div><code>{`{task_id}`}</code> - 下载任务ID</div>
+                <div><code>{`{message_id}`}</code> - 消息ID</div>
+                <div><code>{`{chat_title}`}</code> - 群聊标题</div>
+                <div><code>{`{timestamp}`}</code> - 时间戳</div>
+                <div><code>{`{file_name}`}</code> - 原始文件名</div>
+                <div><code>{`{year}`}</code> - 年份 (4位)</div>
+                <div><code>{`{month}`}</code> - 月份 (2位)</div>
+                <div><code>{`{day}`}</code> - 日期 (2位)</div>
+              </div>
+            </div>
+
+            <div style={{ marginBottom: "1rem", padding: "0.75rem", backgroundColor: "#e3f2fd", borderRadius: "4px" }}>
+              <div style={{ fontSize: "0.85rem", color: "#1565c0" }}>
+                <strong>示例：</strong> {defaultFilenameTemplate.replace('{task_id}', '123').replace('{file_name}', 'video.mp4')}
+              </div>
+            </div>
+
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.75rem" }}>
+              <button
+                onClick={() => setShowFilenameTemplateModal(false)}
+                style={{
+                  padding: "0.5rem 1.2rem",
+                  backgroundColor: "#f5f5f5",
+                  borderRadius: "6px",
+                  border: "none",
+                  cursor: "pointer",
+                }}
+              >
+                取消
+              </button>
+              <button
+                onClick={async () => {
+                  try {
+                    if (!defaultFilenameTemplate.trim()) {
+                      showNotification("文件名模板不能为空", "error");
+                      return;
+                    }
+                    await api.put("/config/default-filename-template", {
+                      template: defaultFilenameTemplate.trim()
+                    });
+                    await fetchDefaultFilenameTemplate();
+                    showNotification("默认文件名模板已更新", "success");
+                    setShowFilenameTemplateModal(false);
+                  } catch (error) {
+                    console.error("Failed to update default filename template:", error);
+                    showNotification("更新默认文件名模板失败", "error");
+                  }
+                }}
+                style={{
+                  padding: "0.5rem 1.5rem",
+                  backgroundColor: "#2196f3",
+                  color: "white",
+                  borderRadius: "6px",
+                  border: "none",
+                  cursor: "pointer",
+                  fontWeight: 500,
+                }}
+              >
+                保存模板
               </button>
             </div>
           </div>
