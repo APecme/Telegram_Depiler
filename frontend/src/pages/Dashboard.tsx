@@ -74,6 +74,7 @@ type GroupRule = {
   enabled: boolean;
   add_download_suffix?: boolean;
   move_after_complete?: boolean;
+  auto_catch_up?: boolean;
   created_at: string;
 };
 
@@ -125,6 +126,7 @@ export default function Dashboard() {
   const [formExcludeKeywords, setFormExcludeKeywords] = useState("");
   const [formAddDownloadSuffix, setFormAddDownloadSuffix] = useState(false);
   const [formMoveAfterComplete, setFormMoveAfterComplete] = useState(false);
+  const [formAutoCatchUp, setFormAutoCatchUp] = useState(false);
   const [dirOptions, setDirOptions] = useState<string[]>([]);
   const [dirLoading, setDirLoading] = useState(false);
   const [notification, setNotification] = useState<{message: string; type: "success" | "error" | "info"} | null>(null);
@@ -452,6 +454,7 @@ export default function Dashboard() {
     setFormIncludeKeywords("");
     setFormExcludeKeywords("");
     setFormMoveAfterComplete(false);
+    setFormAutoCatchUp(false);
     setShowRuleModal(true);
   };
 
@@ -471,6 +474,7 @@ export default function Dashboard() {
     setFormExcludeKeywords(rule.exclude_keywords || "");
     setFormAddDownloadSuffix(rule.add_download_suffix || false);
     setFormMoveAfterComplete(rule.move_after_complete || false);
+    setFormAutoCatchUp(rule.auto_catch_up || false);
     setShowRuleModal(true);
     // 如果已有保存路径，加载该路径的父目录
     if (rule.save_dir) {
@@ -505,6 +509,7 @@ export default function Dashboard() {
       enabled: true,
       add_download_suffix: formAddDownloadSuffix,
       move_after_complete: formMoveAfterComplete,
+      auto_catch_up: formAutoCatchUp,
     };
 
     try {
@@ -2179,6 +2184,20 @@ export default function Dashboard() {
                 </label>
                 <small style={{ display: "block", marginTop: "0.25rem", color: "#666", fontSize: "0.8rem" }}>
                   开启后会先下载到目标目录下的隐藏临时目录，完成后再移动到最终路径，避免目标目录出现未完成文件
+                </small>
+              </div>
+
+              <div>
+                <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontWeight: "500" }}>
+                  <input
+                    type="checkbox"
+                    checked={formAutoCatchUp}
+                    onChange={(e) => setFormAutoCatchUp(e.target.checked)}
+                  />
+                  启动时自动下载遗漏消息
+                </label>
+                <small style={{ display: "block", marginTop: "0.25rem", color: "#666", fontSize: "0.8rem" }}>
+                  开启后程序启动会扫描本群自上次记录以来的新消息，并按本规则匹配下载
                 </small>
               </div>
             </div>

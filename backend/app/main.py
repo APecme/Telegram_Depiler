@@ -320,6 +320,8 @@ async def _ensure_bot_handler_running() -> None:
         # 同时启动用户账户的事件监听器，用于监控群聊消息
         await worker.start_bot_listener(settings.bot_username)
         logger.info("用户账户事件监听器已自动启动，开始监控群聊消息")
+
+        asyncio.create_task(worker.catch_up_missed_group_messages())
     except Exception as exc:  # pragma: no cover - 防御性
         logger.warning("自动启动 Bot 命令处理器失败: %s", exc)
 
@@ -635,6 +637,7 @@ async def start_bot(body: StartBotRequest) -> dict:
         # 同时启动用户账户的事件监听器，用于监控群聊消息
         await worker.start_bot_listener(body.bot_username)
         logger.info("用户账户事件监听器已启动，开始监控群聊消息")
+        asyncio.create_task(worker.catch_up_missed_group_messages())
         
         return {"status": "bot_started", "bot_username": body.bot_username}
     except (PermissionError, ValueError) as exc:
@@ -1108,6 +1111,7 @@ async def create_group_rule(body: GroupRuleCreate) -> dict:
         end_time=body.end_time.isoformat() if body.end_time else None,
         add_download_suffix=body.add_download_suffix,
         move_after_complete=body.move_after_complete,
+        auto_catch_up=body.auto_catch_up,
     )
     rule = database.get_group_rule(rule_id)
     return {"id": rule_id, "rule": rule}
@@ -1157,6 +1161,7 @@ async def update_group_rule(rule_id: int, body: GroupRuleUpdate) -> dict:
         end_time=body.end_time.isoformat() if body.end_time else None,
         add_download_suffix=body.add_download_suffix,
         move_after_complete=body.move_after_complete,
+        auto_catch_up=body.auto_catch_up,
     )
     rule = database.get_group_rule(rule_id)
     if not rule:

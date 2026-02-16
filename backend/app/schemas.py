@@ -90,6 +90,7 @@ class GroupRuleCreate(BaseModel):
     max_message_id: Optional[int] = None  # 仅 history 模式使用：消息ID结束
     add_download_suffix: bool = False  # 是否为未完成文件添加.download后缀
     move_after_complete: bool = False  # 下载完成后再移动到目标目录
+    auto_catch_up: bool = False  # 启动时自动回补遗漏消息
 
 
 class GroupRuleUpdate(BaseModel):
@@ -110,6 +111,7 @@ class GroupRuleUpdate(BaseModel):
     max_message_id: Optional[int] = None
     add_download_suffix: Optional[bool] = None  # 是否为未完成文件添加.download后缀
     move_after_complete: Optional[bool] = None  # 下载完成后再移动到目标目录
+    auto_catch_up: Optional[bool] = None
 
 
 class AdminLoginRequest(BaseModel):

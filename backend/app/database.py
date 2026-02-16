@@ -106,6 +106,8 @@ class Database:
                     max_message_id INTEGER,
                     add_download_suffix BOOLEAN DEFAULT 0, -- 是否为未完成文件添加.download后缀
                     move_after_complete BOOLEAN DEFAULT 0, -- 下载完成后再移动到目标目录
+                    auto_catch_up BOOLEAN DEFAULT 0, -- 启动时自动回补遗漏消息
+                    last_seen_message_id INTEGER DEFAULT 0,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 );
@@ -211,6 +213,10 @@ class Database:
                 conn.execute("ALTER TABLE group_download_rules ADD COLUMN rule_name TEXT")
             if not has_column("group_download_rules", "move_after_complete"):
                 conn.execute("ALTER TABLE group_download_rules ADD COLUMN move_after_complete BOOLEAN DEFAULT 0")
+            if not has_column("group_download_rules", "auto_catch_up"):
+                conn.execute("ALTER TABLE group_download_rules ADD COLUMN auto_catch_up BOOLEAN DEFAULT 0")
+            if not has_column("group_download_rules", "last_seen_message_id"):
+                conn.execute("ALTER TABLE group_download_rules ADD COLUMN last_seen_message_id INTEGER DEFAULT 0")
 
         conn.commit()
 
@@ -647,6 +653,8 @@ class Database:
         max_message_id: int | None = None,
         add_download_suffix: bool = False,
         move_after_complete: bool = False,
+        auto_catch_up: bool = False,
+        last_seen_message_id: int = 0,
     ) -> int:
         """新增一条群聊下载规则，返回规则ID。"""
         with self._connect() as conn:
@@ -657,9 +665,10 @@ class Database:
                     include_extensions, min_size_bytes, max_size_bytes, size_range, save_dir,
                     filename_template, include_keywords, exclude_keywords,
                     match_mode, start_time, end_time,
-                    min_message_id, max_message_id, add_download_suffix, move_after_complete
+                    min_message_id, max_message_id, add_download_suffix, move_after_complete,
+                    auto_catch_up, last_seen_message_id
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     chat_id,
@@ -682,6 +691,8 @@ class Database:
                     max_message_id,
                     1 if add_download_suffix else 0,
                     1 if move_after_complete else 0,
+                    1 if auto_catch_up else 0,
+                    int(last_seen_message_id or 0),
                 ),
             )
             conn.commit()
@@ -710,6 +721,8 @@ class Database:
         max_message_id: int | None = None,
         add_download_suffix: bool | None = None,
         move_after_complete: bool | None = None,
+        auto_catch_up: bool | None = None,
+        last_seen_message_id: int | None = None,
     ) -> None:
         """更新一条群聊下载规则。"""
         updates: list[str] = []
@@ -772,6 +785,12 @@ class Database:
         if move_after_complete is not None:
             updates.append("move_after_complete = ?")
             params.append(1 if move_after_complete else 0)
+        if auto_catch_up is not None:
+            updates.append("auto_catch_up = ?")
+            params.append(1 if auto_catch_up else 0)
+        if last_seen_message_id is not None:
+            updates.append("last_seen_message_id = ?")
+            params.append(int(last_seen_message_id))
 
         if not updates:
             return
@@ -844,3 +863,29 @@ class Database:
         with self._connect() as conn:
             rows = conn.execute(sql, params).fetchall()
             return [dict(row) for row in rows]
+
+    def list_auto_catch_up_rules(self) -> List[Dict[str, Any]]:
+        sql = "SELECT * FROM group_download_rules WHERE enabled = 1 AND mode = 'monitor' AND auto_catch_up = 1"
+        sql += " ORDER BY chat_id ASC, id ASC"
+        with self._connect() as conn:
+            rows = conn.execute(sql).fetchall()
+            return [dict(row) for row in rows]
+
+    def update_group_rules_last_seen_message_id(self, rule_ids: List[int], last_seen_message_id: int) -> None:
+        if not rule_ids:
+            return
+        last_seen_message_id = int(last_seen_message_id or 0)
+        placeholders = ",".join(["?"] * len(rule_ids))
+        sql = f"""
+        UPDATE group_download_rules
+        SET last_seen_message_id = CASE
+            WHEN COALESCE(last_seen_message_id, 0) < ? THEN ?
+            ELSE COALESCE(last_seen_message_id, 0)
+        END,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id IN ({placeholders})
+        """
+        params: list[Any] = [last_seen_message_id, last_seen_message_id] + [int(x) for x in rule_ids]
+        with self._connect() as conn:
+            conn.execute(sql, params)
+            conn.commit()

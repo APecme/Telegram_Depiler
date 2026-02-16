@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import socket
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 import sqlite3
@@ -815,6 +816,125 @@ class TelegramWorker:
         
         logger.info("👂 开始监听来自 %s 的消息和群聊消息", bot_username)
 
+    async def catch_up_missed_group_messages(self) -> None:
+        client = await self._get_client()
+        if not await client.is_user_authorized():
+            return
+
+        rules = self.database.list_auto_catch_up_rules()
+        if not rules:
+            return
+
+        by_chat: dict[int, list[dict[str, Any]]] = defaultdict(list)
+        for r in rules:
+            chat_id = r.get("chat_id")
+            if chat_id is None:
+                continue
+            by_chat[int(chat_id)].append(r)
+
+        for chat_id, chat_rules in by_chat.items():
+            try:
+                chat = await client.get_entity(chat_id)
+            except Exception as exc:
+                logger.warning("遗漏回补获取群实体失败 (chat_id=%s): %s", chat_id, exc)
+                continue
+
+            rule_ids = [int(r["id"]) for r in chat_rules if r.get("id") is not None]
+            if not rule_ids:
+                continue
+
+            last_seen = min(int(r.get("last_seen_message_id") or 0) for r in chat_rules)
+            if last_seen <= 0:
+                try:
+                    latest = await client.get_messages(chat, limit=1)
+                    latest_id = int(latest[0].id) if latest else 0
+                    if latest_id > 0:
+                        self.database.update_group_rules_last_seen_message_id(rule_ids, latest_id)
+                except Exception:
+                    pass
+                continue
+
+            scanned = 0
+            max_scan = 5000
+            seen_grouped_ids: set[int] = set()
+            async for msg in client.iter_messages(chat, min_id=last_seen, reverse=True):
+                if not msg:
+                    continue
+
+                grouped_id = getattr(msg, "grouped_id", None)
+                if grouped_id and grouped_id in seen_grouped_ids:
+                    if getattr(msg, "id", None):
+                        self.database.update_group_rules_last_seen_message_id(rule_ids, int(msg.id))
+                    continue
+
+                try:
+                    sender = await msg.get_sender()
+                except Exception:
+                    sender = None
+
+                last_id = await self._apply_monitor_rules_to_message(
+                    msg=msg,
+                    chat=chat,
+                    sender=sender,
+                    rules=chat_rules,
+                    seen_grouped_ids=seen_grouped_ids,
+                )
+                if last_id > 0:
+                    self.database.update_group_rules_last_seen_message_id(rule_ids, last_id)
+
+                scanned += 1
+                if scanned >= max_scan:
+                    logger.warning("遗漏回补已达上限，后续消息将留到下次启动处理 (chat_id=%s)", chat_id)
+                    break
+
+    async def _apply_monitor_rules_to_message(
+        self,
+        *,
+        msg: Any,
+        chat: Any,
+        sender: Any,
+        rules: list[dict[str, Any]],
+        seen_grouped_ids: set[int],
+    ) -> int:
+        last_seen_id = int(getattr(msg, "id", 0) or 0)
+        messages_to_process: list[Any] = [msg]
+
+        grouped_id = getattr(msg, "grouped_id", None)
+        if grouped_id:
+            try:
+                media_group = await msg.get_media_group()
+                media_msgs = [
+                    m for m in media_group
+                    if (getattr(m, "video", None) or getattr(m, "document", None) or getattr(m, "photo", None) or getattr(m, "audio", None))
+                ]
+                if media_msgs:
+                    min_id = min(m.id for m in media_msgs)
+                    max_id = max(m.id for m in media_msgs)
+                    last_seen_id = int(max_id)
+                    if grouped_id:
+                        seen_grouped_ids.add(int(grouped_id))
+                    if getattr(msg, "id", None) != min_id:
+                        return last_seen_id
+                    messages_to_process = media_msgs
+            except Exception:
+                pass
+
+        any_matched = False
+        for m in messages_to_process:
+            if not (getattr(m, "video", None) or getattr(m, "document", None) or getattr(m, "photo", None) or getattr(m, "audio", None)):
+                continue
+
+            for rule in rules:
+                if self._should_download_by_rule(m, rule):
+                    task = asyncio.create_task(self._download_file_by_rule(m, rule, chat, sender))
+                    task.add_done_callback(lambda t: self._cleanup_download_task(t))
+                    any_matched = True
+                    break
+
+        if any_matched:
+            return last_seen_id
+        return last_seen_id
+
     async def list_dialogs(self) -> list[dict[str, Any]]:
         client = await self._get_client()
         if not await client.is_user_authorized():
@@ -1175,6 +1295,7 @@ class TelegramWorker:
             chat_title = getattr(chat, 'title', 'Unknown')
             chat_id = chat.id
             messages_to_process: list[Any] = [event.message]
+            last_seen_id = int(getattr(event.message, "id", 0) or 0)
 
             # 如果是媒体相册（同一条消息里包含多张图/多个视频），只在相册中的最小 ID 消息上处理一次，并遍历所有媒体
             grouped_id = getattr(event.message, "grouped_id", None)
@@ -1187,8 +1308,18 @@ class TelegramWorker:
                     ]
                     if media_msgs:
                         min_id = min(m.id for m in media_msgs)
+                        max_id = max(m.id for m in media_msgs)
+                        last_seen_id = int(max_id)
                         # 只让相册中的最小 ID 消息负责触发下载，避免重复触发
                         if event.message.id != min_id:
+                            rules = self.database.get_group_rules_for_chat(
+                                chat_id=chat_id,
+                                mode='monitor',
+                                only_enabled=True
+                            )
+                            rule_ids = [int(r["id"]) for r in rules if r.get("auto_catch_up") and r.get("id") is not None]
+                            if rule_ids and last_seen_id > 0:
+                                self.database.update_group_rules_last_seen_message_id(rule_ids, last_seen_id)
                             logger.debug("相册媒体由另一条消息处理 (grouped_id=%s)", grouped_id)
                             return
                         messages_to_process = media_msgs
@@ -1201,6 +1332,10 @@ class TelegramWorker:
                 mode='monitor',
                 only_enabled=True
             )
+
+            rule_ids = [int(r["id"]) for r in rules if r.get("auto_catch_up") and r.get("id") is not None]
+            if rule_ids and last_seen_id > 0:
+                self.database.update_group_rules_last_seen_message_id(rule_ids, last_seen_id)
             
             logger.debug("🔔 群聊 '%s' (ID:%d) 收到新消息", chat_title, chat_id)
             
