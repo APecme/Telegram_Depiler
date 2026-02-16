@@ -1092,6 +1092,7 @@ async def create_group_rule(body: GroupRuleCreate) -> dict:
     rule_id = database.add_group_rule(
         chat_id=body.chat_id,
         chat_title=body.chat_title,
+        rule_name=body.rule_name,
         mode=body.mode,
         enabled=body.enabled,
         include_extensions=body.include_extensions,
@@ -1106,6 +1107,7 @@ async def create_group_rule(body: GroupRuleCreate) -> dict:
         start_time=body.start_time.isoformat() if body.start_time else None,
         end_time=body.end_time.isoformat() if body.end_time else None,
         add_download_suffix=body.add_download_suffix,
+        move_after_complete=body.move_after_complete,
     )
     rule = database.get_group_rule(rule_id)
     return {"id": rule_id, "rule": rule}
@@ -1139,6 +1141,7 @@ async def update_group_rule(rule_id: int, body: GroupRuleUpdate) -> dict:
     database.update_group_rule(
         rule_id,
         chat_title=body.chat_title,
+        rule_name=body.rule_name,
         mode=body.mode,
         enabled=body.enabled,
         include_extensions=body.include_extensions,
@@ -1153,6 +1156,7 @@ async def update_group_rule(rule_id: int, body: GroupRuleUpdate) -> dict:
         start_time=body.start_time.isoformat() if body.start_time else None,
         end_time=body.end_time.isoformat() if body.end_time else None,
         add_download_suffix=body.add_download_suffix,
+        move_after_complete=body.move_after_complete,
     )
     rule = database.get_group_rule(rule_id)
     if not rule:
@@ -1312,4 +1316,3 @@ if settings.static_dir.exists():
         raise HTTPException(status_code=404, detail="Not Found")
 
     app.mount("/", StaticFiles(directory=settings.static_dir, html=True), name="frontend")
-

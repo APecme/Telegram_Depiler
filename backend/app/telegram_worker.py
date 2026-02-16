@@ -1410,7 +1410,7 @@ class TelegramWorker:
                 file_size=file_size,
                 save_dir=rule.get("save_dir") or "",
                 rule_id=rule.get("id"),
-                rule_name=rule.get("chat_title"),
+                rule_name=rule.get("rule_name") or rule.get("chat_title"),
             )
             
             # 检查全局并发限制
@@ -1518,10 +1518,16 @@ class TelegramWorker:
             # 确保所有父目录都存在（支持文件名模板中的子目录）
             target_path.parent.mkdir(parents=True, exist_ok=True)
 
-            # 如果启用了添加下载后缀功能，修改下载路径为带后缀的文件名
-            actual_target_path = target_path
-            if rule.get('add_download_suffix', False):
-                actual_target_path = target_path.with_name(target_path.name + '.download')
+            move_after_complete = bool(rule.get("move_after_complete", False))
+            download_base_path = target_path
+            if move_after_complete:
+                tmp_root = save_path / ".telegram_depiler_tmp"
+                download_base_path = tmp_root / file_name
+                download_base_path.parent.mkdir(parents=True, exist_ok=True)
+
+            actual_target_path = download_base_path
+            if rule.get("add_download_suffix", False):
+                actual_target_path = download_base_path.with_name(download_base_path.name + ".download")
                 logger.debug("启用下载后缀，临时文件路径: %s", actual_target_path)
 
             # 将最终保存路径和文件名写回数据库，便于前端展示"文件名/源文件名"
@@ -1643,13 +1649,36 @@ class TelegramWorker:
                 progress_callback=progress_callback if file_size > 0 else None
             )
 
-            # 如果使用了下载后缀，下载完成后重命名文件移除后缀
-            if rule.get('add_download_suffix', False) and actual_target_path != target_path:
+            downloaded_path = actual_target_path
+            if rule.get("add_download_suffix", False) and actual_target_path != download_base_path:
                 try:
-                    actual_target_path.rename(target_path)
-                    logger.debug("下载完成，重命名文件移除后缀: %s -> %s", actual_target_path, target_path)
+                    actual_target_path.rename(download_base_path)
+                    downloaded_path = download_base_path
+                    logger.debug("下载完成，重命名文件移除后缀: %s -> %s", actual_target_path, download_base_path)
                 except Exception as e:
                     logger.warning("重命名文件失败，文件可能仍带有.download后缀: %s", e)
+
+            if move_after_complete and downloaded_path != target_path:
+                try:
+                    from shutil import move as _move
+
+                    _move(str(downloaded_path), str(target_path))
+                    downloaded_path = target_path
+                    logger.debug("下载完成，移动文件到目标目录: %s -> %s", download_base_path, target_path)
+                except Exception as e:
+                    logger.warning("移动文件到目标目录失败: %s", e)
+                    try:
+                        self.database.update_download(
+                            download_id,
+                            status="failed",
+                            error=f"move_after_complete failed: {e}",
+                            file_path=str(downloaded_path),
+                        )
+                    except Exception:
+                        pass
+                    if self.queue_manager:
+                        await self.queue_manager.on_download_finished(download_id)
+                    return
 
             self.database.update_download(
                 download_id,
@@ -1707,6 +1736,8 @@ class TelegramWorker:
                     cleanup_paths.append(target_path)
                 if 'actual_target_path' in locals() and actual_target_path != target_path:
                     cleanup_paths.append(actual_target_path)
+                if 'download_base_path' in locals() and download_base_path not in cleanup_paths and download_base_path != target_path:
+                    cleanup_paths.append(download_base_path)
 
                 for path in cleanup_paths:
                     if path.exists():
@@ -1775,4 +1806,3 @@ class TelegramWorker:
                         )
                     except Exception as e:
                         logger.warning("更新Bot失败通知失败: %s", e)
-

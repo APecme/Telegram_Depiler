@@ -88,6 +88,7 @@ class Database:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     chat_id INTEGER NOT NULL,
                     chat_title TEXT,
+                    rule_name TEXT,
                     mode TEXT NOT NULL DEFAULT 'monitor', -- 'monitor' 或 'history'
                     enabled BOOLEAN NOT NULL DEFAULT 1,
                     include_extensions TEXT,
@@ -104,6 +105,7 @@ class Database:
                     min_message_id INTEGER,
                     max_message_id INTEGER,
                     add_download_suffix BOOLEAN DEFAULT 0, -- 是否为未完成文件添加.download后缀
+                    move_after_complete BOOLEAN DEFAULT 0, -- 下载完成后再移动到目标目录
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 );
@@ -205,6 +207,10 @@ class Database:
                 conn.execute("ALTER TABLE group_download_rules ADD COLUMN max_message_id INTEGER")
             if not has_column("group_download_rules", "add_download_suffix"):
                 conn.execute("ALTER TABLE group_download_rules ADD COLUMN add_download_suffix BOOLEAN DEFAULT 0")
+            if not has_column("group_download_rules", "rule_name"):
+                conn.execute("ALTER TABLE group_download_rules ADD COLUMN rule_name TEXT")
+            if not has_column("group_download_rules", "move_after_complete"):
+                conn.execute("ALTER TABLE group_download_rules ADD COLUMN move_after_complete BOOLEAN DEFAULT 0")
 
         conn.commit()
 
@@ -623,6 +629,7 @@ class Database:
         *,
         chat_id: int,
         chat_title: str | None = None,
+        rule_name: str | None = None,
         mode: str = "monitor",
         enabled: bool = True,
         include_extensions: str | None = None,
@@ -639,23 +646,25 @@ class Database:
         min_message_id: int | None = None,
         max_message_id: int | None = None,
         add_download_suffix: bool = False,
+        move_after_complete: bool = False,
     ) -> int:
         """新增一条群聊下载规则，返回规则ID。"""
         with self._connect() as conn:
             cur = conn.execute(
                 """
                 INSERT INTO group_download_rules (
-                    chat_id, chat_title, mode, enabled,
+                    chat_id, chat_title, rule_name, mode, enabled,
                     include_extensions, min_size_bytes, max_size_bytes, size_range, save_dir,
                     filename_template, include_keywords, exclude_keywords,
                     match_mode, start_time, end_time,
-                    min_message_id, max_message_id, add_download_suffix
+                    min_message_id, max_message_id, add_download_suffix, move_after_complete
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     chat_id,
                     chat_title,
+                    rule_name,
                     mode,
                     1 if enabled else 0,
                     (include_extensions or ""),
@@ -672,6 +681,7 @@ class Database:
                     min_message_id,
                     max_message_id,
                     1 if add_download_suffix else 0,
+                    1 if move_after_complete else 0,
                 ),
             )
             conn.commit()
@@ -682,6 +692,7 @@ class Database:
         rule_id: int,
         *,
         chat_title: str | None = None,
+        rule_name: str | None = None,
         mode: str | None = None,
         enabled: bool | None = None,
         include_extensions: str | None = None,
@@ -698,6 +709,7 @@ class Database:
         min_message_id: int | None = None,
         max_message_id: int | None = None,
         add_download_suffix: bool | None = None,
+        move_after_complete: bool | None = None,
     ) -> None:
         """更新一条群聊下载规则。"""
         updates: list[str] = []
@@ -706,6 +718,9 @@ class Database:
         if chat_title is not None:
             updates.append("chat_title = ?")
             params.append(chat_title)
+        if rule_name is not None:
+            updates.append("rule_name = ?")
+            params.append(rule_name)
         if mode is not None:
             updates.append("mode = ?")
             params.append(mode)
@@ -754,6 +769,9 @@ class Database:
         if add_download_suffix is not None:
             updates.append("add_download_suffix = ?")
             params.append(1 if add_download_suffix else 0)
+        if move_after_complete is not None:
+            updates.append("move_after_complete = ?")
+            params.append(1 if move_after_complete else 0)
 
         if not updates:
             return
@@ -826,5 +844,3 @@ class Database:
         with self._connect() as conn:
             rows = conn.execute(sql, params).fetchall()
             return [dict(row) for row in rows]
-
-

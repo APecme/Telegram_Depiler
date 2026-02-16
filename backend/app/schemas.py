@@ -74,6 +74,7 @@ class DownloadRecord(BaseModel):
 class GroupRuleCreate(BaseModel):
     chat_id: int = Field(..., description="群聊ID")
     chat_title: Optional[str] = None
+    rule_name: Optional[str] = Field(default=None, description="规则名称（可自定义）")
     mode: Literal["monitor", "history"] = "monitor"
     enabled: bool = True
     include_extensions: Optional[str] = None  # 逗号分隔的扩展名，如 mp4,mp3,jpg
@@ -88,10 +89,12 @@ class GroupRuleCreate(BaseModel):
     min_message_id: Optional[int] = None  # 仅 history 模式使用：消息ID起始
     max_message_id: Optional[int] = None  # 仅 history 模式使用：消息ID结束
     add_download_suffix: bool = False  # 是否为未完成文件添加.download后缀
+    move_after_complete: bool = False  # 下载完成后再移动到目标目录
 
 
 class GroupRuleUpdate(BaseModel):
     chat_title: Optional[str] = None
+    rule_name: Optional[str] = None
     mode: Optional[Literal["monitor", "history"]] = None
     enabled: Optional[bool] = None
     include_extensions: Optional[str] = None
@@ -106,6 +109,7 @@ class GroupRuleUpdate(BaseModel):
     min_message_id: Optional[int] = None
     max_message_id: Optional[int] = None
     add_download_suffix: Optional[bool] = None  # 是否为未完成文件添加.download后缀
+    move_after_complete: Optional[bool] = None  # 下载完成后再移动到目标目录
 
 
 class AdminLoginRequest(BaseModel):
