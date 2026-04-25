@@ -809,6 +809,39 @@ async def set_download_priority(download_id: int) -> dict:
     return {"success": True, "priority": new_priority, "message": "已更新优先级"}
 
 
+@api.post("/downloads/{download_id}/retry")
+async def retry_download(download_id: int) -> dict:
+    """重试失败/暂停/排队中的下载任务。"""
+    downloads = database.list_downloads(limit=1000)
+    download = next((d for d in downloads if d.get("id") == download_id), None)
+
+    if not download:
+        raise HTTPException(status_code=404, detail="下载记录不存在")
+
+    status = download.get("status")
+    if status not in ("failed", "paused", "queued"):
+        return {"success": False, "message": f"当前状态({status})无需重试"}
+
+    source = download.get("source") or "bot"
+    message_id = download.get("message_id")
+    chat_id = download.get("chat_id")
+
+    can_start = await download_queue_manager.try_start_download(download_id)
+    database.update_download(download_id, error="", progress=0.0, download_speed=0.0)
+
+    if can_start:
+        if source == "rule" and worker:
+            if not message_id or not chat_id:
+                raise HTTPException(status_code=400, detail="规则下载任务缺少 message_id 或 chat_id")
+            asyncio.create_task(worker.restore_queued_download(download_id, int(message_id), int(chat_id)))
+        elif source == "bot" and bot_handler:
+            refreshed = next((d for d in database.list_downloads(limit=1000) if d.get("id") == download_id), download)
+            asyncio.create_task(bot_handler.restore_queued_download(refreshed))
+        return {"success": True, "message": "已开始重试下载"}
+
+    return {"success": True, "message": "任务已加入队列，等待重试"}
+
+
 @api.delete("/downloads/{download_id}")
 async def delete_download(
     download_id: int,

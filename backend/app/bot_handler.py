@@ -256,6 +256,11 @@ class BotCommandHandler:
             ],
         ]
 
+    def _build_progress_bar(self, progress: float, width: int = 12) -> str:
+        progress = max(0.0, min(100.0, progress))
+        filled = round(progress / 100 * width)
+        return "█" * filled + "░" * max(0, width - filled)
+
     def _build_completed_download_text(
         self,
         download: dict,
@@ -576,6 +581,8 @@ class BotCommandHandler:
                     f"**文件名：** {file_name}\n"
                     f"**大小：** {self._format_size(file_size)}\n"
                     f"**类型：** {media_type}\n"
+                    f"**进度：** 0.0%\n"
+                    f"`{self._build_progress_bar(0)}`\n"
                     f"**速度：** 计算中...\n\n"
                     f"**下载统计：**\n"
                     f"总计：{total + 1} | 成功：{completed} | 失败：{failed}"
@@ -810,8 +817,11 @@ class BotCommandHandler:
                         f"**下载统计：**\n"
                         f"总计：{total} | 成功：{completed} | 失败：{failed}"
                     )
-                    # 失败后同样保留删除按钮
+                    # 失败后提供重试与删除按钮
                     failed_buttons = [
+                        [
+                            KeyboardButtonCallback("🔄 重试", f"retry_{download_id}".encode("utf-8")),
+                        ],
                         [
                             KeyboardButtonCallback("🗑️ 删除", f"delete_{download_id}".encode("utf-8")),
                         ]
@@ -905,6 +915,8 @@ class BotCommandHandler:
                 f"**文件名：** {file_name}\n"
                 f"**大小：** {self._format_size(file_size)}\n"
                 f"**类型：** {media_type}\n"
+                f"**进度：** 0.0%\n"
+                f"`{self._build_progress_bar(0)}`\n"
                 f"**速度：** 计算中...\n\n"
                 f"**下载统计：**\n"
                 f"总计：{total} | 成功：{completed} | 失败：{failed}"
@@ -1129,6 +1141,7 @@ class BotCommandHandler:
                 f"**大小：** {self._format_size(file_size)}\n"
                 f"**类型：** {media_type}\n"
                 f"**进度：** {progress_text}\n"
+                f"`{self._build_progress_bar(progress)}`\n"
                 f"**速度：** {speed_text}"
             )
 
@@ -1470,8 +1483,47 @@ class BotCommandHandler:
     
     async def _handle_retry_download(self, event: events.CallbackQuery.Event, download_id: int) -> None:
         """处理重试下载"""
-        # TODO: 实现重试功能
-        await event.answer("🔄 重试功能开发中...", alert=True)
+        try:
+            download = self._get_download_record(download_id)
+            if not download:
+                await event.answer("❌ 下载记录不存在", alert=True)
+                return
+
+            current_status = download.get("status")
+            if current_status not in ("failed", "paused", "queued"):
+                await event.answer(f"ℹ️ 当前状态 ({current_status}) 无需重试", alert=True)
+                return
+
+            source = download.get("source") or "bot"
+            message_id = download.get("message_id")
+            chat_id = download.get("chat_id")
+
+            if source == "rule":
+                if not self.worker or not message_id or not chat_id:
+                    await event.answer("❌ 规则下载任务缺少恢复所需信息", alert=True)
+                    return
+
+                can_start = await self.queue_manager.try_start_download(download_id) if self.queue_manager else True
+                if can_start:
+                    self.database.update_download(download_id, error="", progress=0.0, download_speed=0.0)
+                    asyncio.create_task(self.worker.restore_queued_download(download_id, int(message_id), int(chat_id)))
+                    await event.answer("🔄 已开始重试下载")
+                else:
+                    self.database.update_download(download_id, status="queued", error="", progress=0.0, download_speed=0.0)
+                    await event.answer("📋 已加入队列，等待重试")
+                return
+
+            can_start = await self.queue_manager.try_start_download(download_id) if self.queue_manager else True
+            if can_start:
+                self.database.update_download(download_id, error="", progress=0.0, download_speed=0.0)
+                asyncio.create_task(self.restore_queued_download(self._get_download_record(download_id) or download))
+                await event.answer("🔄 已开始重试下载")
+            else:
+                self.database.update_download(download_id, status="queued", error="", progress=0.0, download_speed=0.0)
+                await event.answer("📋 已加入队列，等待重试")
+        except Exception as exc:
+            logger.exception("重试下载失败: %s", exc)
+            await event.answer(f"❌ 重试失败: {exc}", alert=True)
 
     async def _handle_rename_file_prompt(self, event: events.CallbackQuery.Event, download_id: int) -> None:
         download = self._get_download_record(download_id)

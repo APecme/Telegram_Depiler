@@ -381,3 +381,53 @@ button {
     width: 100%;
   }
 }
+
+.rule-card-grid {
+  gap: 1rem;
+}
+
+.rule-card {
+  background:
+    radial-gradient(circle at top right, rgba(14, 165, 233, 0.08), transparent 30%),
+    linear-gradient(180deg, #ffffff, #f8fafc);
+  border: 1px solid #dbeafe !important;
+  border-radius: 18px !important;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.06);
+}
+
+.rule-modal-overlay {
+  backdrop-filter: blur(8px);
+}
+
+.rule-modal-panel {
+  background:
+    radial-gradient(circle at top left, rgba(59, 130, 246, 0.08), transparent 28%),
+    linear-gradient(180deg, #ffffff 0%, #f8fbff 100%) !important;
+  border: 1px solid #dbe4f0;
+  border-radius: 24px !important;
+  box-shadow: 0 30px 80px rgba(15, 23, 42, 0.24);
+}
+
+.rule-modal-title {
+  color: #0f172a;
+  font-size: 1.4rem;
+}
+
+.rule-modal-form > div {
+  padding: 1rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.84);
+}
+
+@media (max-width: 720px) {
+  .rule-modal-panel {
+    width: 94% !important;
+    padding: 1rem !important;
+    border-radius: 18px !important;
+  }
+
+  .rule-modal-form > div {
+    padding: 0.85rem;
+  }
+}

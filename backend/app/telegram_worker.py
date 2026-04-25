@@ -106,6 +106,77 @@ class TelegramWorker:
         self._download_tasks: dict[int, asyncio.Task] = {}  # 跟踪正在进行的下载任务
         self._cancelled_downloads: set[int] = set()  # 已取消的下载ID
 
+    def _build_internal_tmp_path(self, file_name: str) -> Path:
+        tmp_root = self.settings.data_dir / ".telegram_depiler_tmp" / "rule_downloads"
+        return tmp_root / file_name
+
+    def _format_size(self, size: int) -> str:
+        """格式化文件大小"""
+        for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+            if size < 1024.0:
+                return f"{size:.2f} {unit}"
+            size /= 1024.0
+        return f"{size:.2f} PB"
+
+    def _format_speed(self, speed: float) -> str:
+        return f"{self._format_size(int(speed))}/s"
+
+    def _build_progress_bar(self, progress: float, width: int = 12) -> str:
+        progress = max(0.0, min(100.0, progress))
+        filled = round(progress / 100 * width)
+        return "█" * filled + "░" * max(0, width - filled)
+
+    async def _update_rule_download_notification(
+        self,
+        bot_message: Any,
+        *,
+        chat_title: str,
+        sender_name: str,
+        file_name: str,
+        media_type: str | None,
+        file_size: int,
+        download_id: int,
+        rule_id: Any,
+        progress: float,
+        download_speed: float,
+    ) -> None:
+        if not bot_message or not self._bot_client:
+            return
+
+        from telethon.tl.custom.button import Button
+
+        speed_text = self._format_speed(download_speed) if download_speed > 0 else "计算中..."
+        progress_bar = self._build_progress_bar(progress)
+        text = (
+            f"📥 **群聊自动下载**\n\n"
+            f"**来源群聊：** {chat_title}\n"
+            f"**发送者：** {sender_name}\n"
+            f"**文件名：** {file_name}\n"
+            f"**类型：** {media_type or '未知'}\n"
+            f"**大小：** {self._format_size(file_size)}\n"
+            f"**任务ID：** `{download_id}`\n"
+            f"**规则ID：** {rule_id}\n\n"
+            f"**状态：** 正在下载...\n"
+            f"**进度：** {progress:.1f}%\n"
+            f"`{progress_bar}`\n"
+            f"**速度：** {speed_text}"
+        )
+
+        buttons = [
+            [
+                Button.inline("⏸️ 暂停", f"pause_{download_id}"),
+                Button.inline("⭐ 置顶优先", f"priority_{download_id}"),
+            ],
+            [Button.inline("🗑️ 删除", f"delete_{download_id}")],
+        ]
+        await self._bot_client.edit_message(
+            bot_message.chat_id,
+            bot_message.id,
+            text,
+            parse_mode="markdown",
+            buttons=buttons,
+        )
+
     @property
     def session_path(self) -> Path:
         # 只使用用户账户，session文件固定
@@ -753,6 +824,12 @@ class TelegramWorker:
             # 确保所有父目录都存在（支持文件名模板中的子目录）
             target_path.parent.mkdir(parents=True, exist_ok=True)
 
+            move_after_complete = bool(rule.get("move_after_complete", False))
+            download_base_path = target_path
+            if move_after_complete:
+                download_base_path = self._build_internal_tmp_path(file_name)
+                download_base_path.parent.mkdir(parents=True, exist_ok=True)
+
             # 将最终保存路径和文件名写回数据库
             try:
                 self.database.update_download(
@@ -764,7 +841,7 @@ class TelegramWorker:
             except Exception as e:
                 logger.debug("更新队列下载记录保存路径失败: %s", e)
             
-            logger.info("从队列恢复下载文件: %s -> %s", original_file_name, target_path)
+            logger.info("从队列恢复下载文件: %s -> %s", original_file_name, download_base_path)
             
             # 获取文件大小
             file_size = 0
@@ -819,9 +896,16 @@ class TelegramWorker:
             
             await self._download_media_with_retry(
                 message,
-                file=target_path,
+                file=download_base_path,
                 progress_callback=progress_callback if file_size > 0 else None,
             )
+
+            downloaded_path = download_base_path
+            if move_after_complete and downloaded_path != target_path:
+                from shutil import move as _move
+
+                _move(str(downloaded_path), str(target_path))
+                downloaded_path = target_path
             
             self.database.update_download(
                 download_id, 
@@ -842,9 +926,10 @@ class TelegramWorker:
             
         except asyncio.CancelledError:
             logger.info("从队列恢复的下载任务 %d 已被取消", download_id)
-            if 'target_path' in locals() and target_path.exists():
+            cleanup_target = locals().get('download_base_path') or locals().get('target_path')
+            if cleanup_target and cleanup_target.exists():
                 try:
-                    target_path.unlink()
+                    cleanup_target.unlink()
                 except Exception:
                     pass
             raise
@@ -1348,14 +1433,6 @@ class TelegramWorker:
             "password_hint": self._login_context.password_hint,
         }
     
-    def _format_size(self, size: int) -> str:
-        """格式化文件大小"""
-        for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
-            if size < 1024.0:
-                return f"{size:.2f} {unit}"
-            size /= 1024.0
-        return f"{size:.2f} PB"
-    
     async def _handle_group_message_with_rules(self, event: events.NewMessage.Event, chat: Any, sender: Any) -> None:
         """处理群聊消息并应用下载规则"""
         try:
@@ -1723,8 +1800,7 @@ class TelegramWorker:
             move_after_complete = bool(rule.get("move_after_complete", False))
             download_base_path = target_path
             if move_after_complete:
-                tmp_root = save_path / ".telegram_depiler_tmp"
-                download_base_path = tmp_root / file_name
+                download_base_path = self._build_internal_tmp_path(file_name)
                 download_base_path.parent.mkdir(parents=True, exist_ok=True)
 
             actual_target_path = download_base_path
@@ -1751,16 +1827,15 @@ class TelegramWorker:
                 file_size = getattr(message.file, "size", 0) or 0
             
             # 发送Bot通知给管理员用户（如果Bot客户端可用，且管理员为用户账号而非频道/群）
+            sender_name = (
+                getattr(sender, "username", None)
+                or getattr(sender, "first_name", None)
+                or f"ID:{getattr(sender, 'id', 'Unknown')}"
+            )
             bot_message = None
             if self._bot_client and self.settings.admin_user_ids:
                 try:
                     from telethon.tl.types import User as TgUser
-
-                    sender_name = (
-                        getattr(sender, "username", None)
-                        or getattr(sender, "first_name", None)
-                        or f"ID:{getattr(sender, 'id', 'Unknown')}"
-                    )
 
                     notification_text = (
                         f"📥 **群聊自动下载**\n\n"
@@ -1772,7 +1847,9 @@ class TelegramWorker:
                         f"**任务ID：** `{download_id}`\n"
                         f"**规则ID：** {rule.get('id', 'Unknown')}\n\n"
                         f"**状态：** 正在下载...\n"
-                        f"**进度：** 0%"
+                        f"**进度：** 0.0%\n"
+                        f"`{self._build_progress_bar(0)}`\n"
+                        f"**速度：** 计算中..."
                     )
 
                     # 创建内联键盘按钮
@@ -1810,9 +1887,10 @@ class TelegramWorker:
             last_update_time = time.time()
             last_downloaded = 0
             download_speed = 0.0
+            last_notification_edit_time = 0.0
             
             def progress_callback(current: int, total: int) -> None:
-                nonlocal downloaded_bytes, last_update_time, last_downloaded, download_speed
+                nonlocal downloaded_bytes, last_update_time, last_downloaded, download_speed, last_notification_edit_time
                 
                 # 检查是否已取消
                 if download_id in self._cancelled_downloads:
@@ -1841,6 +1919,23 @@ class TelegramWorker:
                     )
                 except Exception as e:
                     logger.debug("更新下载进度失败: %s", e)
+
+                if bot_message and self._bot_client and current_time - last_notification_edit_time >= 2.0:
+                    last_notification_edit_time = current_time
+                    asyncio.create_task(
+                        self._update_rule_download_notification(
+                            bot_message,
+                            chat_title=chat_title,
+                            sender_name=sender_name,
+                            file_name=original_file_name,
+                            media_type=media_type,
+                            file_size=file_size,
+                            download_id=download_id,
+                            rule_id=rule.get('id', 'Unknown'),
+                            progress=progress,
+                            download_speed=download_speed,
+                        )
+                    )
             
             # 检查是否在开始前就被取消
             if download_id in self._cancelled_downloads:

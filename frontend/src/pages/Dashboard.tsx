@@ -137,17 +137,24 @@ export default function Dashboard() {
   const [selectedDefaultPath, setSelectedDefaultPath] = useState<string>("");
 
   useEffect(() => {
-    fetchDownloads();
-  }, [downloadPage, downloadPageSize, downloadStatusFilter, downloadRuleFilter, downloadPathFilter, downloadMinSize, downloadMaxSize, downloadStartTime, downloadEndTime]);
-
-  useEffect(() => {
     fetchGroupRules();
     fetchDialogs();
     fetchLogs();
     fetchDefaultDownloadPath();
     fetchDefaultFilenameTemplate();
+  }, []);
+
+  useEffect(() => {
+    fetchDownloads();
     const interval = setInterval(() => {
       fetchDownloads();
+    }, 2000);
+    return () => clearInterval(interval);
+  }, [downloadPage, downloadPageSize, downloadStatusFilter, downloadRuleFilter, downloadPathFilter, downloadMinSize, downloadMaxSize, downloadStartTime, downloadEndTime]);
+
+  useEffect(() => {
+    fetchLogs();
+    const interval = setInterval(() => {
       fetchLogs();
     }, 2000);
     return () => clearInterval(interval);
@@ -351,6 +358,17 @@ export default function Dashboard() {
     } catch (error) {
       console.error("Failed to resume download:", error);
       showNotification("恢复失败", "error");
+    }
+  };
+
+  const handleRetryDownload = async (downloadId: number) => {
+    try {
+      const { data } = await api.post(`/downloads/${downloadId}/retry`);
+      await fetchDownloads();
+      showNotification(data?.message || "已提交重试", "success");
+    } catch (error) {
+      console.error("Failed to retry download:", error);
+      showNotification("重试失败", "error");
     }
   };
 
@@ -925,6 +943,14 @@ export default function Dashboard() {
                         ▶️ 开始
                       </button>
                     )}
+                    {record.status === "failed" && (
+                      <button
+                        onClick={() => handleRetryDownload(record.id)}
+                        style={{ padding: "0.45rem 0.75rem", fontSize: "0.85rem", border: "1px solid #7c3aed", backgroundColor: "#f3e8ff", color: "#6d28d9", borderRadius: "8px", cursor: "pointer" }}
+                      >
+                        🔄 重试
+                      </button>
+                    )}
                     {(record.status === "downloading" || record.status === "pending" || record.status === "queued" || record.status === "paused") && (
                       <button
                         onClick={() => handlePriorityDownload(record.id)}
@@ -1085,10 +1111,11 @@ export default function Dashboard() {
             </button>
           </div>
         ) : (
-          <div style={{ display: "grid", gap: "1rem" }}>
+          <div className="rule-card-grid" style={{ display: "grid", gap: "1rem" }}>
             {groupRules.map((rule) => (
               <div
                 key={rule.id}
+                className="rule-card"
                 style={{
                   border: "1px solid #e0e0e0",
                   borderRadius: "8px",
@@ -1969,7 +1996,7 @@ export default function Dashboard() {
 
       {/* 规则创建/编辑模态框 */}
       {showRuleModal && (
-        <div style={{
+        <div className="rule-modal-overlay" style={{
           position: "fixed",
           top: 0,
           left: 0,
@@ -1981,7 +2008,7 @@ export default function Dashboard() {
           justifyContent: "center",
           zIndex: 1000,
         }}>
-          <div style={{
+          <div className="rule-modal-panel" style={{
             backgroundColor: "white",
             borderRadius: "8px",
             padding: "2rem",
@@ -1990,11 +2017,11 @@ export default function Dashboard() {
             maxHeight: "90vh",
             overflowY: "auto",
           }}>
-            <h2 style={{ margin: "0 0 1.5rem 0" }}>
+            <h2 className="rule-modal-title" style={{ margin: "0 0 1.5rem 0" }}>
               {editingRuleId ? "编辑规则" : "新建规则"}
             </h2>
 
-            <div style={{ display: "grid", gap: "1rem" }}>
+            <div className="rule-modal-form" style={{ display: "grid", gap: "1rem" }}>
               <div>
                 <label style={{ display: "block", marginBottom: "0.5rem", fontWeight: "500" }}>
                   目标群聊 *
