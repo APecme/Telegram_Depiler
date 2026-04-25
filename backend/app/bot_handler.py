@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import shutil
 from pathlib import Path
 from typing import Optional
 from telethon import TelegramClient, events
@@ -26,19 +27,23 @@ class BotCommandHandler:
         self._bot_client: Optional[TelegramClient] = None
         self._bot_username: Optional[str] = None
         self._bot_id: Optional[int] = None
+        self._bot_first_name: Optional[str] = None
+        self._bot_last_name: Optional[str] = None
         self._download_semaphore = asyncio.Semaphore(5)
         self._active_downloads: dict[int, bool] = {}
         self._download_tasks: dict[int, asyncio.Task] = {}
         self._cancelled_downloads: set[int] = set()
         self._conversation_states: dict[int, dict] = {}  # 用户对话状态
         self._logger = logger
+        self._stopping = False
         
     async def start(self) -> None:
         """启动Bot命令处理器"""
         if not self.settings.bot_token:
             logger.warning("Bot Token未配置，无法启动Bot命令处理器")
             return
-            
+
+        self._stopping = False
         try:
             proxy = None
             if self.settings.proxy_host and self.settings.proxy_port:
@@ -113,7 +118,9 @@ class BotCommandHandler:
             bot_info = await self._bot_client.get_me()
             self._bot_username = bot_info.username
             self._bot_id = bot_info.id
-            logger.info(f"Bot命令处理器已启动: @{self._bot_username} (ID: {bot_info.id})")
+            self._bot_first_name = getattr(bot_info, "first_name", None)
+            self._bot_last_name = getattr(bot_info, "last_name", None)
+            logger.info("Bot命令处理器已启动\n%s", self._format_bot_identity())
             
             # 设置Bot命令菜单
             await self._set_bot_commands()
@@ -174,9 +181,11 @@ class BotCommandHandler:
         try:
             from telethon.tl.types import User as TgUser
 
+            bot_info_text = self._format_bot_identity()
             startup_message = (
                 f"🚀 **Telegram Depiler已启动 (v{self.settings.version})**\n\n"
                 "✅ Bot已就绪，正在监听消息\n\n"
+                f"{bot_info_text}\n\n"
                 "📖 **可用命令：**\n"
                 "/help - 显示帮助信息\n"
                 "/download - 查看下载统计\n"
@@ -205,6 +214,106 @@ class BotCommandHandler:
                     logger.warning(f"发送启动通知给管理员 {admin_id} 失败: {e}")
         except Exception as e:
             logger.exception(f"发送启动通知失败: {e}")
+
+    def _format_tg_identity(self, username: Optional[str], entity_id: Optional[int], first_name: Optional[str] = None, last_name: Optional[str] = None) -> str:
+        display_name = " ".join(part for part in [first_name, last_name] if part).strip() or "未设置"
+        username_text = f"@{username}" if username else "未设置"
+        id_text = str(entity_id) if entity_id is not None else "未知"
+        return (
+            "🤖 **Bot TG 信息：**\n"
+            f"用户名：{username_text}\n"
+            f"显示名：{display_name}\n"
+            f"ID：`{id_text}`"
+        )
+
+    def _format_bot_identity(self) -> str:
+        return self._format_tg_identity(
+            self._bot_username,
+            self._bot_id,
+            self._bot_first_name,
+            self._bot_last_name,
+        )
+
+    def _get_download_record(self, download_id: int) -> Optional[dict]:
+        downloads = self.database.list_downloads(limit=1000)
+        return next((d for d in downloads if d.get("id") == download_id), None)
+
+    def _normalize_save_dir(self, save_dir: Optional[str]) -> Path:
+        normalized = save_dir or str(self.settings.download_dir)
+        save_path = Path(normalized)
+        if not save_path.is_absolute():
+            save_path = Path("/") / save_path
+        return save_path
+
+    def _build_completed_download_buttons(self, download_id: int) -> list[list[KeyboardButtonCallback]]:
+        return [
+            [
+                KeyboardButtonCallback("✏️ 改文件名", f"renamefile_{download_id}".encode("utf-8")),
+                KeyboardButtonCallback("📁 改路径", f"changepath_{download_id}".encode("utf-8")),
+            ],
+            [
+                KeyboardButtonCallback("🗑️ 删除", f"delete_{download_id}".encode("utf-8")),
+            ],
+        ]
+
+    def _build_completed_download_text(
+        self,
+        download: dict,
+        *,
+        average_speed: Optional[float] = None,
+        elapsed_seconds: Optional[float] = None,
+        notice: Optional[str] = None,
+    ) -> str:
+        download_id = download.get("id", "未知")
+        message_id = download.get("message_id", "未知")
+        file_name = download.get("file_name") or download.get("origin_file_name") or "未知文件"
+        file_size = int(download.get("file_size") or 0)
+        file_path = download.get("file_path") or "未知路径"
+        save_dir = download.get("save_dir") or str(Path(file_path).parent if file_path != "未知路径" else self.settings.download_dir)
+        speed = average_speed if average_speed is not None else float(download.get("download_speed") or 0.0)
+        speed_text = self._format_speed(speed) if speed > 0 else "未知"
+
+        lines = [
+            "✅ **下载完成**",
+            "",
+            f"**文件ID：** `{message_id}`",
+            f"**任务ID：** `{download_id}`",
+            f"**文件名：** {file_name}",
+            f"**大小：** {self._format_size(file_size)}",
+            f"**平均速度：** {speed_text}",
+            f"**保存目录：** `{save_dir}`",
+            f"**保存路径：** `{file_path}`",
+        ]
+
+        if elapsed_seconds is not None:
+            lines.append(f"**耗时：** {elapsed_seconds:.1f}秒")
+        if notice:
+            lines.extend(["", notice])
+
+        return "\n".join(lines)
+
+    async def _refresh_completed_download_message(
+        self,
+        chat_id: int,
+        message_id: int,
+        download_id: int,
+        *,
+        notice: Optional[str] = None,
+    ) -> None:
+        if not self._bot_client:
+            return
+
+        download = self._get_download_record(download_id)
+        if not download:
+            return
+
+        await self._bot_client.edit_message(
+            chat_id,
+            message_id,
+            self._build_completed_download_text(download, notice=notice),
+            parse_mode="markdown",
+            buttons=self._build_completed_download_buttons(download_id),
+        )
             
     async def _handle_bot_command(self, event: events.NewMessage.Event) -> None:
         """处理Bot命令"""
@@ -640,22 +749,25 @@ class BotCommandHandler:
                     failed = stats.get("failed", 0)
                     
                     success_text = (
-                        f"✅ **下载完成**\n\n"
-                        f"**文件ID：** `{event.message.id}`\n"
-                        f"**任务ID：** `{download_id}`\n"
-                        f"**文件名：** {file_name}\n"
-                        f"**大小：** {self._format_size(file_size)}\n"
-                        f"**平均速度：** {self._format_speed(avg_speed)}\n"
-                        f"**耗时：** {elapsed_time:.1f}秒\n\n"
-                        f"**下载统计：**\n"
-                        f"总计：{total} | 成功：{completed} | 失败：{failed}"
+                        self._build_completed_download_text(
+                            {
+                                "id": download_id,
+                                "message_id": event.message.id,
+                                "file_name": file_name,
+                                "file_size": file_size,
+                                "file_path": str(target_path),
+                                "save_dir": str(target_path.parent),
+                                "download_speed": avg_speed,
+                            },
+                            average_speed=avg_speed,
+                            elapsed_seconds=elapsed_time,
+                            notice=(
+                                "**下载统计：**\n"
+                                f"总计：{total} | 成功：{completed} | 失败：{failed}"
+                            ),
+                        )
                     )
-                    # 下载完成后只保留删除按钮
-                    finished_buttons = [
-                        [
-                            KeyboardButtonCallback("🗑️ 删除", f"delete_{download_id}".encode("utf-8")),
-                        ]
-                    ]
+                    finished_buttons = self._build_completed_download_buttons(download_id)
 
                     await self._bot_client.edit_message(
                         event.chat_id,
@@ -900,19 +1012,25 @@ class BotCommandHandler:
                         await self.queue_manager.on_download_finished(download_id)
 
                     success_text = (
-                        f"✅ **下载完成**\n\n"
-                        f"**文件ID：** `{message_id}`\n"
-                        f"**任务ID：** `{download_id}`\n"
-                        f"**文件名：** {file_name}\n"
-                        f"**大小：** {self._format_size(file_size)}\n"
-                        f"**平均速度：** {self._format_speed(avg_speed)}\n"
-                        f"**耗时：** {elapsed:.1f}秒\n\n"
-                        f"**下载统计：**\n"
-                        f"总计：{total} | 成功：{completed} | 失败：{failed}"
+                        self._build_completed_download_text(
+                            {
+                                "id": download_id,
+                                "message_id": message_id,
+                                "file_name": file_name,
+                                "file_size": file_size,
+                                "file_path": str(target_path),
+                                "save_dir": str(target_path.parent),
+                                "download_speed": avg_speed,
+                            },
+                            average_speed=avg_speed,
+                            elapsed_seconds=elapsed,
+                            notice=(
+                                "**下载统计：**\n"
+                                f"总计：{total} | 成功：{completed} | 失败：{failed}"
+                            ),
+                        )
                     )
-                    finished_buttons = [
-                        [KeyboardButtonCallback("🗑️ 删除", f"delete_{download_id}".encode("utf-8"))]
-                    ]
+                    finished_buttons = self._build_completed_download_buttons(download_id)
 
                     await self._bot_client.edit_message(
                         reply_chat_id,
@@ -1082,6 +1200,12 @@ class BotCommandHandler:
             elif data.startswith("retry_"):
                 download_id = int(data.split("_")[1])
                 await self._handle_retry_download(event, download_id)
+            elif data.startswith("renamefile_"):
+                download_id = int(data.split("_")[1])
+                await self._handle_rename_file_prompt(event, download_id)
+            elif data.startswith("changepath_"):
+                download_id = int(data.split("_")[1])
+                await self._handle_change_path_prompt(event, download_id)
             else:
                 await event.answer("❓ 未知操作", alert=True)
         except Exception as e:
@@ -1348,6 +1472,160 @@ class BotCommandHandler:
         """处理重试下载"""
         # TODO: 实现重试功能
         await event.answer("🔄 重试功能开发中...", alert=True)
+
+    async def _handle_rename_file_prompt(self, event: events.CallbackQuery.Event, download_id: int) -> None:
+        download = self._get_download_record(download_id)
+        if not download:
+            await event.answer("❌ 下载记录不存在", alert=True)
+            return
+        if download.get("status") != "completed":
+            await event.answer("ℹ️ 只有已完成的任务才能修改文件名", alert=True)
+            return
+
+        sender = await event.get_sender()
+        if not sender:
+            await event.answer("❌ 无法识别当前用户", alert=True)
+            return
+
+        self._conversation_states[sender.id] = {
+            "step": "edit_download_filename",
+            "download_id": download_id,
+            "origin_chat_id": event.chat_id,
+            "origin_message_id": getattr(event, "message_id", None) or getattr(getattr(event, "query", None), "msg_id", None),
+        }
+        await event.answer("✏️ 请输入新的文件名")
+        await event.respond(
+            "✏️ 请输入新的文件名。\n\n"
+            f"当前文件名：`{download.get('file_name') or download.get('origin_file_name') or '未知文件'}`\n\n"
+            "仅输入文件名即可，例如：`movie_01.mp4`\n"
+            "使用 /cancel 可取消本次操作。",
+            parse_mode="markdown",
+        )
+
+    async def _handle_change_path_prompt(self, event: events.CallbackQuery.Event, download_id: int) -> None:
+        download = self._get_download_record(download_id)
+        if not download:
+            await event.answer("❌ 下载记录不存在", alert=True)
+            return
+        if download.get("status") != "completed":
+            await event.answer("ℹ️ 只有已完成的任务才能修改保存路径", alert=True)
+            return
+
+        sender = await event.get_sender()
+        if not sender:
+            await event.answer("❌ 无法识别当前用户", alert=True)
+            return
+
+        self._conversation_states[sender.id] = {
+            "step": "edit_download_path",
+            "download_id": download_id,
+            "origin_chat_id": event.chat_id,
+            "origin_message_id": getattr(event, "message_id", None) or getattr(getattr(event, "query", None), "msg_id", None),
+        }
+        await event.answer("📁 请输入新的保存目录")
+        await event.respond(
+            "📁 请输入新的保存目录。\n\n"
+            f"当前目录：`{download.get('save_dir') or str(self.settings.download_dir)}`\n\n"
+            "示例：`/downloads/movies`\n"
+            "使用 /cancel 可取消本次操作。",
+            parse_mode="markdown",
+        )
+
+    async def _handle_download_filename_input(self, event: events.NewMessage.Event, user_id: int, message_text: str, state: dict) -> None:
+        download_id = int(state["download_id"])
+        download = self._get_download_record(download_id)
+        if not download:
+            del self._conversation_states[user_id]
+            await event.reply("❌ 下载记录不存在，操作已取消")
+            return
+
+        new_file_name = message_text.strip()
+        if not new_file_name:
+            await event.reply("❌ 文件名不能为空，请重新输入")
+            return
+        if "/" in new_file_name or "\\" in new_file_name:
+            await event.reply("❌ 文件名不能包含路径分隔符，请只输入文件名")
+            return
+
+        current_path = Path(download.get("file_path") or "")
+        if not current_path.exists():
+            del self._conversation_states[user_id]
+            await event.reply("❌ 当前文件不存在，无法修改文件名")
+            return
+
+        new_path = current_path.with_name(new_file_name)
+        if new_path.exists():
+            await event.reply(f"❌ 目标文件已存在：`{new_path.name}`", parse_mode="markdown")
+            return
+
+        shutil.move(str(current_path), str(new_path))
+        self.database.update_download(
+            download_id,
+            file_name=new_file_name,
+            file_path=str(new_path),
+            save_dir=str(new_path.parent),
+        )
+
+        origin_chat_id = state.get("origin_chat_id")
+        origin_message_id = state.get("origin_message_id")
+        if origin_chat_id and origin_message_id:
+            await self._refresh_completed_download_message(
+                int(origin_chat_id),
+                int(origin_message_id),
+                download_id,
+                notice=f"✏️ 文件名已更新为 `{new_file_name}`",
+            )
+
+        del self._conversation_states[user_id]
+        await event.reply(
+            f"✅ 文件名修改成功\n\n新文件名：`{new_file_name}`\n新路径：`{new_path}`",
+            parse_mode="markdown",
+        )
+
+    async def _handle_download_path_input(self, event: events.NewMessage.Event, user_id: int, message_text: str, state: dict) -> None:
+        download_id = int(state["download_id"])
+        download = self._get_download_record(download_id)
+        if not download:
+            del self._conversation_states[user_id]
+            await event.reply("❌ 下载记录不存在，操作已取消")
+            return
+
+        new_save_dir = self._normalize_save_dir(message_text.strip())
+        current_path = Path(download.get("file_path") or "")
+        if not current_path.exists():
+            del self._conversation_states[user_id]
+            await event.reply("❌ 当前文件不存在，无法修改保存路径")
+            return
+
+        new_save_dir.mkdir(parents=True, exist_ok=True)
+        new_path = new_save_dir / (download.get("file_name") or current_path.name)
+        if new_path.exists() and new_path != current_path:
+            await event.reply(f"❌ 目标路径已存在同名文件：`{new_path}`", parse_mode="markdown")
+            return
+
+        shutil.move(str(current_path), str(new_path))
+        self.database.update_download(
+            download_id,
+            file_path=str(new_path),
+            save_dir=str(new_save_dir),
+            file_name=new_path.name,
+        )
+
+        origin_chat_id = state.get("origin_chat_id")
+        origin_message_id = state.get("origin_message_id")
+        if origin_chat_id and origin_message_id:
+            await self._refresh_completed_download_message(
+                int(origin_chat_id),
+                int(origin_message_id),
+                download_id,
+                notice=f"📁 保存路径已更新为 `{new_save_dir}`",
+            )
+
+        del self._conversation_states[user_id]
+        await event.reply(
+            f"✅ 保存路径修改成功\n\n新目录：`{new_save_dir}`\n新路径：`{new_path}`",
+            parse_mode="markdown",
+        )
     
     async def _handle_createrule_command(self, event: events.NewMessage.Event) -> None:
         """处理/createrule命令 - 交互式创建群聊下载规则"""
@@ -1432,6 +1710,10 @@ class BotCommandHandler:
                 await self._handle_keywords_input(event, user_id, message_text, state)
             elif step == 'confirm':
                 await self._handle_confirmation(event, user_id, message_text, state)
+            elif step == 'edit_download_filename':
+                await self._handle_download_filename_input(event, user_id, message_text, state)
+            elif step == 'edit_download_path':
+                await self._handle_download_path_input(event, user_id, message_text, state)
                 
         except Exception as e:
             logger.exception(f"处理对话消息失败: {e}")
@@ -1758,17 +2040,56 @@ class BotCommandHandler:
     
     async def _run_bot(self) -> None:
         """在后台运行Bot客户端"""
-        try:
-            await self._bot_client.run_until_disconnected()
-        except Exception as e:
-            logger.exception(f"Bot客户端运行出错: {e}")
+        reconnect_delay = 1
+        reconnect_attempt = 0
+
+        while self._bot_client and not self._stopping:
+            try:
+                if not self._bot_client.is_connected():
+                    reconnect_attempt += 1
+                    logger.warning(
+                        "Bot客户端连接已断开，开始第 %d 次重连，%d 秒后继续监听\n%s",
+                        reconnect_attempt,
+                        reconnect_delay,
+                        self._format_bot_identity(),
+                    )
+                    await self._bot_client.connect()
+                    reconnect_delay = 1
+                    logger.info("Bot客户端重连成功，第 %d 次重连已恢复监听", reconnect_attempt)
+
+                await self._bot_client.run_until_disconnected()
+
+                if self._stopping:
+                    break
+
+                logger.warning("Bot客户端已断开连接，准备进入重连流程")
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                if self._stopping:
+                    break
+                reconnect_attempt += 1
+                logger.exception(
+                    "Bot客户端运行出错，准备第 %d 次重连，当前退避 %d 秒: %s",
+                    reconnect_attempt,
+                    reconnect_delay,
+                    e,
+                )
+
+            if self._stopping or not self._bot_client:
+                break
+
+            await asyncio.sleep(reconnect_delay)
+            reconnect_delay = min(reconnect_delay * 2, 30)
+
+        logger.info("Bot客户端后台监听已结束")
             
     async def stop(self) -> None:
         """停止Bot命令处理器"""
+        self._stopping = True
         if self._bot_client:
             try:
                 await self._bot_client.disconnect()
                 logger.info("Bot命令处理器已停止")
             except Exception as e:
                 logger.warning(f"停止Bot命令处理器时出错: {e}")
-

@@ -119,71 +119,136 @@ class TelegramWorker:
             if not self.settings.api_id or not self.settings.api_hash:
                 raise ValueError("api_id/api_hash not configured")
 
-            # 只使用用户账户登录
-            proxy = None
-            if self.settings.proxy_host and self.settings.proxy_port:
-                # 清理代理主机地址，移除可能存在的协议前缀
-                proxy_host = self.settings.proxy_host.strip()
-                # 移除常见的协议前缀
-                for prefix in ("http://", "https://", "socks4://", "socks5://", "socks://"):
-                    if proxy_host.lower().startswith(prefix):
-                        proxy_host = proxy_host[len(prefix):].strip()
-                        break
-                
-                # 移除可能的路径和端口（如果用户输入了完整 URL）
-                if "/" in proxy_host:
-                    proxy_host = proxy_host.split("/")[0]
-                
-                # 处理 IPv6 地址格式 [::1] 或 [2001:db8::1]
-                if proxy_host.startswith("[") and proxy_host.endswith("]"):
-                    proxy_host = proxy_host[1:-1]  # 移除方括号
-                elif ":" in proxy_host:
-                    # 检查是否是 IPv6 地址（包含多个冒号组）
-                    # IPv4 地址格式：192.168.1.1:7890 -> 只有一个冒号，分割取主机
-                    # IPv6 地址格式：2001:db8::1 或 [2001:db8::1] -> 多个冒号，不分割
-                    parts = proxy_host.split(":")
-                    if len(parts) == 2 and "." in parts[0]:
-                        # 可能是 IPv4:port 格式，只取主机部分
-                        proxy_host = parts[0]
-                    # 否则可能是 IPv6 地址，保持原样
-                
-                # 处理 Docker 容器内访问宿主机代理的问题
-                # 如果代理地址是 127.0.0.1 或 localhost，在 Docker 环境中需要转换为 host.docker.internal
-                original_host = proxy_host
-                if proxy_host in ("127.0.0.1", "localhost", "::1"):
-                    # 检查是否在 Docker 容器中运行
-                    import os
-                    if os.path.exists("/.dockerenv") or os.environ.get("DOCKER_CONTAINER") == "true":
-                        proxy_host = "host.docker.internal"
-                        logger.info(
-                            "Detected Docker environment, converting proxy host %s to %s",
-                            original_host, proxy_host
-                        )
-                
-                # 获取代理类型，默认为 http
-                proxy_type = (self.settings.proxy_type or "http").lower()
-                if proxy_type not in ("http", "socks4", "socks5"):
-                    logger.warning("Unknown proxy type %s, defaulting to http", proxy_type)
-                    proxy_type = "http"
-                
-                # Telethon 代理配置格式：(type, host, port, rdns, username, password)
-                proxy = (
-                    proxy_type,
-                    proxy_host,
-                    int(self.settings.proxy_port),
-                    True,  # rdns
-                    self.settings.proxy_user,
-                    self.settings.proxy_password,
-                )
-                logger.info(
-                    "Using proxy: %s://%s:%s (user=%s)",
-                    proxy_type, proxy_host, self.settings.proxy_port,
-                    self.settings.proxy_user or "none"
-                )
+            proxy = self._build_proxy_config()
 
             client = await self._create_client(proxy)
             self._client = client
             return client
+
+    def _build_proxy_config(self) -> Optional[tuple]:
+        proxy = None
+        if self.settings.proxy_host and self.settings.proxy_port:
+            proxy_host = self.settings.proxy_host.strip()
+            for prefix in ("http://", "https://", "socks4://", "socks5://", "socks://"):
+                if proxy_host.lower().startswith(prefix):
+                    proxy_host = proxy_host[len(prefix):].strip()
+                    break
+
+            if "/" in proxy_host:
+                proxy_host = proxy_host.split("/")[0]
+
+            if proxy_host.startswith("[") and proxy_host.endswith("]"):
+                proxy_host = proxy_host[1:-1]
+            elif ":" in proxy_host:
+                parts = proxy_host.split(":")
+                if len(parts) == 2 and "." in parts[0]:
+                    proxy_host = parts[0]
+
+            original_host = proxy_host
+            if proxy_host in ("127.0.0.1", "localhost", "::1"):
+                import os
+
+                if os.path.exists("/.dockerenv") or os.environ.get("DOCKER_CONTAINER") == "true":
+                    proxy_host = "host.docker.internal"
+                    logger.info(
+                        "Detected Docker environment, converting proxy host %s to %s",
+                        original_host,
+                        proxy_host,
+                    )
+
+            proxy_type = (self.settings.proxy_type or "http").lower()
+            if proxy_type not in ("http", "socks4", "socks5"):
+                logger.warning("Unknown proxy type %s, defaulting to http", proxy_type)
+                proxy_type = "http"
+
+            proxy = (
+                proxy_type,
+                proxy_host,
+                int(self.settings.proxy_port),
+                True,
+                self.settings.proxy_user,
+                self.settings.proxy_password,
+            )
+            logger.info(
+                "Using proxy: %s://%s:%s (user=%s)",
+                proxy_type,
+                proxy_host,
+                self.settings.proxy_port,
+                self.settings.proxy_user or "none",
+            )
+        return proxy
+
+    async def _ensure_client_connected(self, force_reconnect: bool = False) -> TelegramClient:
+        client = await self._get_client()
+
+        async with self._client_lock:
+            client = self._client or client
+            if force_reconnect and client.is_connected():
+                try:
+                    logger.warning("Telegram client reconnect requested, disconnecting current session first")
+                    await client.disconnect()
+                except Exception as exc:
+                    logger.warning("Failed to disconnect Telegram client before reconnect: %s", exc)
+
+            if not client.is_connected():
+                logger.info("Connecting Telegram client (force_reconnect=%s)", force_reconnect)
+                await client.connect()
+                logger.info("Telegram client connected successfully (force_reconnect=%s)", force_reconnect)
+
+            self._client = client
+            return client
+
+    async def _download_media_with_retry(
+        self,
+        message: Any,
+        *,
+        file: Path,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+        max_attempts: int = 3,
+    ) -> Any:
+        last_error: Optional[Exception] = None
+
+        for attempt in range(1, max_attempts + 1):
+            try:
+                await self._ensure_client_connected(force_reconnect=(attempt > 1))
+                result = await message.download_media(
+                    file=file,
+                    progress_callback=progress_callback,
+                )
+                if attempt > 1:
+                    logger.info(
+                        "Telegram download recovered after retry %d/%d: %s",
+                        attempt,
+                        max_attempts,
+                        file,
+                    )
+                return result
+            except asyncio.CancelledError:
+                raise
+            except (ConnectionError, OSError, asyncio.TimeoutError, RuntimeError) as exc:
+                last_error = exc
+                if attempt >= max_attempts:
+                    logger.error(
+                        "Telegram download failed after %d/%d attempts: %s",
+                        attempt,
+                        max_attempts,
+                        file,
+                    )
+                    break
+
+                backoff = min(2 ** (attempt - 1), 5)
+                logger.warning(
+                    "Telegram download attempt %d/%d failed for %s, reconnecting in %ss: %s",
+                    attempt,
+                    max_attempts,
+                    file,
+                    backoff,
+                    exc,
+                )
+                await asyncio.sleep(backoff)
+
+        assert last_error is not None
+        raise last_error
 
     async def _create_client(self, proxy: Optional[tuple]) -> TelegramClient:
         """创建 Telegram 客户端，参考 telegram-message-bot-main 的实现方式
@@ -752,9 +817,10 @@ class TelegramWorker:
             if download_id in self._cancelled_downloads:
                 raise asyncio.CancelledError("下载已被用户取消")
             
-            await message.download_media(
+            await self._download_media_with_retry(
+                message,
                 file=target_path,
-                progress_callback=progress_callback if file_size > 0 else None
+                progress_callback=progress_callback if file_size > 0 else None,
             )
             
             self.database.update_download(
@@ -1215,9 +1281,10 @@ class TelegramWorker:
                         except Exception as e:
                             logger.debug("更新下载进度失败: %s", e)
                     
-                    await event.message.download_media(
+                    await self._download_media_with_retry(
+                        event.message,
                         file=target_path,
-                        progress_callback=progress_callback if file_size > 0 else None
+                        progress_callback=progress_callback if file_size > 0 else None,
                     )
                     self.database.update_download(
                         download_id, 
@@ -1779,9 +1846,10 @@ class TelegramWorker:
             if download_id in self._cancelled_downloads:
                 raise asyncio.CancelledError("下载已被用户取消")
             
-            await message.download_media(
+            await self._download_media_with_retry(
+                message,
                 file=actual_target_path,
-                progress_callback=progress_callback if file_size > 0 else None
+                progress_callback=progress_callback if file_size > 0 else None,
             )
 
             downloaded_path = actual_target_path
@@ -1848,7 +1916,11 @@ class TelegramWorker:
                     
                     # 完成后只保留删除按钮
                     buttons = [
-                        [Button.inline("🗑️ 删除文件", f"delete_{download_id}")]
+                        [
+                            Button.inline("✏️ 改文件名", f"renamefile_{download_id}"),
+                            Button.inline("📁 改路径", f"changepath_{download_id}"),
+                        ],
+                        [Button.inline("🗑️ 删除文件", f"delete_{download_id}")],
                     ]
                     
                     await self._bot_client.edit_message(

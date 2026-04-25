@@ -565,6 +565,396 @@ export default function Dashboard() {
     return "机器人接收";
   };
 
+  const getStatusMeta = (status: string) => {
+    switch (status) {
+      case "completed":
+        return { label: "已完成", emoji: "✅", bg: "#e8f5e9", color: "#2e7d32" };
+      case "downloading":
+        return { label: "下载中", emoji: "⏳", bg: "#e3f2fd", color: "#1565c0" };
+      case "queued":
+        return { label: "队列中", emoji: "📋", bg: "#fff3e0", color: "#e65100" };
+      case "paused":
+        return { label: "已暂停", emoji: "⏸️", bg: "#fce4ec", color: "#880e4f" };
+      case "failed":
+        return { label: "失败", emoji: "❌", bg: "#ffebee", color: "#c62828" };
+      case "pending":
+        return { label: "待开始", emoji: "🕓", bg: "#f3f4f6", color: "#4b5563" };
+      default:
+        return { label: status || "未知", emoji: "•", bg: "#eef2ff", color: "#4338ca" };
+    }
+  };
+
+  const clearDownloadFilters = () => {
+    setDownloadStatusFilter("all");
+    setDownloadRuleFilter("all");
+    setDownloadPathFilter("");
+    setDownloadMinSize("");
+    setDownloadMaxSize("");
+    setDownloadStartTime("");
+    setDownloadEndTime("");
+    setDownloadPage(1);
+  };
+
+  const hasActiveDownloadFilters =
+    downloadStatusFilter !== "all" ||
+    downloadRuleFilter !== "all" ||
+    downloadPathFilter.trim() !== "" ||
+    downloadMinSize.trim() !== "" ||
+    downloadMaxSize.trim() !== "" ||
+    downloadStartTime !== "" ||
+    downloadEndTime !== "";
+
+  const allCurrentPageSelected = downloads.length > 0 && selectedIds.length === downloads.length;
+
+  const renderDownloadRecordsSection = () => (
+    <>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", alignItems: "flex-start", flexWrap: "wrap", marginBottom: "1rem" }}>
+        <div>
+          <h2 style={{ margin: "0 0 0.35rem 0" }}>📥 下载记录</h2>
+          <p style={{ margin: 0, color: "#64748b", fontSize: "0.92rem" }}>
+            用卡片浏览每条任务，筛选、批量处理和状态观察都会更直观。
+          </p>
+        </div>
+        <div className="download-summary-badge">
+          当前页 {downloads.length} 条 / 总计 {downloadTotal} 条
+        </div>
+      </div>
+
+      <div className="download-filter-shell">
+        <div className="download-filter-header">
+          <div>
+            <div className="download-filter-title">筛选下载记录</div>
+            <div className="download-filter-subtitle">按状态、规则、路径、体积和时间快速收窄结果。</div>
+          </div>
+          <button
+            onClick={clearDownloadFilters}
+            disabled={!hasActiveDownloadFilters}
+            style={{
+              padding: "0.5rem 0.9rem",
+              borderRadius: "999px",
+              border: "1px solid #cbd5e1",
+              background: hasActiveDownloadFilters ? "#fff" : "#f8fafc",
+              color: hasActiveDownloadFilters ? "#334155" : "#94a3b8",
+              cursor: hasActiveDownloadFilters ? "pointer" : "not-allowed",
+            }}
+          >
+            清空筛选
+          </button>
+        </div>
+
+        <div className="download-filter-grid">
+          <label className="download-filter-field">
+            <span>状态</span>
+            <select
+              value={downloadStatusFilter}
+              onChange={(e) => {
+                setDownloadStatusFilter(e.target.value);
+                setDownloadPage(1);
+              }}
+            >
+              <option value="all">全部状态</option>
+              <option value="downloading">下载中</option>
+              <option value="queued">队列中</option>
+              <option value="completed">已完成</option>
+              <option value="paused">已暂停</option>
+              <option value="failed">失败</option>
+              <option value="pending">待开始</option>
+            </select>
+          </label>
+
+          <label className="download-filter-field">
+            <span>规则来源</span>
+            <select
+              value={downloadRuleFilter === "all" ? "all" : String(downloadRuleFilter)}
+              onChange={(e) => {
+                const v = e.target.value === "all" ? "all" : Number(e.target.value);
+                setDownloadRuleFilter(v);
+                setDownloadPage(1);
+              }}
+            >
+              <option value="all">全部规则 / Bot</option>
+              {groupRules.map((rule) => (
+                <option key={rule.id} value={rule.id}>
+                  {rule.rule_name || rule.chat_title || `群聊ID:${rule.chat_id}`} (规则ID:{rule.id})
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="download-filter-field">
+            <span>保存路径包含</span>
+            <input
+              type="text"
+              value={downloadPathFilter}
+              onChange={(e) => {
+                setDownloadPathFilter(e.target.value);
+                setDownloadPage(1);
+              }}
+              placeholder="例如：/overwatch"
+            />
+          </label>
+
+          <label className="download-filter-field">
+            <span>最小体积 (MB)</span>
+            <input
+              type="number"
+              min={0}
+              value={downloadMinSize}
+              onChange={(e) => {
+                setDownloadMinSize(e.target.value);
+                setDownloadPage(1);
+              }}
+              placeholder="最小"
+            />
+          </label>
+
+          <label className="download-filter-field">
+            <span>最大体积 (MB)</span>
+            <input
+              type="number"
+              min={0}
+              value={downloadMaxSize}
+              onChange={(e) => {
+                setDownloadMaxSize(e.target.value);
+                setDownloadPage(1);
+              }}
+              placeholder="最大"
+            />
+          </label>
+
+          <label className="download-filter-field">
+            <span>开始时间</span>
+            <input
+              type="datetime-local"
+              value={downloadStartTime}
+              onChange={(e) => {
+                setDownloadStartTime(e.target.value);
+                setDownloadPage(1);
+              }}
+            />
+          </label>
+
+          <label className="download-filter-field">
+            <span>结束时间</span>
+            <input
+              type="datetime-local"
+              value={downloadEndTime}
+              onChange={(e) => {
+                setDownloadEndTime(e.target.value);
+                setDownloadPage(1);
+              }}
+            />
+          </label>
+        </div>
+      </div>
+
+      <div className="download-toolbar">
+        <div className="download-toolbar-selection">
+          <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.92rem", color: "#334155" }}>
+            <input
+              type="checkbox"
+              checked={allCurrentPageSelected}
+              onChange={(e) => {
+                if (e.target.checked) {
+                  setSelectedIds(downloads.map((d) => d.id));
+                } else {
+                  setSelectedIds([]);
+                }
+              }}
+            />
+            全选本页
+          </label>
+          <span className="download-toolbar-count">已选 {selectedIds.length} 项</span>
+        </div>
+
+        <div className="download-toolbar-actions">
+          <button
+            onClick={handlePauseAll}
+            style={{ padding: "0.45rem 0.95rem", borderRadius: "999px", border: "1px solid #ff9800", background: "#fff3e0", color: "#e65100", cursor: "pointer" }}
+          >
+            ⏸️ 全部暂停
+          </button>
+          <button
+            onClick={handleResumeAll}
+            style={{ padding: "0.45rem 0.95rem", borderRadius: "999px", border: "1px solid #4caf50", background: "#e8f5e9", color: "#2e7d32", cursor: "pointer" }}
+          >
+            ▶️ 全部恢复
+          </button>
+          <button
+            onClick={() => bulkDelete(false)}
+            disabled={selectedIds.length === 0}
+            style={{ padding: "0.45rem 0.95rem", borderRadius: "999px", border: "1px solid #cbd5e1", background: selectedIds.length ? "#f8fafc" : "#f1f5f9", color: selectedIds.length ? "#334155" : "#94a3b8", cursor: selectedIds.length ? "pointer" : "not-allowed" }}
+          >
+            🗑️ 删除记录
+          </button>
+          <button
+            onClick={() => bulkDelete(true)}
+            disabled={selectedIds.length === 0}
+            style={{ padding: "0.45rem 0.95rem", borderRadius: "999px", border: "1px solid #f44336", background: selectedIds.length ? "#ffebee" : "#fef2f2", color: selectedIds.length ? "#c62828" : "#fca5a5", cursor: selectedIds.length ? "pointer" : "not-allowed" }}
+          >
+            🗑️ 删除记录并删除文件
+          </button>
+        </div>
+      </div>
+
+      <div>
+        {downloads.length === 0 ? (
+          <p style={{ textAlign: "center", color: "#666", padding: "2rem" }}>
+            暂无下载记录
+          </p>
+        ) : (
+          <div
+            className="download-record-grid"
+            style={{
+              gridTemplateColumns: isMobile ? "1fr" : "repeat(auto-fit, minmax(340px, 1fr))",
+            }}
+          >
+            {downloads.map((record: DownloadRecord) => {
+              const statusMeta = getStatusMeta(record.status);
+              return (
+                <article key={record.id} className="download-record-card">
+                  <div className="download-record-top">
+                    <label className="download-record-checkbox">
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.includes(record.id)}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            setSelectedIds([...selectedIds, record.id]);
+                          } else {
+                            setSelectedIds(selectedIds.filter((id) => id !== record.id));
+                          }
+                        }}
+                      />
+                    </label>
+                    <div className="download-record-heading">
+                      <div className="download-record-title" title={record.file_name}>
+                        {record.file_name}
+                      </div>
+                      {record.origin_file_name && record.origin_file_name !== record.file_name && (
+                        <div className="download-record-origin">
+                          源文件名：{record.origin_file_name}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="download-record-tags">
+                    <span
+                      className="download-record-chip"
+                      style={{
+                        backgroundColor: record.source === "rule" ? "#ede9fe" : "#e0f2fe",
+                        color: record.source === "rule" ? "#6d28d9" : "#0369a1",
+                      }}
+                    >
+                      {sourceLabel(record)}
+                    </span>
+                    <span
+                      className="download-record-chip"
+                      style={{
+                        backgroundColor: statusMeta.bg,
+                        color: statusMeta.color,
+                      }}
+                    >
+                      {statusMeta.emoji} {statusMeta.label}
+                    </span>
+                  </div>
+
+                  <div className="download-record-meta">
+                    <div className="download-record-meta-item">
+                      <span className="download-record-meta-label">大小</span>
+                      <strong>{record.file_size && record.file_size > 0 ? formatBytes(record.file_size) : "未知"}</strong>
+                    </div>
+                    <div className="download-record-meta-item">
+                      <span className="download-record-meta-label">速度</span>
+                      <strong>{record.download_speed && record.download_speed > 0 ? `${formatBytes(record.download_speed)}/s` : "-"}</strong>
+                    </div>
+                    <div className="download-record-meta-item">
+                      <span className="download-record-meta-label">创建时间</span>
+                      <strong>{new Date(record.created_at).toLocaleString()}</strong>
+                    </div>
+                  </div>
+
+                  <div className="download-record-paths">
+                    <div className="download-record-path-block">
+                      <span className="download-record-meta-label">保存目录</span>
+                      <div>{record.save_dir || "-"}</div>
+                    </div>
+                    {record.file_path && (
+                      <div className="download-record-path-block">
+                        <span className="download-record-meta-label">文件路径</span>
+                        <div>{record.file_path}</div>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="download-progress-shell">
+                    <div className="download-progress-labels">
+                      <span>进度</span>
+                      <strong>{typeof record.progress === "number" ? `${Math.round(record.progress)}%` : "-"}</strong>
+                    </div>
+                    <div className="download-progress-track">
+                      <div
+                        className="download-progress-fill"
+                        style={{
+                          width: `${Math.min(100, Math.max(0, record.progress || 0))}%`,
+                          backgroundColor: record.status === "completed" ? "#4caf50" : "#2196f3",
+                        }}
+                      />
+                    </div>
+                  </div>
+
+                  {record.error && record.status === "failed" && (
+                    <div className="download-record-error">{record.error}</div>
+                  )}
+
+                  <div className="download-record-actions">
+                    {record.status === "downloading" && (
+                      <button
+                        onClick={() => handlePauseDownload(record.id)}
+                        style={{ padding: "0.45rem 0.75rem", fontSize: "0.85rem", border: "1px solid #ff9800", backgroundColor: "#fff3e0", color: "#e65100", borderRadius: "8px", cursor: "pointer" }}
+                      >
+                        ⏸️ 暂停
+                      </button>
+                    )}
+                    {record.status === "paused" && (
+                      <button
+                        onClick={() => handleResumeDownload(record.id)}
+                        style={{ padding: "0.45rem 0.75rem", fontSize: "0.85rem", border: "1px solid #4caf50", backgroundColor: "#e8f5e9", color: "#2e7d32", borderRadius: "8px", cursor: "pointer" }}
+                      >
+                        ▶️ 开始
+                      </button>
+                    )}
+                    {(record.status === "downloading" || record.status === "pending" || record.status === "queued" || record.status === "paused") && (
+                      <button
+                        onClick={() => handlePriorityDownload(record.id)}
+                        style={{ padding: "0.45rem 0.75rem", fontSize: "0.85rem", border: "1px solid #ffc107", backgroundColor: "#fff8e1", color: "#f57f17", borderRadius: "8px", cursor: "pointer" }}
+                      >
+                        ⭐ 置顶
+                      </button>
+                    )}
+                    <button
+                      onClick={() => handleDeleteDownload(record.id, false)}
+                      style={{ padding: "0.45rem 0.75rem", fontSize: "0.85rem", border: "1px solid #9e9e9e", backgroundColor: "#f5f5f5", color: "#424242", borderRadius: "8px", cursor: "pointer" }}
+                    >
+                      🗑️ 删记录
+                    </button>
+                    <button
+                      onClick={() => handleDeleteDownload(record.id, true)}
+                      style={{ padding: "0.45rem 0.75rem", fontSize: "0.85rem", border: "1px solid #f44336", backgroundColor: "#ffebee", color: "#c62828", borderRadius: "8px", cursor: "pointer" }}
+                    >
+                      🗑️ 记录+文件
+                    </button>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </>
+  );
+
   return (
     <div style={{ padding: isMobile ? "1rem" : "2rem", maxWidth: "1400px", margin: "0 auto", minHeight: "100vh", display: "flex", flexDirection: "column" }}>
       <div style={{ marginBottom: "2rem", display: "flex", justifyContent: "space-between", alignItems: "center", gap: "1rem", flexWrap: "wrap" }}>
@@ -831,6 +1221,10 @@ export default function Dashboard() {
 
       {/* 下载记录 */}
       <div className="card" style={{ padding: "1.5rem", backgroundColor: "white", borderRadius: "8px", boxShadow: "0 2px 4px rgba(0,0,0,0.1)" }}>
+        {renderDownloadRecordsSection()}
+
+        {false && (
+        <>
         <h2 style={{ margin: "0 0 1rem 0" }}>📥 下载记录</h2>
 
         {/* 筛选条件 */}
@@ -1481,6 +1875,8 @@ export default function Dashboard() {
             )
           )}
         </div>
+        </>
+        )}
 
         {/* 分页控制 */}
         <div style={{ marginTop: "0.75rem", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "0.5rem" }}>
