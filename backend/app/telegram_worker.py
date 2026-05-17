@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import socket
+import time
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -70,6 +71,8 @@ _prefer_ipv4_resolution()
 
 from telethon import TelegramClient, events, functions
 from telethon.errors import (
+    FloodWaitError,
+    MessageNotModifiedError,
     PhoneCodeExpiredError,
     PhoneCodeInvalidError,
     SessionPasswordNeededError,
@@ -105,6 +108,11 @@ class TelegramWorker:
         self._bot_client: Optional[TelegramClient] = None  # Bot客户端用于发送通知
         self._download_tasks: dict[int, asyncio.Task] = {}  # 跟踪正在进行的下载任务
         self._cancelled_downloads: set[int] = set()  # 已取消的下载ID
+        self._notification_edit_lock = asyncio.Lock()
+        self._notification_min_edit_interval = 4.0
+        self._last_notification_edit_time = 0.0
+        self._pending_notification_tasks: dict[tuple[int, int], asyncio.Task] = {}
+        self._pending_notification_payloads: dict[tuple[int, int], dict[str, Any]] = {}
 
     def _build_internal_tmp_path(self, file_name: str) -> Path:
         tmp_root = self.settings.data_dir / ".telegram_depiler_tmp" / "rule_downloads"
@@ -125,6 +133,91 @@ class TelegramWorker:
         progress = max(0.0, min(100.0, progress))
         filled = round(progress / 100 * width)
         return "█" * filled + "░" * max(0, width - filled)
+
+    def _notification_message_key(self, bot_message: Any) -> tuple[int, int]:
+        return (int(bot_message.chat_id), int(bot_message.id))
+
+    async def _edit_bot_notification_message(
+        self,
+        chat_id: int,
+        message_id: int,
+        text: str,
+        *,
+        buttons: Any,
+        parse_mode: str = "markdown",
+    ) -> None:
+        if not self._bot_client:
+            return
+
+        while True:
+            try:
+                async with self._notification_edit_lock:
+                    wait_seconds = self._notification_min_edit_interval - (time.time() - self._last_notification_edit_time)
+                    if wait_seconds > 0:
+                        await asyncio.sleep(wait_seconds)
+
+                    await self._bot_client.edit_message(
+                        chat_id,
+                        message_id,
+                        text,
+                        parse_mode=parse_mode,
+                        buttons=buttons,
+                    )
+                    self._last_notification_edit_time = time.time()
+                return
+            except MessageNotModifiedError:
+                return
+            except FloodWaitError as exc:
+                wait_seconds = max(int(getattr(exc, "seconds", 0)), 1) + 1
+                logger.warning(
+                    "Bot通知编辑触发 FloodWait，等待 %s 秒后重试 (chat_id=%s, message_id=%s)",
+                    wait_seconds,
+                    chat_id,
+                    message_id,
+                )
+                await asyncio.sleep(wait_seconds)
+
+    def _queue_rule_download_notification(self, bot_message: Any, payload: dict[str, Any]) -> None:
+        if not bot_message or not self._bot_client:
+            return
+
+        message_key = self._notification_message_key(bot_message)
+        self._pending_notification_payloads[message_key] = payload
+
+        existing_task = self._pending_notification_tasks.get(message_key)
+        if existing_task and not existing_task.done():
+            return
+
+        async def _runner() -> None:
+            try:
+                while True:
+                    current_payload = self._pending_notification_payloads.pop(message_key, None)
+                    if current_payload is None:
+                        break
+                    await self._update_rule_download_notification(bot_message, **current_payload)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning("更新下载进度通知失败: %s", exc)
+            finally:
+                self._pending_notification_tasks.pop(message_key, None)
+
+        self._pending_notification_tasks[message_key] = asyncio.create_task(_runner())
+
+    async def _cancel_pending_rule_download_notification(self, bot_message: Any) -> None:
+        if not bot_message:
+            return
+
+        message_key = self._notification_message_key(bot_message)
+        self._pending_notification_payloads.pop(message_key, None)
+
+        task = self._pending_notification_tasks.pop(message_key, None)
+        if task and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
     async def _update_rule_download_notification(
         self,
@@ -169,7 +262,7 @@ class TelegramWorker:
             ],
             [Button.inline("🗑️ 删除", f"delete_{download_id}")],
         ]
-        await self._bot_client.edit_message(
+        await self._edit_bot_notification_message(
             bot_message.chat_id,
             bot_message.id,
             text,
@@ -1887,10 +1980,10 @@ class TelegramWorker:
             last_update_time = time.time()
             last_downloaded = 0
             download_speed = 0.0
-            last_notification_edit_time = 0.0
+            last_notification_enqueue_time = 0.0
             
             def progress_callback(current: int, total: int) -> None:
-                nonlocal downloaded_bytes, last_update_time, last_downloaded, download_speed, last_notification_edit_time
+                nonlocal downloaded_bytes, last_update_time, last_downloaded, download_speed, last_notification_enqueue_time
                 
                 # 检查是否已取消
                 if download_id in self._cancelled_downloads:
@@ -1920,21 +2013,21 @@ class TelegramWorker:
                 except Exception as e:
                     logger.debug("更新下载进度失败: %s", e)
 
-                if bot_message and self._bot_client and current_time - last_notification_edit_time >= 2.0:
-                    last_notification_edit_time = current_time
-                    asyncio.create_task(
-                        self._update_rule_download_notification(
-                            bot_message,
-                            chat_title=chat_title,
-                            sender_name=sender_name,
-                            file_name=original_file_name,
-                            media_type=media_type,
-                            file_size=file_size,
-                            download_id=download_id,
-                            rule_id=rule.get('id', 'Unknown'),
-                            progress=progress,
-                            download_speed=download_speed,
-                        )
+                if bot_message and self._bot_client and current_time - last_notification_enqueue_time >= 4.0:
+                    last_notification_enqueue_time = current_time
+                    self._queue_rule_download_notification(
+                        bot_message,
+                        {
+                            "chat_title": chat_title,
+                            "sender_name": sender_name,
+                            "file_name": original_file_name,
+                            "media_type": media_type,
+                            "file_size": file_size,
+                            "download_id": download_id,
+                            "rule_id": rule.get('id', 'Unknown'),
+                            "progress": progress,
+                            "download_speed": download_speed,
+                        },
                     )
             
             # 检查是否在开始前就被取消
@@ -1994,6 +2087,7 @@ class TelegramWorker:
             # 更新Bot通知为完成状态
             if bot_message and self._bot_client:
                 try:
+                    await self._cancel_pending_rule_download_notification(bot_message)
                     sender_name = getattr(sender, 'username', None) or getattr(sender, 'first_name', None) or f"ID:{getattr(sender, 'id', 'Unknown')}"
                     
                     completed_text = (
@@ -2018,7 +2112,7 @@ class TelegramWorker:
                         [Button.inline("🗑️ 删除文件", f"delete_{download_id}")],
                     ]
                     
-                    await self._bot_client.edit_message(
+                    await self._edit_bot_notification_message(
                         bot_message.chat_id,
                         bot_message.id,
                         completed_text,
@@ -2082,6 +2176,7 @@ class TelegramWorker:
                 # 更新Bot通知为失败状态
                 if 'bot_message' in locals() and bot_message and self._bot_client:
                     try:
+                        await self._cancel_pending_rule_download_notification(bot_message)
                         sender_name = getattr(sender, 'username', None) or getattr(sender, 'first_name', None) or f"ID:{getattr(sender, 'id', 'Unknown')}"
                         
                         failed_text = (
@@ -2099,7 +2194,7 @@ class TelegramWorker:
                             [Button.inline("🗑️ 删除记录", f"delete_{download_id}")]
                         ]
                         
-                        await self._bot_client.edit_message(
+                        await self._edit_bot_notification_message(
                             bot_message.chat_id,
                             bot_message.id,
                             failed_text,
