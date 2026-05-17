@@ -107,6 +107,7 @@ class Database:
                     add_download_suffix BOOLEAN DEFAULT 0, -- 是否为未完成文件添加.download后缀
                     move_after_complete BOOLEAN DEFAULT 0, -- 下载完成后再移动到目标目录
                     auto_catch_up BOOLEAN DEFAULT 0, -- 启动时自动回补遗漏消息
+                    include_comments BOOLEAN DEFAULT 0, -- 是否包含评论/讨论组/留言板回复内容
                     last_seen_message_id INTEGER DEFAULT 0,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -215,6 +216,8 @@ class Database:
                 conn.execute("ALTER TABLE group_download_rules ADD COLUMN move_after_complete BOOLEAN DEFAULT 0")
             if not has_column("group_download_rules", "auto_catch_up"):
                 conn.execute("ALTER TABLE group_download_rules ADD COLUMN auto_catch_up BOOLEAN DEFAULT 0")
+            if not has_column("group_download_rules", "include_comments"):
+                conn.execute("ALTER TABLE group_download_rules ADD COLUMN include_comments BOOLEAN DEFAULT 0")
             if not has_column("group_download_rules", "last_seen_message_id"):
                 conn.execute("ALTER TABLE group_download_rules ADD COLUMN last_seen_message_id INTEGER DEFAULT 0")
 
@@ -654,6 +657,7 @@ class Database:
         add_download_suffix: bool = False,
         move_after_complete: bool = False,
         auto_catch_up: bool = False,
+        include_comments: bool = False,
         last_seen_message_id: int = 0,
     ) -> int:
         """新增一条群聊下载规则，返回规则ID。"""
@@ -666,9 +670,9 @@ class Database:
                     filename_template, include_keywords, exclude_keywords,
                     match_mode, start_time, end_time,
                     min_message_id, max_message_id, add_download_suffix, move_after_complete,
-                    auto_catch_up, last_seen_message_id
+                    auto_catch_up, include_comments, last_seen_message_id
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     chat_id,
@@ -692,6 +696,7 @@ class Database:
                     1 if add_download_suffix else 0,
                     1 if move_after_complete else 0,
                     1 if auto_catch_up else 0,
+                    1 if include_comments else 0,
                     int(last_seen_message_id or 0),
                 ),
             )
@@ -722,6 +727,7 @@ class Database:
         add_download_suffix: bool | None = None,
         move_after_complete: bool | None = None,
         auto_catch_up: bool | None = None,
+        include_comments: bool | None = None,
         last_seen_message_id: int | None = None,
     ) -> None:
         """更新一条群聊下载规则。"""
@@ -788,6 +794,9 @@ class Database:
         if auto_catch_up is not None:
             updates.append("auto_catch_up = ?")
             params.append(1 if auto_catch_up else 0)
+        if include_comments is not None:
+            updates.append("include_comments = ?")
+            params.append(1 if include_comments else 0)
         if last_seen_message_id is not None:
             updates.append("last_seen_message_id = ?")
             params.append(int(last_seen_message_id))

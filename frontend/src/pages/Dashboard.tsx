@@ -75,7 +75,15 @@ type GroupRule = {
   add_download_suffix?: boolean;
   move_after_complete?: boolean;
   auto_catch_up?: boolean;
+  include_comments?: boolean;
   created_at: string;
+};
+
+type VersionCheck = {
+  current_version: string;
+  latest_version?: string | null;
+  has_update?: boolean | null;
+  status: "ok" | "error";
 };
 
 type Dialog = {
@@ -127,6 +135,7 @@ export default function Dashboard() {
   const [formAddDownloadSuffix, setFormAddDownloadSuffix] = useState(false);
   const [formMoveAfterComplete, setFormMoveAfterComplete] = useState(false);
   const [formAutoCatchUp, setFormAutoCatchUp] = useState(false);
+  const [formIncludeComments, setFormIncludeComments] = useState(false);
   const [dirOptions, setDirOptions] = useState<string[]>([]);
   const [dirLoading, setDirLoading] = useState(false);
   const [notification, setNotification] = useState<{message: string; type: "success" | "error" | "info"} | null>(null);
@@ -135,6 +144,7 @@ export default function Dashboard() {
   const [showDefaultPathModal, setShowDefaultPathModal] = useState(false);
   const [showFilenameTemplateModal, setShowFilenameTemplateModal] = useState(false);
   const [selectedDefaultPath, setSelectedDefaultPath] = useState<string>("");
+  const [versionCheck, setVersionCheck] = useState<VersionCheck | null>(null);
 
   useEffect(() => {
     fetchGroupRules();
@@ -142,6 +152,7 @@ export default function Dashboard() {
     fetchLogs();
     fetchDefaultDownloadPath();
     fetchDefaultFilenameTemplate();
+    fetchVersionCheck();
   }, []);
 
   useEffect(() => {
@@ -189,6 +200,16 @@ export default function Dashboard() {
       setDefaultFilenameTemplate(data.template || "{task_id}_{file_name}");
     } catch (error) {
       console.error("Failed to fetch default filename template:", error);
+    }
+  };
+
+  const fetchVersionCheck = async () => {
+    try {
+      const { data } = await api.get("/version-check");
+      setVersionCheck(data);
+    } catch (error) {
+      console.error("Failed to fetch version check:", error);
+      setVersionCheck({ current_version: __APP_VERSION__, latest_version: null, has_update: null, status: "error" });
     }
   };
 
@@ -473,6 +494,7 @@ export default function Dashboard() {
     setFormExcludeKeywords("");
     setFormMoveAfterComplete(false);
     setFormAutoCatchUp(false);
+    setFormIncludeComments(false);
     setShowRuleModal(true);
   };
 
@@ -493,6 +515,7 @@ export default function Dashboard() {
     setFormAddDownloadSuffix(rule.add_download_suffix || false);
     setFormMoveAfterComplete(rule.move_after_complete || false);
     setFormAutoCatchUp(rule.auto_catch_up || false);
+    setFormIncludeComments(rule.include_comments || false);
     setShowRuleModal(true);
     // 如果已有保存路径，加载该路径的父目录
     if (rule.save_dir) {
@@ -528,6 +551,7 @@ export default function Dashboard() {
       add_download_suffix: formAddDownloadSuffix,
       move_after_complete: formMoveAfterComplete,
       auto_catch_up: formAutoCatchUp,
+      include_comments: formIncludeComments,
     };
 
     try {
@@ -991,6 +1015,32 @@ export default function Dashboard() {
             style={{ height: isMobile ? "64px" : "100px", objectFit: "contain" }}
           />
           <span style={{ fontSize: "0.9rem", color: "#6b7280" }}>v{__APP_VERSION__}</span>
+          <span
+            style={{
+              fontSize: "0.85rem",
+              color:
+                versionCheck?.has_update === true
+                  ? "#b45309"
+                  : versionCheck?.has_update === false
+                  ? "#15803d"
+                  : "#6b7280",
+              backgroundColor:
+                versionCheck?.has_update === true
+                  ? "#fef3c7"
+                  : versionCheck?.has_update === false
+                  ? "#dcfce7"
+                  : "#f3f4f6",
+              borderRadius: "999px",
+              padding: "0.2rem 0.6rem",
+            }}
+            title={versionCheck?.latest_version ? `最新版本：v${versionCheck.latest_version}` : "暂时无法检查更新"}
+          >
+            {versionCheck?.has_update === true
+              ? `有新版本 v${versionCheck.latest_version}`
+              : versionCheck?.has_update === false
+              ? "已是最新版本"
+              : "更新检查失败"}
+          </span>
         </div>
         <Link to="/settings" style={{ textDecoration: "none" }}>
           <button style={{ padding: "0.5rem 1rem", cursor: "pointer" }}>⚙️ Settings</button>
@@ -1237,6 +1287,12 @@ export default function Dashboard() {
                       <span style={{ fontWeight: "500" }}>
                         {rule.match_mode === "include" ? "包含" : "排除"}
                       </span>
+                    </div>
+                  )}
+                  {rule.include_comments && (
+                    <div>
+                      <span style={{ color: "#666" }}>评论/讨论组：</span>
+                      <span style={{ fontWeight: "500" }}>已包含</span>
                     </div>
                   )}
                 </div>
@@ -2621,6 +2677,20 @@ export default function Dashboard() {
                 </label>
                 <small style={{ display: "block", marginTop: "0.25rem", color: "#666", fontSize: "0.8rem" }}>
                   开启后程序启动会扫描本群自上次记录以来的新消息，并按本规则匹配下载
+                </small>
+              </div>
+
+              <div>
+                <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontWeight: "500" }}>
+                  <input
+                    type="checkbox"
+                    checked={formIncludeComments}
+                    onChange={(e) => setFormIncludeComments(e.target.checked)}
+                  />
+                  包含评论 / 讨论组 / 留言板回复内容
+                </label>
+                <small style={{ display: "block", marginTop: "0.25rem", color: "#666", fontSize: "0.8rem" }}>
+                  默认只下载频道或群组主消息中的媒体；开启后会额外匹配下载其评论、回复和讨论组中的媒体文件
                 </small>
               </div>
             </div>

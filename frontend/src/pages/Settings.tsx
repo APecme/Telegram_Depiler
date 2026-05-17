@@ -31,6 +31,13 @@ type LoginState = {
   last_login?: string;
 };
 
+type VersionCheck = {
+  current_version: string;
+  latest_version?: string | null;
+  has_update?: boolean | null;
+  status: "ok" | "error";
+};
+
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL ?? "/api",
 });
@@ -66,6 +73,7 @@ export default function Settings() {
   const [loginState, setLoginState] = useState<LoginState | null>(null);
   const [panelUsername, setPanelUsername] = useState("");
   const [panelPassword, setPanelPassword] = useState("");
+  const [versionCheck, setVersionCheck] = useState<VersionCheck | null>(null);
 
   const proxy = useMemo(
     () =>
@@ -135,9 +143,20 @@ export default function Settings() {
     }
   };
 
+  const fetchVersionCheck = async () => {
+    try {
+      const { data } = await api.get("/version-check");
+      setVersionCheck(data);
+    } catch (error) {
+      console.error("获取版本状态失败:", error);
+      setVersionCheck({ current_version: __APP_VERSION__, latest_version: null, has_update: null, status: "error" });
+    }
+  };
+
   useEffect(() => {
     fetchConfig();
     fetchLoginState();
+    fetchVersionCheck();
   }, []);
 
   const formatError = (error: unknown) => {
@@ -660,6 +679,33 @@ export default function Settings() {
       </div>
 
       <div style={{ marginTop: "2rem", paddingTop: "1rem", borderTop: "1px solid #e5e7eb", textAlign: "center", color: "#6b7280", fontSize: "0.9rem" }}>
+        <div style={{ marginBottom: "0.75rem", display: "flex", justifyContent: "center", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
+          <span>当前版本：v{__APP_VERSION__}</span>
+          <span
+            style={{
+              color:
+                versionCheck?.has_update === true
+                  ? "#b45309"
+                  : versionCheck?.has_update === false
+                  ? "#15803d"
+                  : "#6b7280",
+              backgroundColor:
+                versionCheck?.has_update === true
+                  ? "#fef3c7"
+                  : versionCheck?.has_update === false
+                  ? "#dcfce7"
+                  : "#f3f4f6",
+              borderRadius: "999px",
+              padding: "0.2rem 0.6rem",
+            }}
+          >
+            {versionCheck?.has_update === true
+              ? `发现新版本 v${versionCheck.latest_version}`
+              : versionCheck?.has_update === false
+              ? "已是最新版本"
+              : "无法检查更新"}
+          </span>
+        </div>
         <a
           href="https://github.com/APecme/Telegram_Depiler"
           target="_blank"
@@ -672,4 +718,3 @@ export default function Settings() {
     </div>
   );
 }
-

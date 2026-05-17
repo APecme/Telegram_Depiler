@@ -114,6 +114,12 @@ class TelegramWorker:
         self._pending_notification_tasks: dict[tuple[int, int], asyncio.Task] = {}
         self._pending_notification_payloads: dict[tuple[int, int], dict[str, Any]] = {}
 
+    def _message_matches_comment_rule(self, message: Any, rule: dict[str, Any]) -> bool:
+        include_comments = bool(rule.get("include_comments", False))
+        reply_to = getattr(message, "reply_to", None)
+        is_comment_like = reply_to is not None
+        return include_comments or not is_comment_like
+
     def _build_internal_tmp_path(self, file_name: str) -> Path:
         tmp_root = self.settings.data_dir / ".telegram_depiler_tmp" / "rule_downloads"
         return tmp_root / file_name
@@ -1169,6 +1175,8 @@ class TelegramWorker:
                 continue
 
             for rule in rules:
+                if not self._message_matches_comment_rule(m, rule):
+                    continue
                 if self._should_download_by_rule(m, rule):
                     task = asyncio.create_task(self._download_file_by_rule(m, rule, chat, sender))
                     task.add_done_callback(lambda t: self._cleanup_download_task(t))
@@ -1592,6 +1600,9 @@ class TelegramWorker:
 
                 for idx, rule in enumerate(rules, 1):
                     logger.debug("\n检查第 %d/%d 条规则...", idx, len(rules))
+                    if not self._message_matches_comment_rule(msg, rule):
+                        logger.debug("  - 评论/回复检查: 跳过（规则未启用评论下载）")
+                        continue
                     if self._should_download_by_rule(msg, rule):
                         logger.info("✅ 消息匹配规则 ID:%d，开始下载 (message_id=%s)", rule['id'], getattr(msg, 'id', None))
                         # 创建下载任务并跟踪

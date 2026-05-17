@@ -6,6 +6,8 @@ import time
 import hashlib
 import secrets
 import os
+from urllib.request import Request, urlopen
+from urllib.error import URLError, HTTPError
 from pathlib import Path
 from contextlib import asynccontextmanager
 from typing import Optional
@@ -338,6 +340,44 @@ api.add_middleware(
 @api.get("/health")
 async def health_check() -> dict:
     return {"status": "ok", "version": settings.version}
+
+
+def _parse_version_parts(version: str) -> tuple[int, ...]:
+    cleaned = (version or "").strip().lower().lstrip("v")
+    parts: list[int] = []
+    for raw in cleaned.split("."):
+        digits = "".join(ch for ch in raw if ch.isdigit())
+        parts.append(int(digits) if digits else 0)
+    return tuple(parts or [0])
+
+
+@api.get("/version-check")
+async def version_check() -> dict:
+    current_version = settings.version
+    remote_url = "https://raw.githubusercontent.com/APecme/Telegram_Depiler/main/VERSION"
+    try:
+        request = Request(
+            remote_url,
+            headers={"User-Agent": "Telegram-Depiler-Version-Check"},
+        )
+        with urlopen(request, timeout=5) as response:
+            latest_version = response.read().decode("utf-8").strip() or current_version
+    except (HTTPError, URLError, TimeoutError, OSError) as exc:
+        logger.warning("检查版本更新失败: %s", exc)
+        return {
+            "current_version": current_version,
+            "latest_version": None,
+            "has_update": None,
+            "status": "error",
+        }
+
+    has_update = _parse_version_parts(latest_version) > _parse_version_parts(current_version)
+    return {
+        "current_version": current_version,
+        "latest_version": latest_version,
+        "has_update": has_update,
+        "status": "ok",
+    }
 
 
 @api.get("/config")
@@ -1145,6 +1185,7 @@ async def create_group_rule(body: GroupRuleCreate) -> dict:
         add_download_suffix=body.add_download_suffix,
         move_after_complete=body.move_after_complete,
         auto_catch_up=body.auto_catch_up,
+        include_comments=body.include_comments,
     )
     rule = database.get_group_rule(rule_id)
     return {"id": rule_id, "rule": rule}
@@ -1195,6 +1236,7 @@ async def update_group_rule(rule_id: int, body: GroupRuleUpdate) -> dict:
         add_download_suffix=body.add_download_suffix,
         move_after_complete=body.move_after_complete,
         auto_catch_up=body.auto_catch_up,
+        include_comments=body.include_comments,
     )
     rule = database.get_group_rule(rule_id)
     if not rule:
