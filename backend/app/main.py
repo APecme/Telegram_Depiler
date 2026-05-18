@@ -17,6 +17,7 @@ from fastapi import FastAPI, HTTPException, Body, Header, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from starlette.responses import FileResponse
+import mimetypes
 from telethon import events
 
 from .config import get_settings
@@ -885,7 +886,8 @@ async def get_download_media(
     if not target.exists() or not target.is_file():
         raise HTTPException(status_code=404, detail="文件不存在")
 
-    return FileResponse(path=target, filename=target.name)
+    media_type, _ = mimetypes.guess_type(str(target))
+    return FileResponse(path=target, filename=target.name, media_type=media_type or "application/octet-stream")
 
 
 @api.post("/downloads/{download_id}/pause")

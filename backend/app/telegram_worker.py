@@ -1178,7 +1178,7 @@ class TelegramWorker:
                 if not self._message_matches_comment_rule(m, rule):
                     continue
                 if self._should_download_by_rule(m, rule):
-                    task = asyncio.create_task(self._download_file_by_rule(m, rule, chat, sender))
+                    task = asyncio.create_task(self._download_file_by_rule(m, rule, chat, sender, media_group_size=len(messages_to_process)))
                     task.add_done_callback(lambda t: self._cleanup_download_task(t))
                     any_matched = True
                     break
@@ -1423,6 +1423,8 @@ class TelegramWorker:
                 download_id = self.database.add_download(
                     message_id=event.message.id,
                     chat_id=event.chat_id or 0,
+                    grouped_id=getattr(event.message, "grouped_id", None),
+                    media_group_size=1,
                     bot_username=bot_username or "unknown",
                     file_name=file_name,
                     origin_file_name=file_name,
@@ -1606,7 +1608,7 @@ class TelegramWorker:
                     if self._should_download_by_rule(msg, rule):
                         logger.info("✅ 消息匹配规则 ID:%d，开始下载 (message_id=%s)", rule['id'], getattr(msg, 'id', None))
                         # 创建下载任务并跟踪
-                        task = asyncio.create_task(self._download_file_by_rule(msg, rule, chat, sender))
+                        task = asyncio.create_task(self._download_file_by_rule(msg, rule, chat, sender, media_group_size=len(messages_to_process)))
                         # 任务完成后清理
                         task.add_done_callback(lambda t: self._cleanup_download_task(t))
                         any_matched = True
@@ -1725,7 +1727,7 @@ class TelegramWorker:
             logger.exception("检查规则时出错: %s", e)
             return False
     
-    async def _download_file_by_rule(self, message: Any, rule: dict, chat: Any, sender: Any) -> None:
+    async def _download_file_by_rule(self, message: Any, rule: dict, chat: Any, sender: Any, media_group_size: int = 1) -> None:
         """按规则下载文件"""
         try:
             import time
@@ -1783,6 +1785,8 @@ class TelegramWorker:
             download_id = self.database.add_download(
                 message_id=message.id,
                 chat_id=chat.id,
+                grouped_id=getattr(message, "grouped_id", None),
+                media_group_size=media_group_size,
                 bot_username=self._bot_username or "unknown",
                 file_name=original_file_name,
                 origin_file_name=original_file_name,

@@ -29,6 +29,8 @@ class Database:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     message_id INTEGER,
                     chat_id INTEGER,
+                    grouped_id INTEGER DEFAULT 0,
+                    media_group_size INTEGER DEFAULT 1,
                     bot_username TEXT,
                     file_name TEXT,
                     origin_file_name TEXT,
@@ -166,6 +168,10 @@ class Database:
                 conn.execute("ALTER TABLE downloads ADD COLUMN reply_chat_id INTEGER")
             if not has_column("downloads", "origin_file_name"):
                 conn.execute("ALTER TABLE downloads ADD COLUMN origin_file_name TEXT")
+            if not has_column("downloads", "grouped_id"):
+                conn.execute("ALTER TABLE downloads ADD COLUMN grouped_id INTEGER DEFAULT 0")
+            if not has_column("downloads", "media_group_size"):
+                conn.execute("ALTER TABLE downloads ADD COLUMN media_group_size INTEGER DEFAULT 1")
 
         # messages 表 - 确保媒体及转发相关字段和时间戳存在
         if has_column("messages", "id"):
@@ -247,6 +253,8 @@ class Database:
         self,
         message_id: int,
         chat_id: int,
+        grouped_id: int | None = None,
+        media_group_size: int | None = None,
         bot_username: str,
         file_name: str,
         origin_file_name: str | None = None,
@@ -265,17 +273,19 @@ class Database:
             cur = conn.execute(
                 """
                 INSERT INTO downloads (
-                    message_id, chat_id, bot_username, file_name, origin_file_name,
+                    message_id, chat_id, grouped_id, media_group_size, bot_username, file_name, origin_file_name,
                     file_path, status, progress, download_speed,
                     source, tg_file_id, tg_access_hash,
                     file_size, save_dir, rule_id, rule_name,
                     reply_message_id, reply_chat_id
                 )
-                VALUES (?, ?, ?, ?, ?, '', ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     message_id,
                     chat_id,
+                    int(grouped_id or 0),
+                    int(media_group_size or 1),
                     bot_username,
                     file_name,
                     origin_file_name or file_name,

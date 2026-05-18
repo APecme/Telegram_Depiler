@@ -38,6 +38,10 @@ api.interceptors.response.use(
 
 type DownloadRecord = {
   id: number;
+  message_id?: number;
+  chat_id?: number;
+  grouped_id?: number;
+  media_group_size?: number;
   file_name: string;
   origin_file_name?: string;
   status: string;
@@ -106,6 +110,17 @@ type LogEntry = {
   message: string;
 };
 
+type PreviewGroup = {
+  key: string;
+  title: string;
+  ruleName: string;
+  chatId?: number;
+  createdAt: string;
+  items: Array<DownloadRecord | null>;
+  downloadedCount: number;
+  totalCount: number;
+};
+
 export default function Dashboard() {
   const [downloads, setDownloads] = useState<DownloadRecord[]>([]);
   const [groupRules, setGroupRules] = useState<GroupRule[]>([]);
@@ -128,6 +143,7 @@ export default function Dashboard() {
   const [downloadEndTime, setDownloadEndTime] = useState<string>("");
   const [downloadRuntimeSummary, setDownloadRuntimeSummary] = useState<DownloadRuntimeSummary>({ total_speed: 0, downloading_count: 0, queued_count: 0, remaining_bytes: 0 });
   const [lightboxRecord, setLightboxRecord] = useState<DownloadRecord | null>(null);
+  const [failedAvatarChatIds, setFailedAvatarChatIds] = useState<number[]>([]);
   
   // 规则表单状态
   const [formChatId, setFormChatId] = useState<number | "">("");
@@ -654,6 +670,50 @@ export default function Dashboard() {
     return `${baseUrl}/dialogs/${chatId}/avatar?token=${encodeURIComponent(token)}`;
   };
 
+  const buildPreviewGroups = (): PreviewGroup[] => {
+    const completedMedia = downloads.filter((record) => record.status === "completed" && !!record.file_path && !!getPreviewType(record));
+    const groupedMap = new Map<string, PreviewGroup>();
+
+    for (const record of completedMedia) {
+      const relatedRule = groupRules.find((rule) => rule.id === record.rule_id);
+      const title = relatedRule?.chat_title || relatedRule?.rule_name || `群聊 ${record.rule_id || "-"}`;
+      const ruleName = record.rule_name || relatedRule?.rule_name || "默认规则";
+      const totalCount = Math.max(1, Number(record.media_group_size || 1));
+      const groupKey = record.grouped_id && record.grouped_id > 0
+        ? `group-${record.chat_id || 0}-${record.grouped_id}`
+        : `single-${record.id}`;
+
+      if (!groupedMap.has(groupKey)) {
+        groupedMap.set(groupKey, {
+          key: groupKey,
+          title,
+          ruleName,
+          chatId: relatedRule?.chat_id,
+          createdAt: record.created_at,
+          items: Array.from({ length: totalCount }, () => null),
+          downloadedCount: 0,
+          totalCount,
+        });
+      }
+
+      const group = groupedMap.get(groupKey)!;
+      const insertIndex = group.items.findIndex((item) => item === null);
+      if (insertIndex >= 0) {
+        group.items[insertIndex] = record;
+      } else {
+        group.items.push(record);
+      }
+      group.downloadedCount += 1;
+      if (new Date(record.created_at).getTime() > new Date(group.createdAt).getTime()) {
+        group.createdAt = record.created_at;
+      }
+    }
+
+    return Array.from(groupedMap.values())
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+      .slice(0, 6);
+  };
+
   const sourceLabel = (record: DownloadRecord) => {
     if (record.source === "rule") return record.rule_name || `规则 #${record.rule_id ?? "-"}`;
     return "机器人接收";
@@ -699,7 +759,7 @@ export default function Dashboard() {
     downloadEndTime !== "";
 
   const allCurrentPageSelected = downloads.length > 0 && selectedIds.length === downloads.length;
-  const previewRecords = downloads.filter((record) => record.status === "completed" && !!record.file_path && getPreviewType(record)).slice(0, 6);
+  const previewGroups = buildPreviewGroups();
 
   const renderDownloadRecordsSection = () => (
     <>
@@ -1110,45 +1170,66 @@ export default function Dashboard() {
             <div>
               <h3 className="telegram-preview-title">消息窗口</h3>
             </div>
-            <span className="telegram-preview-count">最近 {previewRecords.length} 条</span>
+            <span className="telegram-preview-count">最近 {previewGroups.length} 条</span>
           </div>
           <div className="telegram-chat-window">
-            {previewRecords.length === 0 ? (
+            {previewGroups.length === 0 ? (
               <div className="telegram-chat-empty">暂无已完成的图片或视频可预览</div>
             ) : (
-              previewRecords.map((record) => {
-                const previewType = getPreviewType(record);
-                const relatedRule = groupRules.find((rule) => rule.id === record.rule_id);
-                const bubbleTitle = relatedRule?.chat_title || relatedRule?.rule_name || `群聊 ${record.rule_id || "-"}`;
-                const avatarText = bubbleTitle.slice(0, 1) || "群";
-                const avatarUrl = getDialogAvatarUrl(relatedRule?.chat_id);
+              previewGroups.map((group) => {
+                const avatarText = group.title.slice(0, 1) || "群";
+                const avatarChatId = group.chatId;
+                const avatarUrl = avatarChatId && !failedAvatarChatIds.includes(avatarChatId) ? getDialogAvatarUrl(avatarChatId) : "";
                 return (
-                  <div key={record.id} className="telegram-bot-row">
+                  <div key={group.key} className="telegram-bot-row">
                     {avatarUrl ? (
-                      <img className="telegram-bot-avatar telegram-bot-avatar-image" src={avatarUrl} alt={bubbleTitle} />
+                      <img
+                        className="telegram-bot-avatar telegram-bot-avatar-image"
+                        src={avatarUrl}
+                        alt={group.title}
+                        onError={() => {
+                          if (!avatarChatId) return;
+                          setFailedAvatarChatIds((current) => (current.includes(avatarChatId) ? current : [...current, avatarChatId]));
+                        }}
+                      />
                     ) : (
                       <div className="telegram-bot-avatar">{avatarText}</div>
                     )}
                     <div className="telegram-bubble">
                       <div className="telegram-bubble-meta">
-                        <span className="telegram-bubble-name">{bubbleTitle}</span>
-                        <span className="telegram-bubble-time">{new Date(record.created_at).toLocaleString()}</span>
+                        <span className="telegram-bubble-name">{group.title}</span>
+                        <span className="telegram-bubble-time">{new Date(group.createdAt).toLocaleString()}</span>
                       </div>
-                      <div className="telegram-bubble-text">✅ 下载完成：{record.file_name || record.origin_file_name || `任务 #${record.id}`}</div>
-                      {previewType === "image" && (
-                        <button type="button" className="telegram-media-button" onClick={() => setLightboxRecord(record)}>
-                          <img className="telegram-media-preview" src={getMediaPreviewUrl(record)} alt={record.file_name || record.origin_file_name || "preview"} />
-                        </button>
-                      )}
-                      {previewType === "video" && (
-                        <button type="button" className="telegram-media-button telegram-video-thumb" onClick={() => setLightboxRecord(record)}>
-                          <video className="telegram-media-preview" src={getMediaPreviewUrl(record)} muted preload="metadata" />
-                          <span className="telegram-video-play">▶</span>
-                        </button>
-                      )}
+                      <div className="telegram-bubble-text">✅ 下载完成 {group.downloadedCount}/{group.totalCount}</div>
+                      <div className={`telegram-album-grid telegram-album-grid-${Math.min(group.items.length, 4)}`}>
+                        {group.items.map((item, index) => {
+                          if (!item) {
+                            return <div key={`${group.key}-placeholder-${index}`} className="telegram-album-placeholder">未下载</div>;
+                          }
+
+                          const previewType = getPreviewType(item);
+                          return (
+                            <button
+                              key={item.id}
+                              type="button"
+                              className="telegram-media-button telegram-album-tile"
+                              onClick={() => setLightboxRecord(item)}
+                            >
+                              {previewType === "image" ? (
+                                <img className="telegram-media-preview telegram-album-media" src={getMediaPreviewUrl(item)} alt={item.file_name || item.origin_file_name || "preview"} />
+                              ) : (
+                                <div className="telegram-video-thumb telegram-album-video-wrap">
+                                  <video className="telegram-media-preview telegram-album-media" src={getMediaPreviewUrl(item)} muted preload="metadata" playsInline />
+                                  <span className="telegram-video-play">▶</span>
+                                </div>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
                       <div className="telegram-bubble-footer">
-                        <span>{formatBytes(record.file_size || 0)}</span>
-                        <span className="telegram-bubble-rule">{record.rule_name || "默认规则"}</span>
+                        <span>{group.items.filter(Boolean).reduce((sum, item) => sum + Number(item?.file_size || 0), 0) > 0 ? formatBytes(group.items.filter(Boolean).reduce((sum, item) => sum + Number(item?.file_size || 0), 0)) : "-"}</span>
+                        <span className="telegram-bubble-rule">{group.ruleName}</span>
                       </div>
                     </div>
                   </div>
