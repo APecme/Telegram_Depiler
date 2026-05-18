@@ -122,13 +122,220 @@ button {
 }
 
 .download-summary-badge {
-  padding: 0.7rem 1rem;
-  border-radius: 999px;
+  padding: 0.75rem 1rem;
+  border-radius: 18px;
   background: linear-gradient(135deg, #eff6ff, #f8fafc);
   border: 1px solid #dbeafe;
   color: #1e3a8a;
   font-size: 0.9rem;
   font-weight: 700;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.7rem 1rem;
+}
+
+.download-summary-badge span {
+  white-space: nowrap;
+}
+
+.telegram-preview-shell {
+  margin-bottom: 1.5rem;
+  padding: 1rem;
+  border-radius: 24px;
+  border: 1px solid #dbeafe;
+  background: linear-gradient(180deg, #dfefff 0%, #f8fbff 100%);
+}
+
+.telegram-preview-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: flex-start;
+  margin-bottom: 1rem;
+}
+
+.telegram-preview-title {
+  margin: 0;
+  font-size: 1.05rem;
+  color: #0f172a;
+}
+
+.telegram-preview-subtitle {
+  margin: 0.3rem 0 0;
+  color: #64748b;
+  font-size: 0.88rem;
+}
+
+.telegram-preview-count {
+  padding: 0.35rem 0.75rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.85);
+  color: #2563eb;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.telegram-chat-window {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  max-height: 520px;
+  overflow: auto;
+  padding: 1rem;
+  border-radius: 22px;
+  background:
+    radial-gradient(circle at top left, rgba(255, 255, 255, 0.8), transparent 25%),
+    linear-gradient(180deg, #89b4d9 0%, #7eaad1 100%);
+}
+
+.telegram-chat-empty {
+  padding: 2rem 1rem;
+  text-align: center;
+  color: rgba(255, 255, 255, 0.88);
+  font-weight: 600;
+}
+
+.telegram-bot-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.75rem;
+}
+
+.telegram-bot-avatar {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #3b82f6, #2563eb);
+  color: white;
+  font-size: 0.82rem;
+  font-weight: 800;
+  flex-shrink: 0;
+  box-shadow: 0 8px 20px rgba(37, 99, 235, 0.35);
+}
+
+.telegram-bubble {
+  max-width: min(100%, 560px);
+  padding: 0.85rem;
+  border-radius: 18px 18px 18px 6px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.12);
+}
+
+.telegram-bubble-meta,
+.telegram-bubble-filemeta {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.telegram-bubble-name {
+  color: #0284c7;
+  font-weight: 800;
+  font-size: 0.86rem;
+}
+
+.telegram-bubble-time,
+.telegram-bubble-filemeta {
+  color: #64748b;
+  font-size: 0.78rem;
+}
+
+.telegram-bubble-text {
+  margin-top: 0.45rem;
+  color: #0f172a;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.telegram-media-button {
+  margin-top: 0.75rem;
+  padding: 0;
+  border: none;
+  background: transparent;
+  width: 100%;
+  text-align: left;
+}
+
+.telegram-video-thumb {
+  position: relative;
+}
+
+.telegram-media-preview {
+  width: 100%;
+  max-width: 320px;
+  max-height: 320px;
+  object-fit: cover;
+  border-radius: 16px;
+  display: block;
+  background: #cbd5e1;
+}
+
+.telegram-video-play {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 58px;
+  height: 58px;
+  border-radius: 50%;
+  background: rgba(15, 23, 42, 0.6);
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.2rem;
+  pointer-events: none;
+}
+
+.telegram-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  background: rgba(2, 6, 23, 0.82);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+
+.telegram-lightbox-panel {
+  position: relative;
+  width: min(92vw, 980px);
+  max-height: 92vh;
+  padding: 1rem 1rem 0.75rem;
+  border-radius: 24px;
+  background: #0f172a;
+  box-shadow: 0 32px 80px rgba(0, 0, 0, 0.45);
+}
+
+.telegram-lightbox-close {
+  position: absolute;
+  top: 0.75rem;
+  right: 0.75rem;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.12);
+  color: white;
+}
+
+.telegram-lightbox-media {
+  width: 100%;
+  max-height: calc(92vh - 90px);
+  object-fit: contain;
+  border-radius: 18px;
+  background: black;
+}
+
+.telegram-lightbox-caption {
+  margin-top: 0.75rem;
+  color: #e2e8f0;
+  text-align: center;
+  word-break: break-word;
 }
 
 .download-filter-shell {
@@ -379,6 +586,18 @@ button {
   .download-toolbar-selection,
   .download-toolbar-actions {
     width: 100%;
+  }
+
+  .telegram-preview-header {
+    flex-direction: column;
+  }
+
+  .telegram-bubble {
+    max-width: 100%;
+  }
+
+  .telegram-media-preview {
+    max-width: 100%;
   }
 }
 

@@ -513,6 +513,33 @@ class Database:
             "queued": (row["queued"] or 0) if row is not None else 0,
         }
 
+    def get_download_runtime_summary(self) -> Dict[str, float | int]:
+        """汇总当前下载运行态信息。"""
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT
+                    SUM(CASE WHEN status = 'downloading' THEN COALESCE(download_speed, 0) ELSE 0 END) AS total_speed,
+                    SUM(CASE WHEN status = 'downloading' THEN 1 ELSE 0 END) AS downloading_count,
+                    SUM(CASE WHEN status = 'queued' THEN 1 ELSE 0 END) AS queued_count,
+                    SUM(
+                        CASE
+                            WHEN status IN ('downloading', 'queued', 'pending', 'paused')
+                            THEN MAX(COALESCE(file_size, 0) * (100 - MIN(MAX(COALESCE(progress, 0), 0), 100)) / 100.0, 0)
+                            ELSE 0
+                        END
+                    ) AS remaining_bytes
+                FROM downloads
+                """
+            ).fetchone()
+
+        return {
+            "total_speed": float((row["total_speed"] or 0) if row is not None else 0),
+            "downloading_count": int((row["downloading_count"] or 0) if row is not None else 0),
+            "queued_count": int((row["queued_count"] or 0) if row is not None else 0),
+            "remaining_bytes": int((row["remaining_bytes"] or 0) if row is not None else 0),
+        }
+
     # Message helpers ---------------------------------------------------
     def add_message(
         self,

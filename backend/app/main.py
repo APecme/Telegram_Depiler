@@ -743,6 +743,39 @@ async def list_downloads(
     return result
 
 
+@api.get("/downloads/runtime-summary")
+async def get_download_runtime_summary(
+    x_admin_token: str | None = Header(default=None, alias="X-Admin-Token"),
+) -> dict:
+    """返回当前下载速度、并发、队列和剩余体积。"""
+    _require_admin(x_admin_token)
+    return database.get_download_runtime_summary()
+
+
+@api.get("/downloads/{download_id}/media")
+async def get_download_media(
+    download_id: int,
+    x_admin_token: str | None = Header(default=None, alias="X-Admin-Token"),
+) -> FileResponse:
+    """安全返回下载文件，用于前端预览图片/视频。"""
+    _require_admin(x_admin_token)
+
+    downloads = database.list_downloads(limit=5000)
+    download = next((d for d in downloads if d.get("id") == download_id), None)
+    if not download:
+        raise HTTPException(status_code=404, detail="下载记录不存在")
+
+    file_path = download.get("file_path")
+    if not file_path:
+        raise HTTPException(status_code=404, detail="文件路径不存在")
+
+    target = Path(file_path).resolve()
+    if not target.exists() or not target.is_file():
+        raise HTTPException(status_code=404, detail="文件不存在")
+
+    return FileResponse(path=target, filename=target.name)
+
+
 @api.post("/downloads/{download_id}/pause")
 async def pause_download(download_id: int) -> dict:
     """暂停下载（支持 Bot 与群聊规则任务）。"""

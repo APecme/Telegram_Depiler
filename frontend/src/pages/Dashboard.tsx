@@ -54,6 +54,13 @@ type DownloadRecord = {
   rule_name?: string;
 };
 
+type DownloadRuntimeSummary = {
+  total_speed: number;
+  downloading_count: number;
+  queued_count: number;
+  remaining_bytes: number;
+};
+
 type GroupRule = {
   id: number;
   chat_id: number;
@@ -119,6 +126,8 @@ export default function Dashboard() {
   const [downloadMaxSize, setDownloadMaxSize] = useState<string>(""); // MB
   const [downloadStartTime, setDownloadStartTime] = useState<string>(""); // datetime-local
   const [downloadEndTime, setDownloadEndTime] = useState<string>("");
+  const [downloadRuntimeSummary, setDownloadRuntimeSummary] = useState<DownloadRuntimeSummary>({ total_speed: 0, downloading_count: 0, queued_count: 0, remaining_bytes: 0 });
+  const [lightboxRecord, setLightboxRecord] = useState<DownloadRecord | null>(null);
   
   // 规则表单状态
   const [formChatId, setFormChatId] = useState<number | "">("");
@@ -157,8 +166,10 @@ export default function Dashboard() {
 
   useEffect(() => {
     fetchDownloads();
+    fetchDownloadRuntimeSummary();
     const interval = setInterval(() => {
       fetchDownloads();
+      fetchDownloadRuntimeSummary();
     }, 2000);
     return () => clearInterval(interval);
   }, [downloadPage, downloadPageSize, downloadStatusFilter, downloadRuleFilter, downloadPathFilter, downloadMinSize, downloadMaxSize, downloadStartTime, downloadEndTime]);
@@ -259,6 +270,20 @@ export default function Dashboard() {
       setDownloadTotal(data.total || 0);
     } catch (error) {
       console.error("Failed to fetch downloads:", error);
+    }
+  };
+
+  const fetchDownloadRuntimeSummary = async () => {
+    try {
+      const { data } = await api.get("/downloads/runtime-summary");
+      setDownloadRuntimeSummary({
+        total_speed: Number(data.total_speed || 0),
+        downloading_count: Number(data.downloading_count || 0),
+        queued_count: Number(data.queued_count || 0),
+        remaining_bytes: Number(data.remaining_bytes || 0),
+      });
+    } catch (error) {
+      console.error("Failed to fetch download runtime summary:", error);
     }
   };
 
@@ -602,6 +627,17 @@ export default function Dashboard() {
     return Math.round(bytes / Math.pow(k, i) * 100) / 100 + " " + sizes[i];
   };
 
+  const formatSpeed = (bytesPerSecond?: number) => `${formatBytes(Math.max(0, Number(bytesPerSecond || 0)))}/s`;
+
+  const getPreviewType = (record: DownloadRecord): "image" | "video" | null => {
+    const fileName = (record.file_name || record.origin_file_name || "").toLowerCase();
+    if (/\.(jpg|jpeg|png|gif|webp|bmp|heic|avif)$/i.test(fileName)) return "image";
+    if (/\.(mp4|webm|mov|m4v|mkv|avi)$/i.test(fileName)) return "video";
+    return null;
+  };
+
+  const getMediaPreviewUrl = (record: DownloadRecord) => `${api.defaults.baseURL}/downloads/${record.id}/media`;
+
   const sourceLabel = (record: DownloadRecord) => {
     if (record.source === "rule") return record.rule_name || `规则 #${record.rule_id ?? "-"}`;
     return "机器人接收";
@@ -647,6 +683,7 @@ export default function Dashboard() {
     downloadEndTime !== "";
 
   const allCurrentPageSelected = downloads.length > 0 && selectedIds.length === downloads.length;
+  const previewRecords = downloads.filter((record) => record.status === "completed" && !!record.file_path && getPreviewType(record)).slice(0, 6);
 
   const renderDownloadRecordsSection = () => (
     <>
@@ -658,7 +695,10 @@ export default function Dashboard() {
           </p>
         </div>
         <div className="download-summary-badge">
-          当前页 {downloads.length} 条 / 总计 {downloadTotal} 条
+          <span>总速度 {formatSpeed(downloadRuntimeSummary.total_speed)}</span>
+          <span>下载中 {downloadRuntimeSummary.downloading_count}</span>
+          <span>队列中 {downloadRuntimeSummary.queued_count}</span>
+          <span>剩余 {formatBytes(downloadRuntimeSummary.remaining_bytes)}</span>
         </div>
       </div>
 
@@ -1049,6 +1089,52 @@ export default function Dashboard() {
 
       {/* 群聊下载规则 */}
       <div className="card" style={{ marginBottom: "2rem", padding: "1.5rem", backgroundColor: "white", borderRadius: "8px", boxShadow: "0 2px 4px rgba(0,0,0,0.1)" }}>
+        <div className="telegram-preview-shell">
+          <div className="telegram-preview-header">
+            <div>
+              <h3 className="telegram-preview-title">Telegram 风格预览</h3>
+              <p className="telegram-preview-subtitle">下载完成的内容会以 BOT 消息样式展示在这里。</p>
+            </div>
+            <span className="telegram-preview-count">最近 {previewRecords.length} 条</span>
+          </div>
+          <div className="telegram-chat-window">
+            {previewRecords.length === 0 ? (
+              <div className="telegram-chat-empty">暂无已完成的图片或视频可预览</div>
+            ) : (
+              previewRecords.map((record) => {
+                const previewType = getPreviewType(record);
+                return (
+                  <div key={record.id} className="telegram-bot-row">
+                    <div className="telegram-bot-avatar">BOT</div>
+                    <div className="telegram-bubble">
+                      <div className="telegram-bubble-meta">
+                        <span className="telegram-bubble-name">Downloader Bot</span>
+                        <span className="telegram-bubble-time">{new Date(record.created_at).toLocaleString()}</span>
+                      </div>
+                      <div className="telegram-bubble-text">✅ 下载完成：{record.file_name || record.origin_file_name || `任务 #${record.id}`}</div>
+                      {previewType === "image" && (
+                        <button type="button" className="telegram-media-button" onClick={() => setLightboxRecord(record)}>
+                          <img className="telegram-media-preview" src={getMediaPreviewUrl(record)} alt={record.file_name || record.origin_file_name || "preview"} />
+                        </button>
+                      )}
+                      {previewType === "video" && (
+                        <button type="button" className="telegram-media-button telegram-video-thumb" onClick={() => setLightboxRecord(record)}>
+                          <video className="telegram-media-preview" src={getMediaPreviewUrl(record)} muted preload="metadata" />
+                          <span className="telegram-video-play">▶</span>
+                        </button>
+                      )}
+                      <div className="telegram-bubble-filemeta">
+                        <span>{formatBytes(record.file_size || 0)}</span>
+                        <span>{record.rule_name || "BOT 下载"}</span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+
         <div style={{ marginBottom: "1rem", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div>
             <h2 style={{ margin: "0 0 0.5rem 0" }}>📂 群聊下载规则</h2>
@@ -3037,6 +3123,20 @@ export default function Dashboard() {
                 保存模板
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {lightboxRecord && (
+        <div className="telegram-lightbox" onClick={() => setLightboxRecord(null)}>
+          <div className="telegram-lightbox-panel" onClick={(e) => e.stopPropagation()}>
+            <button type="button" className="telegram-lightbox-close" onClick={() => setLightboxRecord(null)}>✕</button>
+            {getPreviewType(lightboxRecord) === "image" ? (
+              <img className="telegram-lightbox-media" src={getMediaPreviewUrl(lightboxRecord)} alt={lightboxRecord.file_name || lightboxRecord.origin_file_name || "preview"} />
+            ) : (
+              <video className="telegram-lightbox-media" src={getMediaPreviewUrl(lightboxRecord)} controls autoPlay playsInline />
+            )}
+            <div className="telegram-lightbox-caption">{lightboxRecord.file_name || lightboxRecord.origin_file_name}</div>
           </div>
         </div>
       )}
