@@ -181,6 +181,7 @@ export default function Dashboard() {
   const [selectedDefaultPath, setSelectedDefaultPath] = useState<string>("");
   const [versionCheck, setVersionCheck] = useState<VersionCheck | null>(null);
   const [versionRefreshing, setVersionRefreshing] = useState(false);
+  const [lightboxVideoFallback, setLightboxVideoFallback] = useState<Record<number, boolean>>({});
 
   useEffect(() => {
     api.get("/admin/me").catch((error) => {
@@ -252,7 +253,7 @@ export default function Dashboard() {
   const fetchVersionCheck = async () => {
     try {
       setVersionRefreshing(true);
-      const { data } = await api.get("/version-check");
+      const { data } = await api.get("/version-check", { timeout: 12000 });
       setVersionCheck(data);
     } catch (error) {
       console.error("Failed to fetch version check:", error);
@@ -742,6 +743,11 @@ export default function Dashboard() {
     return `${baseUrl}/downloads/${record.id}/media?token=${encodeURIComponent(token)}${transcode}`;
   };
 
+  const getLightboxVideoUrl = (record: DownloadRecord) => {
+    const useFallback = !!lightboxVideoFallback[record.id];
+    return getMediaPreviewUrl(record, { transcode: useFallback });
+  };
+
   const getDialogAvatarUrl = (chatId?: number) => {
     const token = localStorage.getItem("admin_token");
     if (!token || !chatId) return "";
@@ -888,6 +894,14 @@ export default function Dashboard() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [lightboxRecord, lightboxIndex, lightboxItems]);
+
+  useEffect(() => {
+    if (!lightboxRecord) return;
+    setLightboxVideoFallback((current) => {
+      if (!(lightboxRecord.id in current)) return current;
+      return { ...current, [lightboxRecord.id]: current[lightboxRecord.id] };
+    });
+  }, [lightboxRecord?.id]);
 
   const showPreviousLightboxItem = () => {
     if (lightboxIndex > 0) {
@@ -3450,7 +3464,37 @@ export default function Dashboard() {
               getPreviewType(lightboxRecord) === "image" ? (
                 <img className="telegram-lightbox-media" src={getMediaPreviewUrl(lightboxRecord)} alt={lightboxRecord.file_name || lightboxRecord.origin_file_name || "preview"} />
               ) : (
-                <video className="telegram-lightbox-media" src={getMediaPreviewUrl(lightboxRecord, { transcode: true })} controls autoPlay playsInline preload="metadata" />
+                <video
+                  className="telegram-lightbox-media"
+                  src={getLightboxVideoUrl(lightboxRecord)}
+                  controls
+                  autoPlay
+                  playsInline
+                  preload="metadata"
+                  onLoadedData={() => {
+                    console.log("[Lightbox] video loaded", {
+                      downloadId: lightboxRecord.id,
+                      fallbackTranscode: !!lightboxVideoFallback[lightboxRecord.id],
+                      mediaUrl: getLightboxVideoUrl(lightboxRecord),
+                    });
+                  }}
+                  onError={() => {
+                    console.error("[Lightbox] video error", {
+                      downloadId: lightboxRecord.id,
+                      fallbackTranscode: !!lightboxVideoFallback[lightboxRecord.id],
+                      mediaUrl: getLightboxVideoUrl(lightboxRecord),
+                    });
+                    if (!lightboxVideoFallback[lightboxRecord.id]) {
+                      setLightboxVideoFallback((current) => ({ ...current, [lightboxRecord.id]: true }));
+                    }
+                  }}
+                  onWaiting={() => {
+                    console.log("[Lightbox] video waiting", {
+                      downloadId: lightboxRecord.id,
+                      fallbackTranscode: !!lightboxVideoFallback[lightboxRecord.id],
+                    });
+                  }}
+                />
               )
             ) : (
               <div className="telegram-lightbox-loading">未登录或会话已过期</div>
