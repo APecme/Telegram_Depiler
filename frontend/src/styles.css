@@ -195,6 +195,16 @@ button {
   font-weight: 600;
 }
 
+.telegram-history-hint {
+  align-self: center;
+  padding: 0.35rem 0.8rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.18);
+  color: rgba(255, 255, 255, 0.95);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
 .telegram-bot-row {
   display: flex;
   align-items: flex-end;

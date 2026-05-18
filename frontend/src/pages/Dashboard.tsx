@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import axios from "axios";
 
@@ -144,6 +144,11 @@ export default function Dashboard() {
   const [downloadRuntimeSummary, setDownloadRuntimeSummary] = useState<DownloadRuntimeSummary>({ total_speed: 0, downloading_count: 0, queued_count: 0, remaining_bytes: 0 });
   const [lightboxRecord, setLightboxRecord] = useState<DownloadRecord | null>(null);
   const [failedAvatarChatIds, setFailedAvatarChatIds] = useState<number[]>([]);
+  const [previewDownloads, setPreviewDownloads] = useState<DownloadRecord[]>([]);
+  const [previewPage, setPreviewPage] = useState<number>(1);
+  const [previewHasMore, setPreviewHasMore] = useState<boolean>(true);
+  const [previewLoadingMore, setPreviewLoadingMore] = useState<boolean>(false);
+  const previewWindowRef = useRef<HTMLDivElement | null>(null);
   
   // 规则表单状态
   const [formChatId, setFormChatId] = useState<number | "">("");
@@ -193,6 +198,10 @@ export default function Dashboard() {
     }, 2000);
     return () => clearInterval(interval);
   }, [downloadPage, downloadPageSize, downloadStatusFilter, downloadRuleFilter, downloadPathFilter, downloadMinSize, downloadMaxSize, downloadStartTime, downloadEndTime]);
+
+  useEffect(() => {
+    fetchPreviewDownloads(1, false);
+  }, []);
 
   useEffect(() => {
     fetchLogs();
@@ -304,6 +313,38 @@ export default function Dashboard() {
       });
     } catch (error) {
       console.error("Failed to fetch download runtime summary:", error);
+    }
+  };
+
+  const fetchPreviewDownloads = async (page: number, append: boolean) => {
+    try {
+      setPreviewLoadingMore(true);
+      const { data } = await api.get("/downloads", {
+        params: {
+          page,
+          page_size: 60,
+          status: "completed",
+        },
+      });
+
+      const items: DownloadRecord[] = (data.items || []).filter((record: DownloadRecord) => !!record.file_path && !!getPreviewType(record));
+      setPreviewDownloads((current) => {
+        if (!append) return items;
+        const seen = new Set(current.map((record) => record.id));
+        const merged = [...current];
+        items.forEach((record) => {
+          if (!seen.has(record.id)) {
+            merged.push(record);
+          }
+        });
+        return merged;
+      });
+      setPreviewPage(page);
+      setPreviewHasMore((data.page || page) * (data.page_size || 60) < (data.total || 0));
+    } catch (error) {
+      console.error("Failed to fetch preview downloads:", error);
+    } finally {
+      setPreviewLoadingMore(false);
     }
   };
 
@@ -671,7 +712,7 @@ export default function Dashboard() {
   };
 
   const buildPreviewGroups = (): PreviewGroup[] => {
-    const completedMedia = downloads.filter((record) => record.status === "completed" && !!record.file_path && !!getPreviewType(record));
+    const completedMedia = previewDownloads;
     const groupedMap = new Map<string, PreviewGroup>();
 
     for (const record of completedMedia) {
@@ -710,8 +751,7 @@ export default function Dashboard() {
     }
 
     return Array.from(groupedMap.values())
-      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-      .slice(0, 6);
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   };
 
   const sourceLabel = (record: DownloadRecord) => {
@@ -760,6 +800,24 @@ export default function Dashboard() {
 
   const allCurrentPageSelected = downloads.length > 0 && selectedIds.length === downloads.length;
   const previewGroups = buildPreviewGroups();
+
+  const handlePreviewScroll = () => {
+    const container = previewWindowRef.current;
+    if (!container || previewLoadingMore || !previewHasMore) {
+      return;
+    }
+
+    if (container.scrollTop <= 60) {
+      const previousHeight = container.scrollHeight;
+      fetchPreviewDownloads(previewPage + 1, true).then(() => {
+        requestAnimationFrame(() => {
+          if (!previewWindowRef.current) return;
+          const nextHeight = previewWindowRef.current.scrollHeight;
+          previewWindowRef.current.scrollTop = nextHeight - previousHeight + previewWindowRef.current.scrollTop;
+        });
+      });
+    }
+  };
 
   const renderDownloadRecordsSection = () => (
     <>
@@ -1170,9 +1228,14 @@ export default function Dashboard() {
             <div>
               <h3 className="telegram-preview-title">消息窗口</h3>
             </div>
-            <span className="telegram-preview-count">最近 {previewGroups.length} 条</span>
+            <span className="telegram-preview-count">已加载 {previewGroups.length} 条</span>
           </div>
-          <div className="telegram-chat-window">
+          <div className="telegram-chat-window" ref={previewWindowRef} onScroll={handlePreviewScroll}>
+            {previewHasMore && (
+              <div className="telegram-history-hint">
+                {previewLoadingMore ? "正在加载更早消息…" : "上滑加载更早消息"}
+              </div>
+            )}
             {previewGroups.length === 0 ? (
               <div className="telegram-chat-empty">暂无已完成的图片或视频可预览</div>
             ) : (

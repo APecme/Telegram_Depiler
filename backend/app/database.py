@@ -253,8 +253,6 @@ class Database:
         self,
         message_id: int,
         chat_id: int,
-        grouped_id: int | None = None,
-        media_group_size: int | None = None,
         bot_username: str,
         file_name: str,
         origin_file_name: str | None = None,
@@ -268,6 +266,8 @@ class Database:
         rule_name: str | None = None,
         reply_message_id: int | None = None,
         reply_chat_id: int | None = None,
+        grouped_id: int | None = None,
+        media_group_size: int | None = None,
     ) -> int:
         with self._connect() as conn:
             cur = conn.execute(
