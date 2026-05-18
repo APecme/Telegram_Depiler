@@ -7,6 +7,7 @@ import hashlib
 import secrets
 import os
 import socket
+from contextlib import asynccontextmanager
 from urllib.parse import quote
 from urllib.request import Request, urlopen, ProxyHandler, build_opener
 from urllib.error import URLError, HTTPError
