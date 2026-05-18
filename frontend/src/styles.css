@@ -286,6 +286,19 @@ button {
   font-weight: 700;
 }
 
+.telegram-media-error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 180px;
+  border-radius: 16px;
+  background: linear-gradient(135deg, #fee2e2, #fff1f2);
+  color: #b91c1c;
+  font-weight: 700;
+  text-align: center;
+  padding: 1rem;
+}
+
 .telegram-lightbox-loading {
   min-height: 360px;
   background: rgba(255, 255, 255, 0.08);

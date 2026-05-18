@@ -6,10 +6,11 @@ import time
 import hashlib
 import secrets
 import os
-from urllib.request import Request, urlopen
+import socket
+from urllib.parse import quote
+from urllib.request import Request, urlopen, ProxyHandler, build_opener
 from urllib.error import URLError, HTTPError
 from pathlib import Path
-from contextlib import asynccontextmanager
 from typing import Optional
 from fastapi import FastAPI, HTTPException, Body, Header, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -351,17 +352,126 @@ def _parse_version_parts(version: str) -> tuple[int, ...]:
     return tuple(parts or [0])
 
 
+def _normalize_proxy_settings() -> tuple[str, str, int, str | None, str | None] | None:
+    if not settings.proxy_host or not settings.proxy_port:
+        return None
+
+    proxy_host = settings.proxy_host.strip()
+    for prefix in ("http://", "https://", "socks4://", "socks5://", "socks://"):
+        if proxy_host.lower().startswith(prefix):
+            proxy_host = proxy_host[len(prefix):].strip()
+            break
+
+    if "/" in proxy_host:
+        proxy_host = proxy_host.split("/")[0]
+
+    if proxy_host.startswith("[") and proxy_host.endswith("]"):
+        proxy_host = proxy_host[1:-1]
+    elif ":" in proxy_host:
+        parts = proxy_host.split(":")
+        if len(parts) == 2 and "." in parts[0]:
+            proxy_host = parts[0]
+
+    original_host = proxy_host
+    if proxy_host in ("127.0.0.1", "localhost", "::1"):
+        if os.path.exists("/.dockerenv") or os.environ.get("DOCKER_CONTAINER") == "true":
+            proxy_host = "host.docker.internal"
+            logger.info(
+                "Detected Docker environment, converting version-check proxy host %s to %s",
+                original_host,
+                proxy_host,
+            )
+
+    proxy_type = (settings.proxy_type or "http").lower()
+    if proxy_type not in ("http", "socks4", "socks5"):
+        logger.warning("Unknown proxy type %s for version check, defaulting to http", proxy_type)
+        proxy_type = "http"
+
+    return (
+        proxy_type,
+        proxy_host,
+        int(settings.proxy_port),
+        settings.proxy_user,
+        settings.proxy_password,
+    )
+
+
+class _TemporarySocksProxy:
+    def __init__(self, proxy_type: str, host: str, port: int, user: str | None, password: str | None):
+        self.proxy_type = proxy_type
+        self.host = host
+        self.port = port
+        self.user = user
+        self.password = password
+        self._original_socket = None
+        self._original_create_connection = None
+
+    def __enter__(self):
+        import socks
+
+        proxy_kind = socks.SOCKS5 if self.proxy_type == "socks5" else socks.SOCKS4
+        self._original_socket = socket.socket
+        self._original_create_connection = socket.create_connection
+        socks.setdefaultproxy(
+            proxy_kind,
+            self.host,
+            self.port,
+            True,
+            self.user or None,
+            self.password or None,
+        )
+        socket.socket = socks.socksocket
+        socket.create_connection = socks.create_connection
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        import socks
+
+        if self._original_socket is not None:
+            socket.socket = self._original_socket
+        if self._original_create_connection is not None:
+            socket.create_connection = self._original_create_connection
+        socks.setdefaultproxy()
+        return False
+
+
 @api.get("/version-check")
 async def version_check() -> dict:
     current_version = settings.version
     remote_url = "https://raw.githubusercontent.com/APecme/Telegram_Depiler/main/VERSION"
-    try:
+    proxy_settings = _normalize_proxy_settings()
+
+    def _read_latest_version() -> str:
         request = Request(
             remote_url,
             headers={"User-Agent": "Telegram-Depiler-Version-Check"},
         )
-        with urlopen(request, timeout=5) as response:
-            latest_version = response.read().decode("utf-8").strip() or current_version
+
+        if not proxy_settings:
+            with urlopen(request, timeout=15) as response:
+                return response.read().decode("utf-8").strip() or current_version
+
+        proxy_type, proxy_host, proxy_port, proxy_user, proxy_password = proxy_settings
+        logger.info("Version check using proxy: %s://%s:%s", proxy_type, proxy_host, proxy_port)
+
+        if proxy_type == "http":
+            auth = ""
+            if proxy_user:
+                auth = quote(proxy_user, safe="")
+                if proxy_password:
+                    auth += f":{quote(proxy_password, safe='')}"
+                auth += "@"
+            proxy_url = f"http://{auth}{proxy_host}:{proxy_port}"
+            opener = build_opener(ProxyHandler({"http": proxy_url, "https": proxy_url}))
+            with opener.open(request, timeout=15) as response:
+                return response.read().decode("utf-8").strip() or current_version
+
+        with _TemporarySocksProxy(proxy_type, proxy_host, proxy_port, proxy_user, proxy_password):
+            with urlopen(request, timeout=15) as response:
+                return response.read().decode("utf-8").strip() or current_version
+
+    try:
+        latest_version = _read_latest_version()
     except (HTTPError, URLError, TimeoutError, OSError) as exc:
         logger.warning("检查版本更新失败: %s", exc)
         return {

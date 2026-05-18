@@ -129,6 +129,7 @@ export default function Dashboard() {
   const [downloadRuntimeSummary, setDownloadRuntimeSummary] = useState<DownloadRuntimeSummary>({ total_speed: 0, downloading_count: 0, queued_count: 0, remaining_bytes: 0 });
   const [lightboxRecord, setLightboxRecord] = useState<DownloadRecord | null>(null);
   const [mediaObjectUrls, setMediaObjectUrls] = useState<Record<number, string>>({});
+  const [mediaLoadErrors, setMediaLoadErrors] = useState<Record<number, string>>({});
   const mediaObjectUrlsRef = useRef<Record<number, string>>({});
   
   // 规则表单状态
@@ -158,6 +159,10 @@ export default function Dashboard() {
   const [versionCheck, setVersionCheck] = useState<VersionCheck | null>(null);
 
   useEffect(() => {
+    api.get("/admin/me").catch((error) => {
+      console.error("Admin session validation failed:", error);
+    });
+
     fetchGroupRules();
     fetchDialogs();
     fetchLogs();
@@ -696,6 +701,7 @@ export default function Dashboard() {
 
   const allCurrentPageSelected = downloads.length > 0 && selectedIds.length === downloads.length;
   const previewRecords = downloads.filter((record) => record.status === "completed" && !!record.file_path && getPreviewType(record)).slice(0, 6);
+  const getMediaLoadError = (record: DownloadRecord) => mediaLoadErrors[record.id] || "";
 
   useEffect(() => {
     const recordsToLoad = [...previewRecords, ...(lightboxRecord ? [lightboxRecord] : [])].filter(
@@ -715,8 +721,18 @@ export default function Dashboard() {
         try {
           const response = await api.get(`/downloads/${record.id}/media`, { responseType: "blob" });
           updates[record.id] = URL.createObjectURL(response.data);
+          setMediaLoadErrors((current) => {
+            if (!(record.id in current)) return current;
+            const next = { ...current };
+            delete next[record.id];
+            return next;
+          });
         } catch (error) {
           console.error(`Failed to load preview media for download ${record.id}:`, error);
+          setMediaLoadErrors((current) => ({
+            ...current,
+            [record.id]: "预览加载失败，请重新登录后重试",
+          }));
         }
       }
 
@@ -1165,6 +1181,8 @@ export default function Dashboard() {
                         <button type="button" className="telegram-media-button" onClick={() => setLightboxRecord(record)}>
                           {getMediaPreviewUrl(record) ? (
                             <img className="telegram-media-preview" src={getMediaPreviewUrl(record)} alt={record.file_name || record.origin_file_name || "preview"} />
+                          ) : getMediaLoadError(record) ? (
+                            <div className="telegram-media-error">{getMediaLoadError(record)}</div>
                           ) : (
                             <div className="telegram-media-loading">加载预览中…</div>
                           )}
@@ -1177,6 +1195,8 @@ export default function Dashboard() {
                               <video className="telegram-media-preview" src={getMediaPreviewUrl(record)} muted preload="metadata" />
                               <span className="telegram-video-play">▶</span>
                             </>
+                          ) : getMediaLoadError(record) ? (
+                            <div className="telegram-media-error">{getMediaLoadError(record)}</div>
                           ) : (
                             <div className="telegram-media-loading">加载预览中…</div>
                           )}
@@ -3196,6 +3216,8 @@ export default function Dashboard() {
               ) : (
                 <video className="telegram-lightbox-media" src={getMediaPreviewUrl(lightboxRecord)} controls autoPlay playsInline />
               )
+            ) : getMediaLoadError(lightboxRecord) ? (
+              <div className="telegram-lightbox-loading">{getMediaLoadError(lightboxRecord)}</div>
             ) : (
               <div className="telegram-lightbox-loading">媒体加载中…</div>
             )}
