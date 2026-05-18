@@ -874,6 +874,7 @@ async def get_download_media(
 ) -> FileResponse:
     """安全返回下载文件，用于前端预览图片/视频。"""
     _require_admin(x_admin_token or token)
+    logger.info("[Media] request download_id=%s transcode=%s", download_id, transcode)
 
     downloads = database.list_downloads(limit=5000)
     download = next((d for d in downloads if d.get("id") == download_id), None)
@@ -886,13 +887,16 @@ async def get_download_media(
 
     target = Path(file_path).resolve()
     if not target.exists() or not target.is_file():
+        logger.warning("[Media] file missing download_id=%s path=%s", download_id, file_path)
         raise HTTPException(status_code=404, detail="文件不存在")
 
     media_type, _ = mimetypes.guess_type(str(target))
+    logger.info("[Media] resolved download_id=%s path=%s media_type=%s", download_id, target, media_type)
     if transcode and media_type and media_type.startswith("video/"):
         preview_dir = settings.data_dir / ".telegram_depiler_tmp" / "video_preview"
         preview_dir.mkdir(parents=True, exist_ok=True)
         preview_path = preview_dir / f"{download_id}.mp4"
+        logger.info("[Media] transcode requested download_id=%s preview_path=%s", download_id, preview_path)
         if not preview_path.exists() or preview_path.stat().st_mtime < target.stat().st_mtime:
             cmd = [
                 "ffmpeg",
@@ -910,12 +914,16 @@ async def get_download_media(
                 str(preview_path),
             ]
             try:
+                logger.info("[Media] running ffmpeg download_id=%s", download_id)
                 subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                logger.info("[Media] ffmpeg finished download_id=%s exists=%s", download_id, preview_path.exists())
             except (subprocess.CalledProcessError, FileNotFoundError) as exc:
                 logger.warning("视频预览转码失败 (download_id=%s): %s", download_id, exc)
         if preview_path.exists():
+            logger.info("[Media] serving transcoded preview download_id=%s", download_id)
             return FileResponse(path=preview_path, filename=preview_path.name, media_type="video/mp4")
 
+    logger.info("[Media] serving original file download_id=%s", download_id)
     return FileResponse(path=target, filename=target.name, media_type=media_type or "application/octet-stream")
 
 
@@ -1277,6 +1285,7 @@ async def get_download_preview_messages(
     x_admin_token: str | None = Header(default=None, alias="X-Admin-Token"),
 ) -> dict:
     _require_admin(x_admin_token)
+    logger.info("[PreviewMessages] request pairs_count=%s", len([p for p in pairs.split(",") if p.strip()]))
 
     message_keys: list[tuple[int, int]] = []
     for raw_pair in pairs.split(","):
@@ -1290,6 +1299,7 @@ async def get_download_preview_messages(
             continue
 
     items = database.get_messages_for_download_preview(message_keys)
+    logger.info("[PreviewMessages] resolved message_keys=%s found=%s", len(message_keys), len(items))
     serialized = {
         f"{chat_id}:{message_id}": value
         for (chat_id, message_id), value in items.items()

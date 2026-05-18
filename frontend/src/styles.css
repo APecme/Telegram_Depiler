@@ -317,6 +317,21 @@ button {
   position: relative;
 }
 
+.telegram-video-poster {
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-start;
+  background: linear-gradient(135deg, #1e293b, #475569);
+  color: white;
+  padding: 0.85rem;
+}
+
+.telegram-video-file-label {
+  font-size: 0.82rem;
+  font-weight: 700;
+  word-break: break-word;
+}
+
 .telegram-album-placeholder {
   min-height: 180px;
   border-radius: 16px;

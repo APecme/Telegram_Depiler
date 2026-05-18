@@ -328,6 +328,7 @@ export default function Dashboard() {
   const fetchPreviewDownloads = async (page: number, append: boolean) => {
     try {
       setPreviewLoadingMore(true);
+      console.log("[Preview] fetchPreviewDownloads:start", { page, append });
       const { data } = await api.get("/downloads", {
         params: {
           page,
@@ -337,10 +338,19 @@ export default function Dashboard() {
       });
 
       const items: DownloadRecord[] = (data.items || []).filter((record: DownloadRecord) => !!record.file_path && !!getPreviewType(record));
+      console.log("[Preview] fetchPreviewDownloads:downloads", {
+        page,
+        total: data.total,
+        pageSize: data.page_size,
+        fetched: (data.items || []).length,
+        mediaItems: items.length,
+      });
       if (items.length > 0) {
         const pairs = Array.from(new Set(items.map((record) => `${record.chat_id || 0}:${record.message_id || 0}`))).join(",");
+        console.log("[Preview] fetchPreviewDownloads:messagePairs", { page, pairCount: pairs ? pairs.split(",").length : 0 });
         const messageResponse = await api.get("/downloads/preview-messages", { params: { pairs } });
         const textMap = messageResponse.data.items || {};
+        console.log("[Preview] fetchPreviewDownloads:messageTexts", { page, textCount: Object.keys(textMap).length });
         setPreviewMessageTexts((current) => {
           const next = { ...current };
           Object.entries(textMap).forEach(([key, value]: [string, any]) => {
@@ -363,6 +373,11 @@ export default function Dashboard() {
       });
       setPreviewPage(page);
       setPreviewHasMore((data.page || page) * (data.page_size || (page === 1 ? 30 : 20)) < (data.total || 0));
+      console.log("[Preview] fetchPreviewDownloads:done", {
+        page,
+        append,
+        nextHasMore: (data.page || page) * (data.page_size || (page === 1 ? 30 : 20)) < (data.total || 0),
+      });
     } catch (error) {
       console.error("Failed to fetch preview downloads:", error);
     } finally {
@@ -719,12 +734,11 @@ export default function Dashboard() {
     return null;
   };
 
-  const getMediaPreviewUrl = (record: DownloadRecord) => {
+  const getMediaPreviewUrl = (record: DownloadRecord, options?: { transcode?: boolean }) => {
     const token = localStorage.getItem("admin_token");
     if (!token) return "";
     const baseUrl = api.defaults.baseURL || "/api";
-    const previewType = getPreviewType(record);
-    const transcode = previewType === "video" ? "&transcode=1" : "";
+    const transcode = options?.transcode ? "&transcode=1" : "";
     return `${baseUrl}/downloads/${record.id}/media?token=${encodeURIComponent(token)}${transcode}`;
   };
 
@@ -837,6 +851,10 @@ export default function Dashboard() {
     }
 
     if (container.scrollTop <= 60) {
+      console.log("[Preview] scrollTop threshold reached, loading older messages", {
+        scrollTop: container.scrollTop,
+        previewPage,
+      });
       const previousHeight = container.scrollHeight;
       fetchPreviewDownloads(previewPage + 1, true).then(() => {
         requestAnimationFrame(() => {
@@ -845,8 +863,6 @@ export default function Dashboard() {
           previewWindowRef.current.scrollTop = nextHeight - previousHeight + previewWindowRef.current.scrollTop;
         });
       });
-    } else if (previewHasMore && !previewLoadingMore && previewGroups.length - Math.floor(container.scrollTop / 220) <= 20) {
-      fetchPreviewDownloads(previewPage + 1, true);
     }
   };
 
@@ -911,6 +927,7 @@ export default function Dashboard() {
     lightboxTouchLastYRef.current = null;
 
     if (deltaY > 90 && Math.abs(deltaY) > Math.abs(deltaX)) {
+      console.log("[Lightbox] swipe down close", { deltaX, deltaY });
       setLightboxRecord(null);
       return;
     }
@@ -920,8 +937,10 @@ export default function Dashboard() {
     }
 
     if (deltaX > 0) {
+      console.log("[Lightbox] swipe previous", { deltaX, deltaY, lightboxIndex });
       showPreviousLightboxItem();
     } else {
+      console.log("[Lightbox] swipe next", { deltaX, deltaY, lightboxIndex });
       showNextLightboxItem();
     }
   };
@@ -1389,13 +1408,23 @@ export default function Dashboard() {
                               key={item.id}
                               type="button"
                               className="telegram-media-button telegram-album-tile"
-                              onClick={() => setLightboxRecord(item)}
+                              onClick={() => {
+                                console.log("[Preview] open lightbox", {
+                                  downloadId: item.id,
+                                  fileName: item.file_name,
+                                  previewType,
+                                  mediaUrl: getMediaPreviewUrl(item),
+                                });
+                                setLightboxRecord(item);
+                              }}
                             >
                               {previewType === "image" ? (
                                 <img className="telegram-media-preview telegram-album-media" src={getMediaPreviewUrl(item)} alt={item.file_name || item.origin_file_name || "preview"} />
                               ) : (
                                 <div className="telegram-video-thumb telegram-album-video-wrap">
-                                  <video className="telegram-media-preview telegram-album-media" src={getMediaPreviewUrl(item)} preload="metadata" playsInline muted />
+                                  <div className="telegram-media-preview telegram-album-media telegram-video-poster">
+                                    <span className="telegram-video-file-label">{item.file_name || item.origin_file_name || "video"}</span>
+                                  </div>
                                   <span className="telegram-video-play">▶</span>
                                 </div>
                               )}
@@ -3421,7 +3450,7 @@ export default function Dashboard() {
               getPreviewType(lightboxRecord) === "image" ? (
                 <img className="telegram-lightbox-media" src={getMediaPreviewUrl(lightboxRecord)} alt={lightboxRecord.file_name || lightboxRecord.origin_file_name || "preview"} />
               ) : (
-                <video className="telegram-lightbox-media" src={getMediaPreviewUrl(lightboxRecord)} controls autoPlay playsInline preload="metadata" />
+                <video className="telegram-lightbox-media" src={getMediaPreviewUrl(lightboxRecord, { transcode: true })} controls autoPlay playsInline preload="metadata" />
               )
             ) : (
               <div className="telegram-lightbox-loading">未登录或会话已过期</div>
