@@ -703,7 +703,7 @@ export default function Settings() {
               ? `发现新版本 v${versionCheck.latest_version}`
               : versionCheck?.has_update === false
               ? "已是最新版本"
-              : "无法检查更新"}
+              : "暂时无法检查更新"}
           </span>
         </div>
         <a

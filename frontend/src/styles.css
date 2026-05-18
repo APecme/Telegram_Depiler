@@ -274,6 +274,24 @@ button {
   background: #cbd5e1;
 }
 
+.telegram-media-loading,
+.telegram-lightbox-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 180px;
+  border-radius: 16px;
+  background: linear-gradient(135deg, #dbeafe, #eff6ff);
+  color: #2563eb;
+  font-weight: 700;
+}
+
+.telegram-lightbox-loading {
+  min-height: 360px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #e2e8f0;
+}
+
 .telegram-video-play {
   position: absolute;
   left: 50%;
