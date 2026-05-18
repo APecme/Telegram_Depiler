@@ -153,6 +153,7 @@ export default function Dashboard() {
   const previewWindowRef = useRef<HTMLDivElement | null>(null);
   const lightboxTouchStartXRef = useRef<number | null>(null);
   const lightboxTouchStartYRef = useRef<number | null>(null);
+  const lightboxTouchLastYRef = useRef<number | null>(null);
   
   // 规则表单状态
   const [formChatId, setFormChatId] = useState<number | "">("");
@@ -722,7 +723,9 @@ export default function Dashboard() {
     const token = localStorage.getItem("admin_token");
     if (!token) return "";
     const baseUrl = api.defaults.baseURL || "/api";
-    return `${baseUrl}/downloads/${record.id}/media?token=${encodeURIComponent(token)}`;
+    const previewType = getPreviewType(record);
+    const transcode = previewType === "video" ? "&transcode=1" : "";
+    return `${baseUrl}/downloads/${record.id}/media?token=${encodeURIComponent(token)}${transcode}`;
   };
 
   const getDialogAvatarUrl = (chatId?: number) => {
@@ -886,6 +889,12 @@ export default function Dashboard() {
     const touch = event.touches[0];
     lightboxTouchStartXRef.current = touch.clientX;
     lightboxTouchStartYRef.current = touch.clientY;
+    lightboxTouchLastYRef.current = touch.clientY;
+  };
+
+  const handleLightboxTouchMove = (event: React.TouchEvent<HTMLDivElement>) => {
+    const touch = event.touches[0];
+    lightboxTouchLastYRef.current = touch.clientY;
   };
 
   const handleLightboxTouchEnd = (event: React.TouchEvent<HTMLDivElement>) => {
@@ -899,6 +908,12 @@ export default function Dashboard() {
 
     lightboxTouchStartXRef.current = null;
     lightboxTouchStartYRef.current = null;
+    lightboxTouchLastYRef.current = null;
+
+    if (deltaY > 90 && Math.abs(deltaY) > Math.abs(deltaX)) {
+      setLightboxRecord(null);
+      return;
+    }
 
     if (Math.abs(deltaX) < 50 || Math.abs(deltaX) < Math.abs(deltaY)) {
       return;
@@ -3394,7 +3409,7 @@ export default function Dashboard() {
 
       {lightboxRecord && (
         <div className="telegram-lightbox" onClick={() => setLightboxRecord(null)}>
-          <div className="telegram-lightbox-panel" onClick={(e) => e.stopPropagation()} onTouchStart={handleLightboxTouchStart} onTouchEnd={handleLightboxTouchEnd}>
+          <div className="telegram-lightbox-panel" onClick={(e) => e.stopPropagation()} onTouchStart={handleLightboxTouchStart} onTouchMove={handleLightboxTouchMove} onTouchEnd={handleLightboxTouchEnd}>
             <button type="button" className="telegram-lightbox-close" onClick={() => setLightboxRecord(null)}>✕</button>
             {lightboxIndex > 0 && (
               <button type="button" className="telegram-lightbox-nav telegram-lightbox-nav-left" onClick={showPreviousLightboxItem}>‹</button>

@@ -17,7 +17,10 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
 WORKDIR /app
 COPY backend/requirements.txt ./requirements.txt
-RUN pip install --upgrade pip -i https://pypi.tuna.tsinghua.edu.cn/simple \
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --upgrade pip -i https://pypi.tuna.tsinghua.edu.cn/simple \
     && pip install --no-cache-dir -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 COPY VERSION ./VERSION
 COPY backend/app ./app

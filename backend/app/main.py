@@ -7,6 +7,7 @@ import hashlib
 import secrets
 import os
 import socket
+import subprocess
 from contextlib import asynccontextmanager
 from urllib.parse import quote
 from urllib.request import Request, urlopen, ProxyHandler, build_opener
@@ -869,6 +870,7 @@ async def get_download_media(
     download_id: int,
     x_admin_token: str | None = Header(default=None, alias="X-Admin-Token"),
     token: str | None = Query(default=None, description="管理员 token，可用于 img/video 直链预览"),
+    transcode: bool = Query(default=False, description="是否对视频进行转码预览"),
 ) -> FileResponse:
     """安全返回下载文件，用于前端预览图片/视频。"""
     _require_admin(x_admin_token or token)
@@ -887,6 +889,33 @@ async def get_download_media(
         raise HTTPException(status_code=404, detail="文件不存在")
 
     media_type, _ = mimetypes.guess_type(str(target))
+    if transcode and media_type and media_type.startswith("video/"):
+        preview_dir = settings.data_dir / ".telegram_depiler_tmp" / "video_preview"
+        preview_dir.mkdir(parents=True, exist_ok=True)
+        preview_path = preview_dir / f"{download_id}.mp4"
+        if not preview_path.exists() or preview_path.stat().st_mtime < target.stat().st_mtime:
+            cmd = [
+                "ffmpeg",
+                "-y",
+                "-i",
+                str(target),
+                "-movflags",
+                "+faststart",
+                "-pix_fmt",
+                "yuv420p",
+                "-vcodec",
+                "libx264",
+                "-acodec",
+                "aac",
+                str(preview_path),
+            ]
+            try:
+                subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+                logger.warning("视频预览转码失败 (download_id=%s): %s", download_id, exc)
+        if preview_path.exists():
+            return FileResponse(path=preview_path, filename=preview_path.name, media_type="video/mp4")
+
     return FileResponse(path=target, filename=target.name, media_type=media_type or "application/octet-stream")
 
 
