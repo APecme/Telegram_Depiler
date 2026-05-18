@@ -1,7 +1,12 @@
 FROM node:20-alpine AS frontend-builder
 WORKDIR /frontend
 COPY frontend/package*.json ./
-RUN npm install
+RUN --mount=type=cache,target=/root/.npm \
+    if [ -f package-lock.json ]; then \
+      npm ci --no-audit --no-fund; \
+    else \
+      npm install --package-lock-only --no-audit --no-fund && npm ci --no-audit --no-fund; \
+    fi
 COPY frontend/ .
 # 将项目根目录的 VERSION 文件复制到前端构建环境，便于 vite.config.ts 读取
 COPY VERSION ./VERSION
@@ -20,5 +25,3 @@ COPY --from=frontend-builder /frontend/dist ./app/static
 RUN mkdir -p downloads data
 EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
-
-
