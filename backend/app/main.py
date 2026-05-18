@@ -867,9 +867,10 @@ async def get_download_runtime_summary(
 async def get_download_media(
     download_id: int,
     x_admin_token: str | None = Header(default=None, alias="X-Admin-Token"),
+    token: str | None = Query(default=None, description="管理员 token，可用于 img/video 直链预览"),
 ) -> FileResponse:
     """安全返回下载文件，用于前端预览图片/视频。"""
-    _require_admin(x_admin_token)
+    _require_admin(x_admin_token or token)
 
     downloads = database.list_downloads(limit=5000)
     download = next((d for d in downloads if d.get("id") == download_id), None)
@@ -1202,6 +1203,41 @@ async def list_dialogs() -> dict:
     except Exception as exc:  # pragma: no cover - 防御性
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     return {"items": items}
+
+
+@api.get("/dialogs/{chat_id}/avatar")
+async def get_dialog_avatar(
+    chat_id: int,
+    x_admin_token: str | None = Header(default=None, alias="X-Admin-Token"),
+    token: str | None = Query(default=None, description="管理员 token，可用于 img 直链头像预览"),
+) -> FileResponse:
+    """返回 Telegram 群聊/频道头像。"""
+    _require_admin(x_admin_token or token)
+
+    try:
+        client = await worker._get_client()
+        if not await client.is_user_authorized():
+            raise HTTPException(status_code=401, detail="Telegram 客户端未登录")
+
+        entity = await client.get_entity(chat_id)
+        tmp_dir = settings.data_dir / ".telegram_depiler_tmp" / "dialog_avatars"
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        avatar_path = tmp_dir / f"{chat_id}.jpg"
+
+        result = await client.download_profile_photo(entity, file=str(avatar_path), download_big=True)
+        if not result:
+            raise HTTPException(status_code=404, detail="该群聊没有头像")
+
+        target = Path(result).resolve()
+        if not target.exists() or not target.is_file():
+            raise HTTPException(status_code=404, detail="头像文件不存在")
+
+        return FileResponse(path=target, filename=target.name)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("获取群聊头像失败 (chat_id=%s): %s", chat_id, exc)
+        raise HTTPException(status_code=500, detail="获取群聊头像失败") from exc
 
 
 @api.get("/config/default-download-path")

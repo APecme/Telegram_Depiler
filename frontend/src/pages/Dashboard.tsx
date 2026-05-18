@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import axios from "axios";
 
@@ -128,9 +128,6 @@ export default function Dashboard() {
   const [downloadEndTime, setDownloadEndTime] = useState<string>("");
   const [downloadRuntimeSummary, setDownloadRuntimeSummary] = useState<DownloadRuntimeSummary>({ total_speed: 0, downloading_count: 0, queued_count: 0, remaining_bytes: 0 });
   const [lightboxRecord, setLightboxRecord] = useState<DownloadRecord | null>(null);
-  const [mediaObjectUrls, setMediaObjectUrls] = useState<Record<number, string>>({});
-  const [mediaLoadErrors, setMediaLoadErrors] = useState<Record<number, string>>({});
-  const mediaObjectUrlsRef = useRef<Record<number, string>>({});
   
   // 规则表单状态
   const [formChatId, setFormChatId] = useState<number | "">("");
@@ -201,16 +198,6 @@ export default function Dashboard() {
     mq.addListener(update);
     // @ts-expect-error older Safari
     return () => mq.removeListener(update);
-  }, []);
-
-  useEffect(() => {
-    mediaObjectUrlsRef.current = mediaObjectUrls;
-  }, [mediaObjectUrls]);
-
-  useEffect(() => {
-    return () => {
-      Object.values(mediaObjectUrlsRef.current).forEach((url) => URL.revokeObjectURL(url));
-    };
   }, []);
 
   const fetchDefaultDownloadPath = async () => {
@@ -653,7 +640,19 @@ export default function Dashboard() {
     return null;
   };
 
-  const getMediaPreviewUrl = (record: DownloadRecord) => mediaObjectUrls[record.id] || "";
+  const getMediaPreviewUrl = (record: DownloadRecord) => {
+    const token = localStorage.getItem("admin_token");
+    if (!token) return "";
+    const baseUrl = api.defaults.baseURL || "/api";
+    return `${baseUrl}/downloads/${record.id}/media?token=${encodeURIComponent(token)}`;
+  };
+
+  const getDialogAvatarUrl = (chatId?: number) => {
+    const token = localStorage.getItem("admin_token");
+    if (!token || !chatId) return "";
+    const baseUrl = api.defaults.baseURL || "/api";
+    return `${baseUrl}/dialogs/${chatId}/avatar?token=${encodeURIComponent(token)}`;
+  };
 
   const sourceLabel = (record: DownloadRecord) => {
     if (record.source === "rule") return record.rule_name || `规则 #${record.rule_id ?? "-"}`;
@@ -701,55 +700,6 @@ export default function Dashboard() {
 
   const allCurrentPageSelected = downloads.length > 0 && selectedIds.length === downloads.length;
   const previewRecords = downloads.filter((record) => record.status === "completed" && !!record.file_path && getPreviewType(record)).slice(0, 6);
-  const getMediaLoadError = (record: DownloadRecord) => mediaLoadErrors[record.id] || "";
-
-  useEffect(() => {
-    const recordsToLoad = [...previewRecords, ...(lightboxRecord ? [lightboxRecord] : [])].filter(
-      (record, index, self) => self.findIndex((item) => item.id === record.id) === index,
-    );
-
-    const missingRecords = recordsToLoad.filter((record) => !mediaObjectUrlsRef.current[record.id]);
-    if (missingRecords.length === 0) {
-      return;
-    }
-
-    let cancelled = false;
-
-    (async () => {
-      const updates: Record<number, string> = {};
-      for (const record of missingRecords) {
-        try {
-          const response = await api.get(`/downloads/${record.id}/media`, { responseType: "blob" });
-          updates[record.id] = URL.createObjectURL(response.data);
-          setMediaLoadErrors((current) => {
-            if (!(record.id in current)) return current;
-            const next = { ...current };
-            delete next[record.id];
-            return next;
-          });
-        } catch (error) {
-          console.error(`Failed to load preview media for download ${record.id}:`, error);
-          setMediaLoadErrors((current) => ({
-            ...current,
-            [record.id]: "预览加载失败，请重新登录后重试",
-          }));
-        }
-      }
-
-      if (cancelled || Object.keys(updates).length === 0) {
-        if (cancelled) {
-          Object.values(updates).forEach((url) => URL.revokeObjectURL(url));
-        }
-        return;
-      }
-
-      setMediaObjectUrls((current) => ({ ...current, ...updates }));
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [previewRecords, lightboxRecord]);
 
   const renderDownloadRecordsSection = () => (
     <>
@@ -1168,43 +1118,37 @@ export default function Dashboard() {
             ) : (
               previewRecords.map((record) => {
                 const previewType = getPreviewType(record);
+                const relatedRule = groupRules.find((rule) => rule.id === record.rule_id);
+                const bubbleTitle = relatedRule?.chat_title || relatedRule?.rule_name || `群聊 ${record.rule_id || "-"}`;
+                const avatarText = bubbleTitle.slice(0, 1) || "群";
+                const avatarUrl = getDialogAvatarUrl(relatedRule?.chat_id);
                 return (
                   <div key={record.id} className="telegram-bot-row">
-                    <div className="telegram-bot-avatar">BOT</div>
+                    {avatarUrl ? (
+                      <img className="telegram-bot-avatar telegram-bot-avatar-image" src={avatarUrl} alt={bubbleTitle} />
+                    ) : (
+                      <div className="telegram-bot-avatar">{avatarText}</div>
+                    )}
                     <div className="telegram-bubble">
                       <div className="telegram-bubble-meta">
-                        <span className="telegram-bubble-name">Downloader Bot</span>
+                        <span className="telegram-bubble-name">{bubbleTitle}</span>
                         <span className="telegram-bubble-time">{new Date(record.created_at).toLocaleString()}</span>
                       </div>
                       <div className="telegram-bubble-text">✅ 下载完成：{record.file_name || record.origin_file_name || `任务 #${record.id}`}</div>
                       {previewType === "image" && (
                         <button type="button" className="telegram-media-button" onClick={() => setLightboxRecord(record)}>
-                          {getMediaPreviewUrl(record) ? (
-                            <img className="telegram-media-preview" src={getMediaPreviewUrl(record)} alt={record.file_name || record.origin_file_name || "preview"} />
-                          ) : getMediaLoadError(record) ? (
-                            <div className="telegram-media-error">{getMediaLoadError(record)}</div>
-                          ) : (
-                            <div className="telegram-media-loading">加载预览中…</div>
-                          )}
+                          <img className="telegram-media-preview" src={getMediaPreviewUrl(record)} alt={record.file_name || record.origin_file_name || "preview"} />
                         </button>
                       )}
                       {previewType === "video" && (
                         <button type="button" className="telegram-media-button telegram-video-thumb" onClick={() => setLightboxRecord(record)}>
-                          {getMediaPreviewUrl(record) ? (
-                            <>
-                              <video className="telegram-media-preview" src={getMediaPreviewUrl(record)} muted preload="metadata" />
-                              <span className="telegram-video-play">▶</span>
-                            </>
-                          ) : getMediaLoadError(record) ? (
-                            <div className="telegram-media-error">{getMediaLoadError(record)}</div>
-                          ) : (
-                            <div className="telegram-media-loading">加载预览中…</div>
-                          )}
+                          <video className="telegram-media-preview" src={getMediaPreviewUrl(record)} muted preload="metadata" />
+                          <span className="telegram-video-play">▶</span>
                         </button>
                       )}
-                      <div className="telegram-bubble-filemeta">
+                      <div className="telegram-bubble-footer">
                         <span>{formatBytes(record.file_size || 0)}</span>
-                        <span>{record.rule_name || "BOT 下载"}</span>
+                        <span className="telegram-bubble-rule">{record.rule_name || "默认规则"}</span>
                       </div>
                     </div>
                   </div>
@@ -3216,10 +3160,8 @@ export default function Dashboard() {
               ) : (
                 <video className="telegram-lightbox-media" src={getMediaPreviewUrl(lightboxRecord)} controls autoPlay playsInline />
               )
-            ) : getMediaLoadError(lightboxRecord) ? (
-              <div className="telegram-lightbox-loading">{getMediaLoadError(lightboxRecord)}</div>
             ) : (
-              <div className="telegram-lightbox-loading">媒体加载中…</div>
+              <div className="telegram-lightbox-loading">未登录或会话已过期</div>
             )}
             <div className="telegram-lightbox-caption">{lightboxRecord.file_name || lightboxRecord.origin_file_name}</div>
           </div>
