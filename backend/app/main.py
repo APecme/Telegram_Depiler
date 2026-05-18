@@ -16,7 +16,7 @@ from typing import Optional
 from fastapi import FastAPI, HTTPException, Body, Header, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from starlette.responses import FileResponse
+from starlette.responses import FileResponse, Response
 import mimetypes
 from telethon import events
 
@@ -1212,7 +1212,7 @@ async def get_dialog_avatar(
     chat_id: int,
     x_admin_token: str | None = Header(default=None, alias="X-Admin-Token"),
     token: str | None = Query(default=None, description="管理员 token，可用于 img 直链头像预览"),
-) -> FileResponse:
+) -> Response:
     """返回 Telegram 群聊/频道头像。"""
     _require_admin(x_admin_token or token)
 
@@ -1228,11 +1228,11 @@ async def get_dialog_avatar(
 
         result = await client.download_profile_photo(entity, file=str(avatar_path), download_big=True)
         if not result:
-            raise HTTPException(status_code=404, detail="该群聊没有头像")
+            return Response(status_code=204)
 
         target = Path(result).resolve()
         if not target.exists() or not target.is_file():
-            raise HTTPException(status_code=404, detail="头像文件不存在")
+            return Response(status_code=204)
 
         return FileResponse(path=target, filename=target.name)
     except HTTPException:
@@ -1240,6 +1240,32 @@ async def get_dialog_avatar(
     except Exception as exc:
         logger.warning("获取群聊头像失败 (chat_id=%s): %s", chat_id, exc)
         raise HTTPException(status_code=500, detail="获取群聊头像失败") from exc
+
+
+@api.get("/downloads/preview-messages")
+async def get_download_preview_messages(
+    pairs: str = Query(default="", description="chat_id:message_id,chat_id:message_id"),
+    x_admin_token: str | None = Header(default=None, alias="X-Admin-Token"),
+) -> dict:
+    _require_admin(x_admin_token)
+
+    message_keys: list[tuple[int, int]] = []
+    for raw_pair in pairs.split(","):
+        raw_pair = raw_pair.strip()
+        if not raw_pair or ":" not in raw_pair:
+            continue
+        chat_id_text, message_id_text = raw_pair.split(":", 1)
+        try:
+            message_keys.append((int(chat_id_text), int(message_id_text)))
+        except ValueError:
+            continue
+
+    items = database.get_messages_for_download_preview(message_keys)
+    serialized = {
+        f"{chat_id}:{message_id}": value
+        for (chat_id, message_id), value in items.items()
+    }
+    return {"items": serialized}
 
 
 @api.get("/config/default-download-path")

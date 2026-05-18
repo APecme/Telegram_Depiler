@@ -413,6 +413,29 @@ button {
   color: white;
 }
 
+.telegram-lightbox-nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.14);
+  color: white;
+  font-size: 1.6rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.telegram-lightbox-nav-left {
+  left: 0.75rem;
+}
+
+.telegram-lightbox-nav-right {
+  right: 0.75rem;
+}
+
 .telegram-lightbox-media {
   width: 100%;
   max-height: calc(92vh - 90px);

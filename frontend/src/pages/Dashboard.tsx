@@ -116,6 +116,7 @@ type PreviewGroup = {
   ruleName: string;
   chatId?: number;
   createdAt: string;
+  messageText?: string;
   items: Array<DownloadRecord | null>;
   downloadedCount: number;
   totalCount: number;
@@ -148,7 +149,10 @@ export default function Dashboard() {
   const [previewPage, setPreviewPage] = useState<number>(1);
   const [previewHasMore, setPreviewHasMore] = useState<boolean>(true);
   const [previewLoadingMore, setPreviewLoadingMore] = useState<boolean>(false);
+  const [previewMessageTexts, setPreviewMessageTexts] = useState<Record<string, string>>({});
   const previewWindowRef = useRef<HTMLDivElement | null>(null);
+  const lightboxTouchStartXRef = useRef<number | null>(null);
+  const lightboxTouchStartYRef = useRef<number | null>(null);
   
   // 规则表单状态
   const [formChatId, setFormChatId] = useState<number | "">("");
@@ -175,6 +179,7 @@ export default function Dashboard() {
   const [showFilenameTemplateModal, setShowFilenameTemplateModal] = useState(false);
   const [selectedDefaultPath, setSelectedDefaultPath] = useState<string>("");
   const [versionCheck, setVersionCheck] = useState<VersionCheck | null>(null);
+  const [versionRefreshing, setVersionRefreshing] = useState(false);
 
   useEffect(() => {
     api.get("/admin/me").catch((error) => {
@@ -245,11 +250,14 @@ export default function Dashboard() {
 
   const fetchVersionCheck = async () => {
     try {
+      setVersionRefreshing(true);
       const { data } = await api.get("/version-check");
       setVersionCheck(data);
     } catch (error) {
       console.error("Failed to fetch version check:", error);
       setVersionCheck({ current_version: __APP_VERSION__, latest_version: null, has_update: null, status: "error" });
+    } finally {
+      setVersionRefreshing(false);
     }
   };
 
@@ -322,12 +330,25 @@ export default function Dashboard() {
       const { data } = await api.get("/downloads", {
         params: {
           page,
-          page_size: 60,
+          page_size: page === 1 ? 30 : 20,
           status: "completed",
         },
       });
 
       const items: DownloadRecord[] = (data.items || []).filter((record: DownloadRecord) => !!record.file_path && !!getPreviewType(record));
+      if (items.length > 0) {
+        const pairs = Array.from(new Set(items.map((record) => `${record.chat_id || 0}:${record.message_id || 0}`))).join(",");
+        const messageResponse = await api.get("/downloads/preview-messages", { params: { pairs } });
+        const textMap = messageResponse.data.items || {};
+        setPreviewMessageTexts((current) => {
+          const next = { ...current };
+          Object.entries(textMap).forEach(([key, value]: [string, any]) => {
+            next[key] = value?.message_text || "";
+          });
+          return next;
+        });
+      }
+
       setPreviewDownloads((current) => {
         if (!append) return items;
         const seen = new Set(current.map((record) => record.id));
@@ -340,7 +361,7 @@ export default function Dashboard() {
         return merged;
       });
       setPreviewPage(page);
-      setPreviewHasMore((data.page || page) * (data.page_size || 60) < (data.total || 0));
+      setPreviewHasMore((data.page || page) * (data.page_size || (page === 1 ? 30 : 20)) < (data.total || 0));
     } catch (error) {
       console.error("Failed to fetch preview downloads:", error);
     } finally {
@@ -725,12 +746,14 @@ export default function Dashboard() {
         : `single-${record.id}`;
 
       if (!groupedMap.has(groupKey)) {
+        const messageTextKey = `${record.chat_id || 0}:${record.message_id || 0}`;
         groupedMap.set(groupKey, {
           key: groupKey,
           title,
           ruleName,
           chatId: relatedRule?.chat_id,
           createdAt: record.created_at,
+          messageText: previewMessageTexts[messageTextKey] || "",
           items: Array.from({ length: totalCount }, () => null),
           downloadedCount: 0,
           totalCount,
@@ -751,7 +774,7 @@ export default function Dashboard() {
     }
 
     return Array.from(groupedMap.values())
-      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
   };
 
   const sourceLabel = (record: DownloadRecord) => {
@@ -801,6 +824,9 @@ export default function Dashboard() {
   const allCurrentPageSelected = downloads.length > 0 && selectedIds.length === downloads.length;
   const previewGroups = buildPreviewGroups();
 
+  const lightboxItems = previewGroups.flatMap((group) => group.items.filter(Boolean) as DownloadRecord[]);
+  const lightboxIndex = lightboxRecord ? lightboxItems.findIndex((item) => item.id === lightboxRecord.id) : -1;
+
   const handlePreviewScroll = () => {
     const container = previewWindowRef.current;
     if (!container || previewLoadingMore || !previewHasMore) {
@@ -816,6 +842,72 @@ export default function Dashboard() {
           previewWindowRef.current.scrollTop = nextHeight - previousHeight + previewWindowRef.current.scrollTop;
         });
       });
+    } else if (previewHasMore && !previewLoadingMore && previewGroups.length - Math.floor(container.scrollTop / 220) <= 20) {
+      fetchPreviewDownloads(previewPage + 1, true);
+    }
+  };
+
+  useEffect(() => {
+    if (previewGroups.length > 0 && previewPage === 1 && previewWindowRef.current) {
+      requestAnimationFrame(() => {
+        if (!previewWindowRef.current) return;
+        previewWindowRef.current.scrollTop = previewWindowRef.current.scrollHeight;
+      });
+    }
+  }, [previewGroups.length, previewPage]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!lightboxRecord) return;
+      if (event.key === "ArrowLeft" && lightboxIndex > 0) {
+        setLightboxRecord(lightboxItems[lightboxIndex - 1]);
+      }
+      if (event.key === "ArrowRight" && lightboxIndex >= 0 && lightboxIndex < lightboxItems.length - 1) {
+        setLightboxRecord(lightboxItems[lightboxIndex + 1]);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [lightboxRecord, lightboxIndex, lightboxItems]);
+
+  const showPreviousLightboxItem = () => {
+    if (lightboxIndex > 0) {
+      setLightboxRecord(lightboxItems[lightboxIndex - 1]);
+    }
+  };
+
+  const showNextLightboxItem = () => {
+    if (lightboxIndex >= 0 && lightboxIndex < lightboxItems.length - 1) {
+      setLightboxRecord(lightboxItems[lightboxIndex + 1]);
+    }
+  };
+
+  const handleLightboxTouchStart = (event: React.TouchEvent<HTMLDivElement>) => {
+    const touch = event.touches[0];
+    lightboxTouchStartXRef.current = touch.clientX;
+    lightboxTouchStartYRef.current = touch.clientY;
+  };
+
+  const handleLightboxTouchEnd = (event: React.TouchEvent<HTMLDivElement>) => {
+    if (lightboxTouchStartXRef.current === null || lightboxTouchStartYRef.current === null) {
+      return;
+    }
+
+    const touch = event.changedTouches[0];
+    const deltaX = touch.clientX - lightboxTouchStartXRef.current;
+    const deltaY = touch.clientY - lightboxTouchStartYRef.current;
+
+    lightboxTouchStartXRef.current = null;
+    lightboxTouchStartYRef.current = null;
+
+    if (Math.abs(deltaX) < 50 || Math.abs(deltaX) < Math.abs(deltaY)) {
+      return;
+    }
+
+    if (deltaX > 0) {
+      showPreviousLightboxItem();
+    } else {
+      showNextLightboxItem();
     }
   };
 
@@ -1189,7 +1281,9 @@ export default function Dashboard() {
             style={{ height: isMobile ? "64px" : "100px", objectFit: "contain" }}
           />
           <span style={{ fontSize: "0.9rem", color: "#6b7280" }}>v{__APP_VERSION__}</span>
-          <span
+          <button
+            type="button"
+            onClick={fetchVersionCheck}
             style={{
               fontSize: "0.85rem",
               color:
@@ -1206,15 +1300,19 @@ export default function Dashboard() {
                   : "#f3f4f6",
               borderRadius: "999px",
               padding: "0.2rem 0.6rem",
+              border: "none",
+              cursor: versionRefreshing ? "wait" : "pointer",
             }}
             title={versionCheck?.status === "ok" && versionCheck?.latest_version ? `最新版本：v${versionCheck.latest_version}` : "暂时无法检查更新"}
           >
-            {versionCheck?.has_update === true
+            {versionRefreshing
+              ? "检查中…"
+              : versionCheck?.has_update === true
               ? `有新版本 v${versionCheck.latest_version}`
               : versionCheck?.has_update === false
               ? "已是最新版本"
               : "暂时无法检查更新"}
-          </span>
+          </button>
         </div>
         <Link to="/settings" style={{ textDecoration: "none" }}>
           <button style={{ padding: "0.5rem 1rem", cursor: "pointer" }}>⚙️ Settings</button>
@@ -1228,7 +1326,7 @@ export default function Dashboard() {
             <div>
               <h3 className="telegram-preview-title">消息窗口</h3>
             </div>
-            <span className="telegram-preview-count">已加载 {previewGroups.length} 条</span>
+            <span className="telegram-preview-count">已加载 {previewGroups.length} 条消息</span>
           </div>
           <div className="telegram-chat-window" ref={previewWindowRef} onScroll={handlePreviewScroll}>
             {previewHasMore && (
@@ -1263,7 +1361,7 @@ export default function Dashboard() {
                         <span className="telegram-bubble-name">{group.title}</span>
                         <span className="telegram-bubble-time">{new Date(group.createdAt).toLocaleString()}</span>
                       </div>
-                      <div className="telegram-bubble-text">✅ 下载完成 {group.downloadedCount}/{group.totalCount}</div>
+                      {group.messageText && <div className="telegram-bubble-text">{group.messageText}</div>}
                       <div className={`telegram-album-grid telegram-album-grid-${Math.min(group.items.length, 4)}`}>
                         {group.items.map((item, index) => {
                           if (!item) {
@@ -1282,7 +1380,7 @@ export default function Dashboard() {
                                 <img className="telegram-media-preview telegram-album-media" src={getMediaPreviewUrl(item)} alt={item.file_name || item.origin_file_name || "preview"} />
                               ) : (
                                 <div className="telegram-video-thumb telegram-album-video-wrap">
-                                  <video className="telegram-media-preview telegram-album-media" src={getMediaPreviewUrl(item)} muted preload="metadata" playsInline />
+                                  <video className="telegram-media-preview telegram-album-media" src={getMediaPreviewUrl(item)} preload="metadata" playsInline muted />
                                   <span className="telegram-video-play">▶</span>
                                 </div>
                               )}
@@ -3296,13 +3394,19 @@ export default function Dashboard() {
 
       {lightboxRecord && (
         <div className="telegram-lightbox" onClick={() => setLightboxRecord(null)}>
-          <div className="telegram-lightbox-panel" onClick={(e) => e.stopPropagation()}>
+          <div className="telegram-lightbox-panel" onClick={(e) => e.stopPropagation()} onTouchStart={handleLightboxTouchStart} onTouchEnd={handleLightboxTouchEnd}>
             <button type="button" className="telegram-lightbox-close" onClick={() => setLightboxRecord(null)}>✕</button>
+            {lightboxIndex > 0 && (
+              <button type="button" className="telegram-lightbox-nav telegram-lightbox-nav-left" onClick={showPreviousLightboxItem}>‹</button>
+            )}
+            {lightboxIndex >= 0 && lightboxIndex < lightboxItems.length - 1 && (
+              <button type="button" className="telegram-lightbox-nav telegram-lightbox-nav-right" onClick={showNextLightboxItem}>›</button>
+            )}
             {getMediaPreviewUrl(lightboxRecord) ? (
               getPreviewType(lightboxRecord) === "image" ? (
                 <img className="telegram-lightbox-media" src={getMediaPreviewUrl(lightboxRecord)} alt={lightboxRecord.file_name || lightboxRecord.origin_file_name || "preview"} />
               ) : (
-                <video className="telegram-lightbox-media" src={getMediaPreviewUrl(lightboxRecord)} controls autoPlay playsInline />
+                <video className="telegram-lightbox-media" src={getMediaPreviewUrl(lightboxRecord)} controls autoPlay playsInline preload="metadata" />
               )
             ) : (
               <div className="telegram-lightbox-loading">未登录或会话已过期</div>

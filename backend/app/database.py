@@ -598,6 +598,32 @@ class Database:
             ).fetchall()
             return [dict(row) for row in rows]
 
+    def get_messages_for_download_preview(self, message_keys: List[tuple[int, int]]) -> Dict[tuple[int, int], Dict[str, Any]]:
+        if not message_keys:
+            return {}
+
+        placeholders = ",".join(["(?, ?)"] * len(message_keys))
+        params: List[Any] = []
+        for chat_id, message_id in message_keys:
+            params.extend([chat_id, message_id])
+
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT * FROM messages
+                WHERE (chat_id, message_id) IN ({placeholders})
+                ORDER BY created_at DESC
+                """,
+                tuple(params),
+            ).fetchall()
+
+        result: Dict[tuple[int, int], Dict[str, Any]] = {}
+        for row in rows:
+          key = (int(row["chat_id"] or 0), int(row["message_id"] or 0))
+          if key not in result:
+              result[key] = dict(row)
+        return result
+
     # Login state helpers ------------------------------------------------
     def save_login_state(
         self,

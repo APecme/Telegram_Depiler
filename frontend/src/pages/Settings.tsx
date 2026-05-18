@@ -74,6 +74,7 @@ export default function Settings() {
   const [panelUsername, setPanelUsername] = useState("");
   const [panelPassword, setPanelPassword] = useState("");
   const [versionCheck, setVersionCheck] = useState<VersionCheck | null>(null);
+  const [versionRefreshing, setVersionRefreshing] = useState(false);
 
   const proxy = useMemo(
     () =>
@@ -145,11 +146,14 @@ export default function Settings() {
 
   const fetchVersionCheck = async () => {
     try {
+      setVersionRefreshing(true);
       const { data } = await api.get("/version-check");
       setVersionCheck(data);
     } catch (error) {
       console.error("获取版本状态失败:", error);
       setVersionCheck({ current_version: __APP_VERSION__, latest_version: null, has_update: null, status: "error" });
+    } finally {
+      setVersionRefreshing(false);
     }
   };
 
@@ -681,7 +685,9 @@ export default function Settings() {
       <div style={{ marginTop: "2rem", paddingTop: "1rem", borderTop: "1px solid #e5e7eb", textAlign: "center", color: "#6b7280", fontSize: "0.9rem" }}>
         <div style={{ marginBottom: "0.75rem", display: "flex", justifyContent: "center", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
           <span>当前版本：v{__APP_VERSION__}</span>
-          <span
+          <button
+            type="button"
+            onClick={fetchVersionCheck}
             style={{
               color:
                 versionCheck?.has_update === true
@@ -697,14 +703,18 @@ export default function Settings() {
                   : "#f3f4f6",
               borderRadius: "999px",
               padding: "0.2rem 0.6rem",
+              border: "none",
+              cursor: versionRefreshing ? "wait" : "pointer",
             }}
           >
-            {versionCheck?.has_update === true
+            {versionRefreshing
+              ? "检查中…"
+              : versionCheck?.has_update === true
               ? `发现新版本 v${versionCheck.latest_version}`
               : versionCheck?.has_update === false
               ? "已是最新版本"
               : "暂时无法检查更新"}
-          </span>
+          </button>
         </div>
         <a
           href="https://github.com/APecme/Telegram_Depiler"
