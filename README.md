@@ -4,7 +4,7 @@
 
 # Telegram Depiler
 
-[![Version](https://img.shields.io/badge/version-1.0.50-blue)](https://github.com/APecme/Telegram_Depiler/releases/tag/v1.0.50)
+[![Version](https://img.shields.io/badge/version-1.0.51-blue)](https://github.com/APecme/Telegram_Depiler/releases/tag/v1.0.51)
 [![Docker Image](https://img.shields.io/docker/v/apecme/telegram-depiler?label=Docker&logo=docker)](https://hub.docker.com/r/apecme/telegram-depiler)
 [![Docker Pulls](https://img.shields.io/docker/pulls/apecme/telegram-depiler)](https://hub.docker.com/r/apecme/telegram-depiler)
 [![GitHub Stars](https://img.shields.io/github/stars/APecme/Telegram_Depiler)](https://github.com/APecme/Telegram_Depiler)
@@ -176,6 +176,9 @@ http://localhost:8001。两个配置均将宿主机的 `./downloads` 挂载到�
 - `{chat_title}` - 群聊标题
 - `{timestamp}` - 时间戳
 - `{file_name}` - 原始文件名
+- `{message_text}` - 消息文字或媒体说明
+
+所有变量均可使用 `{变量:最大字符数}` 限制长度，例如 `{message_text:30}` 会保留消息文字的前 30 个字符。
 
 示例：`{task_id}_{chat_title}_{file_name}`
 

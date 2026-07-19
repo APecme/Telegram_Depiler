@@ -122,6 +122,27 @@ type PreviewGroup = {
   totalCount: number;
 };
 
+const renderFilenameTemplatePreview = (template: string) => {
+  const values: Record<string, string> = {
+    task_id: "123",
+    message_id: "456",
+    chat_title: "示例群聊",
+    timestamp: "1760000000",
+    file_name: "video.mp4",
+    year: "2026",
+    month: "07",
+    day: "20",
+    message_text: "这是一段用于文件名的消息文字示例",
+  };
+  return template.replace(
+    /\{(task_id|message_id|chat_title|timestamp|file_name|year|month|day|message_text)(?::(\d+))?\}/g,
+    (_match, key: string, limit?: string) => {
+      const value = values[key] ?? "";
+      return limit === undefined ? value : value.slice(0, Math.min(Number(limit), 1000));
+    }
+  );
+};
+
 export default function Dashboard() {
   const [downloads, setDownloads] = useState<DownloadRecord[]>([]);
   const [groupRules, setGroupRules] = useState<GroupRule[]>([]);
@@ -2962,6 +2983,7 @@ export default function Dashboard() {
                       { key: "{chat_title}", desc: "群聊名称" },
                       { key: "{timestamp}", desc: "时间戳" },
                       { key: "{file_name}", desc: "原始文件名" },
+                      { key: "{message_text}", desc: "消息文字/媒体说明" },
                       { key: "{year}", desc: "年份" },
                       { key: "{month}", desc: "月份(01-12)" },
                       { key: "{day}", desc: "日期(01-31)" },
@@ -2990,6 +3012,9 @@ export default function Dashboard() {
                   </div>
                   <small style={{ display: "block", marginTop: "0.5rem", color: "#666", fontSize: "0.8rem" }}>
                     💡 支持文件夹：<code style={{ background: "#f0f0f0", padding: "0.1rem 0.3rem", borderRadius: "3px" }}>{`{chat_title}/{year}-{month}/{file_name}`}</code>
+                  </small>
+                  <small style={{ display: "block", marginTop: "0.25rem", color: "#666", fontSize: "0.8rem" }}>
+                    限制变量长度：<code style={{ background: "#f0f0f0", padding: "0.1rem 0.3rem", borderRadius: "3px" }}>{`{message_text:30}`}</code>
                   </small>
                   <small style={{ display: "block", marginTop: "0.25rem", color: "#666", fontSize: "0.8rem" }}>
                     示例：<code style={{ background: "#f0f0f0", padding: "0.1rem 0.3rem", borderRadius: "3px" }}>{`{task_id}_{message_id}_{file_name}`}</code>
@@ -3390,15 +3415,17 @@ export default function Dashboard() {
                 <div><code>{`{chat_title}`}</code> - 群聊标题</div>
                 <div><code>{`{timestamp}`}</code> - 时间戳</div>
                 <div><code>{`{file_name}`}</code> - 原始文件名</div>
+                <div><code>{`{message_text}`}</code> - 消息文字或媒体说明</div>
                 <div><code>{`{year}`}</code> - 年份 (4位)</div>
                 <div><code>{`{month}`}</code> - 月份 (2位)</div>
                 <div><code>{`{day}`}</code> - 日期 (2位)</div>
+                <div><code>{`{message_text:30}`}</code> - 消息文字最多保留30个字符</div>
               </div>
             </div>
 
             <div style={{ marginBottom: "1rem", padding: "0.75rem", backgroundColor: "#e3f2fd", borderRadius: "4px" }}>
               <div style={{ fontSize: "0.85rem", color: "#1565c0" }}>
-                <strong>示例：</strong> {defaultFilenameTemplate.replace('{task_id}', '123').replace('{file_name}', 'video.mp4')}
+                <strong>示例：</strong> {renderFilenameTemplatePreview(defaultFilenameTemplate)}
               </div>
             </div>
 

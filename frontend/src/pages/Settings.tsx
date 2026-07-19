@@ -70,6 +70,8 @@ export default function Settings() {
   const [passwordHint, setPasswordHint] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [proxyTesting, setProxyTesting] = useState(false);
+  const [proxyTestResult, setProxyTestResult] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [loginState, setLoginState] = useState<LoginState | null>(null);
   const [panelUsername, setPanelUsername] = useState("");
   const [panelPassword, setPanelPassword] = useState("");
@@ -227,6 +229,34 @@ export default function Settings() {
       setMessage({ type: "error", text: `保存失败：${formatError(error)}` });
     } finally {
       setLoading(false);
+    }
+  };
+
+  const testProxy = async () => {
+    const host = proxy.host.trim();
+    if (!host || !proxy.port) {
+      setProxyTestResult({ type: "error", text: "请先填写代理主机和端口" });
+      return;
+    }
+    if (proxy.port < 1 || proxy.port > 65535) {
+      setProxyTestResult({ type: "error", text: "端口号必须在 1-65535 之间" });
+      return;
+    }
+
+    setProxyTesting(true);
+    setProxyTestResult(null);
+    try {
+      const { data } = await api.post("/config/test-proxy", {
+        proxy: { ...proxy, host },
+      });
+      setProxyTestResult({
+        type: "success",
+        text: `连接成功，耗时 ${data.latency_ms} ms`,
+      });
+    } catch (error) {
+      setProxyTestResult({ type: "error", text: formatError(error) });
+    } finally {
+      setProxyTesting(false);
     }
   };
 
@@ -451,12 +481,13 @@ export default function Settings() {
             代理类型
             <select
               value={proxy.type || "socks5"}
-              onChange={(e) =>
+              onChange={(e) => {
                 setConfig({
                   ...config,
                   proxy: { ...proxy, type: e.target.value },
-                })
-              }
+                });
+                setProxyTestResult(null);
+              }}
               style={{ width: "100%", padding: "0.5rem", borderRadius: "4px", border: "1px solid #ddd" }}
             >
               <option value="socks5">SOCKS5</option>
@@ -471,12 +502,13 @@ export default function Settings() {
             Host
             <input
               value={proxy.host ?? ""}
-              onChange={(e) =>
+              onChange={(e) => {
                 setConfig({
                   ...config,
                   proxy: { ...proxy, host: e.target.value },
-                })
-              }
+                });
+                setProxyTestResult(null);
+              }}
               placeholder="127.0.0.1 或 host.docker.internal"
             />
             <small style={{ display: "block", color: "#666", marginTop: "4px" }}>
@@ -495,6 +527,7 @@ export default function Settings() {
                   proxy: { ...proxy, port: Number(e.target.value) },
                 });
                 setValidationErrors({ ...validationErrors, proxy_port: "" });
+                setProxyTestResult(null);
               }}
               placeholder="1080"
               min="1"
@@ -512,12 +545,13 @@ export default function Settings() {
             用户名
             <input
               value={proxy.user ?? ""}
-              onChange={(e) =>
+              onChange={(e) => {
                 setConfig({
                   ...config,
                   proxy: { ...proxy, user: e.target.value },
-                })
-              }
+                });
+                setProxyTestResult(null);
+              }}
             />
           </label>
 
@@ -525,14 +559,36 @@ export default function Settings() {
             密码
             <input
               value={proxy.password ?? ""}
-              onChange={(e) =>
+              onChange={(e) => {
                 setConfig({
                   ...config,
                   proxy: { ...proxy, password: e.target.value },
-                })
-              }
+                });
+                setProxyTestResult(null);
+              }}
             />
           </label>
+
+          <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap" }}>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={testProxy}
+              disabled={proxyTesting || !proxy.host.trim() || !proxy.port}
+            >
+              {proxyTesting ? "正在测试..." : "测试连通性"}
+            </button>
+            {proxyTestResult && (
+              <span
+                style={{
+                  color: proxyTestResult.type === "success" ? "#2e7d32" : "#c62828",
+                  fontSize: "0.85rem",
+                }}
+              >
+                {proxyTestResult.text}
+              </span>
+            )}
+          </div>
 
           <button type="submit" className="btn-primary" disabled={loading}>
             保存配置

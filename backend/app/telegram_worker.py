@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import socket
 import time
 from collections import defaultdict
@@ -11,6 +12,44 @@ import sqlite3
 from typing import Any, Awaitable, Callable, Literal, Optional
 
 logger = logging.getLogger(__name__)
+
+_FILENAME_TEMPLATE_PATTERN = re.compile(
+    r"\{(task_id|message_id|chat_title|timestamp|file_name|year|month|day|message_text)(?::(\d+))?\}"
+)
+_INVALID_FILENAME_TEXT = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+
+def _render_filename_template(
+    template: str,
+    *,
+    task_id: int,
+    message: Any,
+    chat_title: str,
+    original_file_name: str,
+    timestamp: int,
+    rendered_at: Any,
+) -> str:
+    message_text = " ".join(str(getattr(message, "message", "") or "").split())
+    message_text = _INVALID_FILENAME_TEXT.sub("_", message_text).strip(" .")
+    values = {
+        "task_id": str(task_id),
+        "message_id": str(message.id),
+        "chat_title": chat_title,
+        "timestamp": str(timestamp),
+        "file_name": original_file_name,
+        "year": str(rendered_at.year),
+        "month": str(rendered_at.month).zfill(2),
+        "day": str(rendered_at.day).zfill(2),
+        "message_text": message_text,
+    }
+
+    def replace(match: re.Match[str]) -> str:
+        value = values[match.group(1)]
+        if match.group(2) is not None:
+            value = value[: min(int(match.group(2)), 1000)]
+        return value
+
+    return _FILENAME_TEMPLATE_PATTERN.sub(replace, template)
 
 
 def _prefer_ipv4_resolution() -> None:
@@ -951,7 +990,11 @@ class TelegramWorker:
                 return
             
             # 获取原始文件名
-            original_file_name = download.get('file_name') or f"file_{message.id}"
+            original_file_name = (
+                download.get("origin_file_name")
+                or download.get("file_name")
+                or f"file_{message.id}"
+            )
             
             # 应用文件名模板
             from datetime import datetime
@@ -960,15 +1003,15 @@ class TelegramWorker:
             timestamp = int(time.time())
             now = datetime.now()
             
-            # 替换模板变量
-            file_name = filename_template.replace('{task_id}', str(download_id))
-            file_name = file_name.replace('{message_id}', str(message.id))
-            file_name = file_name.replace('{chat_title}', chat_title)
-            file_name = file_name.replace('{timestamp}', str(timestamp))
-            file_name = file_name.replace('{file_name}', original_file_name)
-            file_name = file_name.replace('{year}', str(now.year))
-            file_name = file_name.replace('{month}', str(now.month).zfill(2))
-            file_name = file_name.replace('{day}', str(now.day).zfill(2))
+            file_name = _render_filename_template(
+                filename_template,
+                task_id=download_id,
+                message=message,
+                chat_title=chat_title,
+                original_file_name=original_file_name,
+                timestamp=timestamp,
+                rendered_at=now,
+            )
             
             # 确保文件名有扩展名（检查最后一个路径部分）
             file_name_parts = file_name.split('/')
@@ -1943,16 +1986,16 @@ class TelegramWorker:
             if current_task:
                 self._download_tasks[download_id] = current_task
             
-            # 替换模板变量
             now = datetime.now()
-            file_name = filename_template.replace('{task_id}', str(download_id))
-            file_name = file_name.replace('{message_id}', str(message.id))
-            file_name = file_name.replace('{chat_title}', chat_title)
-            file_name = file_name.replace('{timestamp}', str(timestamp))
-            file_name = file_name.replace('{file_name}', original_file_name)
-            file_name = file_name.replace('{year}', str(now.year))
-            file_name = file_name.replace('{month}', str(now.month).zfill(2))
-            file_name = file_name.replace('{day}', str(now.day).zfill(2))
+            file_name = _render_filename_template(
+                filename_template,
+                task_id=download_id,
+                message=message,
+                chat_title=chat_title,
+                original_file_name=original_file_name,
+                timestamp=timestamp,
+                rendered_at=now,
+            )
             
             # 确保文件名有扩展名（检查最后一个路径部分）
             file_name_parts = file_name.split('/')

@@ -14,6 +14,10 @@ class ProxySettings(BaseModel):
     password: Optional[str] = None
 
 
+class ProxyTestRequest(BaseModel):
+    proxy: ProxySettings
+
+
 class ConfigPayload(BaseModel):
     api_id: int
     api_hash: str

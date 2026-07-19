@@ -33,6 +33,7 @@ from .schemas import (
     VerifyRequest,
     GroupRuleCreate,
     GroupRuleUpdate,
+    ProxyTestRequest,
     AdminLoginRequest,
     AdminCredentialsUpdate,
 )
@@ -355,11 +356,17 @@ def _parse_version_parts(version: str) -> tuple[int, ...]:
     return tuple(parts or [0])
 
 
-def _normalize_proxy_settings() -> tuple[str, str, int, str | None, str | None] | None:
-    if not settings.proxy_host or not settings.proxy_port:
+def _normalize_proxy_values(
+    proxy_type: str | None,
+    host: str | None,
+    port: int | None,
+    user: str | None,
+    password: str | None,
+) -> tuple[str, str, int, str | None, str | None] | None:
+    if not host or not port:
         return None
 
-    proxy_host = settings.proxy_host.strip()
+    proxy_host = host.strip()
     for prefix in ("http://", "https://", "socks4://", "socks5://", "socks://"):
         if proxy_host.lower().startswith(prefix):
             proxy_host = proxy_host[len(prefix):].strip()
@@ -385,15 +392,24 @@ def _normalize_proxy_settings() -> tuple[str, str, int, str | None, str | None] 
                 proxy_host,
             )
 
-    proxy_type = (settings.proxy_type or "http").lower()
-    if proxy_type not in ("http", "socks4", "socks5"):
-        logger.warning("Unknown proxy type %s for version check, defaulting to http", proxy_type)
-        proxy_type = "http"
+    normalized_type = (proxy_type or "http").lower()
+    if normalized_type not in ("http", "socks4", "socks5"):
+        normalized_type = "http"
 
     return (
-        proxy_type,
+        normalized_type,
         proxy_host,
-        int(settings.proxy_port),
+        int(port),
+        user or None,
+        password or None,
+    )
+
+
+def _normalize_proxy_settings() -> tuple[str, str, int, str | None, str | None] | None:
+    return _normalize_proxy_values(
+        settings.proxy_type,
+        settings.proxy_host,
+        settings.proxy_port,
         settings.proxy_user,
         settings.proxy_password,
     )
@@ -510,6 +526,71 @@ async def read_config() -> dict:
             "user": stored.get("proxy_user"),
             "password": stored.get("proxy_password"),
         },
+    }
+
+
+@api.post("/config/test-proxy")
+async def test_proxy_connection(
+    payload: ProxyTestRequest,
+    x_admin_token: str | None = Header(default=None, alias="X-Admin-Token"),
+) -> dict:
+    """通过表单中的代理建立到 Telegram 数据中心的 TCP 连接。"""
+    _require_admin(x_admin_token)
+    proxy = payload.proxy
+    normalized = _normalize_proxy_values(
+        proxy.type,
+        proxy.host,
+        proxy.port,
+        proxy.user,
+        proxy.password,
+    )
+    if normalized is None:
+        raise HTTPException(status_code=400, detail="请填写代理主机和端口")
+
+    proxy_type, proxy_host, proxy_port, proxy_user, proxy_password = normalized
+    target = ("149.154.167.51", 443)
+
+    def _connect() -> None:
+        import socks
+
+        proxy_kinds = {
+            "http": socks.HTTP,
+            "socks4": socks.SOCKS4,
+            "socks5": socks.SOCKS5,
+        }
+        client = socks.socksocket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            client.set_proxy(
+                proxy_kinds[proxy_type],
+                proxy_host,
+                proxy_port,
+                True,
+                proxy_user,
+                proxy_password,
+            )
+            client.settimeout(10)
+            client.connect(target)
+        finally:
+            client.close()
+
+    started_at = time.perf_counter()
+    try:
+        await asyncio.wait_for(asyncio.to_thread(_connect), timeout=12)
+    except (asyncio.TimeoutError, OSError) as exc:
+        logger.warning(
+            "代理连通性测试失败 (%s://%s:%s): %s",
+            proxy_type,
+            proxy_host,
+            proxy_port,
+            exc,
+        )
+        raise HTTPException(status_code=400, detail=f"代理连接失败：{exc}") from exc
+
+    latency_ms = round((time.perf_counter() - started_at) * 1000)
+    return {
+        "status": "ok",
+        "latency_ms": latency_ms,
+        "target": f"{target[0]}:{target[1]}",
     }
 
 
