@@ -113,6 +113,79 @@ class TelegramWorker:
         self._last_notification_edit_time = 0.0
         self._pending_notification_tasks: dict[tuple[int, int], asyncio.Task] = {}
         self._pending_notification_payloads: dict[tuple[int, int], dict[str, Any]] = {}
+        self._linked_channel_cache: dict[int, tuple[float, Optional[int]]] = {}
+        self._linked_channel_cache_ttl = 300.0
+
+    async def _get_linked_channel_id_for_discussion(self, chat: Any) -> Optional[int]:
+        """Return the broadcast channel linked to an incoming discussion group."""
+        if not getattr(chat, "megagroup", False):
+            return None
+
+        chat_id = int(getattr(chat, "id", 0) or 0)
+        if chat_id <= 0:
+            return None
+
+        now = time.monotonic()
+        cached = self._linked_channel_cache.get(chat_id)
+        if cached and now - cached[0] < self._linked_channel_cache_ttl:
+            return cached[1]
+
+        linked_channel_id: Optional[int] = None
+        try:
+            if self._client is None:
+                return None
+            full_chat = await self._client(
+                functions.channels.GetFullChannelRequest(channel=chat)
+            )
+            linked_chat_id = getattr(full_chat.full_chat, "linked_chat_id", None)
+            if linked_chat_id:
+                linked_channel_id = int(linked_chat_id)
+        except Exception as exc:
+            logger.debug("获取讨论组关联频道失败 (chat_id=%s): %s", chat_id, exc)
+
+        self._linked_channel_cache[chat_id] = (now, linked_channel_id)
+        return linked_channel_id
+
+    async def _get_monitor_rules_for_chat(
+        self,
+        chat: Any,
+        message: Any,
+    ) -> list[dict[str, Any]]:
+        """Load direct rules plus comment-enabled rules from a linked channel."""
+        chat_id = int(getattr(chat, "id", 0) or 0)
+        direct_rules = self.database.get_group_rules_for_chat(
+            chat_id=chat_id,
+            mode="monitor",
+            only_enabled=True,
+        )
+
+        comment_rules = [
+            rule
+            for rule in self.database.list_group_rules(mode="monitor")
+            if rule.get("enabled") and rule.get("include_comments")
+        ]
+        if not comment_rules or getattr(message, "reply_to", None) is None:
+            return direct_rules
+
+        linked_channel_id = await self._get_linked_channel_id_for_discussion(chat)
+        if linked_channel_id is None:
+            return direct_rules
+
+        seen_rule_ids = {rule.get("id") for rule in direct_rules}
+        linked_rules = [
+            rule
+            for rule in comment_rules
+            if int(rule.get("chat_id") or 0) == linked_channel_id
+            and rule.get("id") not in seen_rule_ids
+        ]
+        if linked_rules:
+            logger.debug(
+                "讨论组 %s 使用关联频道 %s 的 %d 条评论下载规则",
+                chat_id,
+                linked_channel_id,
+                len(linked_rules),
+            )
+        return direct_rules + linked_rules
 
     def _message_matches_comment_rule(self, message: Any, rule: dict[str, Any]) -> bool:
         include_comments = bool(rule.get("include_comments", False))
@@ -1574,13 +1647,15 @@ class TelegramWorker:
                     logger.debug("获取相册媒体失败: %s", e)
             
             # 获取该群的所有启用的监控规则
-            rules = self.database.get_group_rules_for_chat(
-                chat_id=chat_id,
-                mode='monitor',
-                only_enabled=True
-            )
+            rules = await self._get_monitor_rules_for_chat(chat, event.message)
 
-            rule_ids = [int(r["id"]) for r in rules if r.get("auto_catch_up") and r.get("id") is not None]
+            rule_ids = [
+                int(r["id"])
+                for r in rules
+                if r.get("auto_catch_up")
+                and r.get("id") is not None
+                and int(r.get("chat_id") or 0) == int(chat_id)
+            ]
             if rule_ids and last_seen_id > 0:
                 self.database.update_group_rules_last_seen_message_id(rule_ids, last_seen_id)
             

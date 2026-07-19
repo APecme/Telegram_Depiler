@@ -1,6 +1,6 @@
 {
   "name": "telegram-manager-frontend",
-  "version": "1.0.49",
+  "version": "1.0.50",
   "private": true,
   "type": "module",
   "scripts": {
