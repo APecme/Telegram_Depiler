@@ -558,6 +558,12 @@ async def update_config(
         settings.proxy_port = payload.proxy.port
         settings.proxy_user = payload.proxy.user
         settings.proxy_password = payload.proxy.password
+    else:
+        settings.proxy_type = "http"
+        settings.proxy_host = None
+        settings.proxy_port = None
+        settings.proxy_user = None
+        settings.proxy_password = None
 
     database.set_config(
         {

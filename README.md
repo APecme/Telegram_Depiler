@@ -4,7 +4,7 @@
 
 # Telegram Depiler
 
-[![Version](https://img.shields.io/badge/version-1.0.30-blue)](https://github.com/APecme/Telegram_Depiler/releases/tag/v1.0.30)
+[![Version](https://img.shields.io/badge/version-1.0.49-blue)](https://github.com/APecme/Telegram_Depiler/releases/tag/v1.0.49)
 [![Docker Image](https://img.shields.io/docker/v/apecme/telegram-depiler?label=Docker&logo=docker)](https://hub.docker.com/r/apecme/telegram-depiler)
 [![Docker Pulls](https://img.shields.io/docker/pulls/apecme/telegram-depiler)](https://hub.docker.com/r/apecme/telegram-depiler)
 [![GitHub Stars](https://img.shields.io/github/stars/APecme/Telegram_Depiler)](https://github.com/APecme/Telegram_Depiler)
@@ -20,7 +20,9 @@ docker run -d \
   --name telegram-depiler \
   -p 8000:8000 \
   -v ./data:/app/data \
-  -v ./downloads:/downloads \
+  -v ./downloads:/app/downloads \
+  --add-host=host.docker.internal:host-gateway \
+  --restart unless-stopped \
   apecme/telegram-depiler:latest
 ```
 
@@ -48,17 +50,14 @@ docker run -d \
 ### 方式一：使用 Docker Hub 镜像（推荐）
 
 ```bash
-# 1. 创建 docker-compose.yml
-curl -o docker-compose.yml https://raw.githubusercontent.com/APecme/Telegram_Depiler/main/docker-compose.yml
+# 1. 下载 Docker Hub 镜像专用配置
+curl -o docker-compose.yml https://raw.githubusercontent.com/APecme/Telegram_Depiler/main/docker-compose.hub.yml
 
-# 2. 修改 docker-compose.yml，使用 Docker Hub 镜像
-# 将 build 部分替换为：
-# image: apecme/telegram-depiler:latest
-
-# 3. 启动服务
+# 2. 拉取镜像并启动服务
+docker compose pull
 docker compose up -d
 
-# 4. 访问 http://localhost:8000
+# 3. 访问 http://localhost:8000
 ```
 
 ### 方式二：从源码构建
@@ -67,6 +66,9 @@ docker compose up -d
 ```bash
 git clone https://github.com/APecme/Telegram_Depiler.git
 cd Telegram_Depiler
+docker compose up -d --build
+
+# 源码构建配置默认映射到 http://localhost:8001
 ```
 
 ### 🐳 Docker Compose 部署详解
@@ -76,19 +78,23 @@ cd Telegram_Depiler
 ```yaml
 services:
   app:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: telegram-manager
+    image: apecme/telegram-depiler:latest
+    container_name: telegram-depiler
     volumes:
-      - ./downloads:/downloads      # 下载文件存储
+      - ./downloads:/app/downloads  # 下载文件存储
       - ./data:/app/data            # 配置和数据库
     ports:
-      - "8000:8000"                 # Web 界面端口
+      - "8000:8000"                 # 宿主机端口:容器端口
     network_mode: bridge
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    restart: unless-stopped
 ```
+
+上述配置对应 Docker Hub 镜像部署，Web 地址为 http://localhost:8000。仓库中的
+`docker-compose.yml` 用于从源码构建，默认端口映射为 `8001:8000`，Web 地址为
+http://localhost:8001。两个配置均将宿主机的 `./downloads` 挂载到容器内的
+`/app/downloads`，请勿改为 `/downloads`，否则设置页面中的默认下载路径与挂载目录不一致。
 
 ## 📖 使用指南
 

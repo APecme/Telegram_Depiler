@@ -129,7 +129,23 @@ export default function Settings() {
 
   const fetchConfig = async () => {
     const { data } = await api.get("/config");
-    setConfig((prev) => ({ ...prev, ...data }));
+    setConfig((prev) => ({
+      ...prev,
+      ...data,
+      api_id: data.api_id == null ? "" : String(data.api_id),
+      api_hash: data.api_hash ?? "",
+      phone_number: data.phone_number ?? "",
+      bot_token: data.bot_token ?? "",
+      bot_username: data.bot_username ?? "",
+      admin_user_ids: data.admin_user_ids ?? "",
+      proxy: {
+        type: data.proxy?.type ?? "socks5",
+        host: data.proxy?.host ?? "",
+        port: data.proxy?.port ? Number(data.proxy.port) : 0,
+        user: data.proxy?.user ?? "",
+        password: data.proxy?.password ?? "",
+      },
+    }));
   };
 
   const fetchLoginState = async () => {
@@ -169,6 +185,14 @@ export default function Settings() {
       if (typeof detail === "string") {
         return detail;
       }
+      if (Array.isArray(detail)) {
+        return detail
+          .map((item) => {
+            const location = Array.isArray(item?.loc) ? item.loc.slice(1).join(".") : "";
+            return location ? `${location}: ${item?.msg ?? "参数无效"}` : item?.msg ?? "参数无效";
+          })
+          .join("；");
+      }
       if (typeof error.response?.data?.message === "string") {
         return error.response?.data?.message;
       }
@@ -190,10 +214,13 @@ export default function Settings() {
     setLoading(true);
     setMessage(null);
     try {
+      const proxyPayload = proxy.host.trim() && proxy.port
+        ? { ...proxy, host: proxy.host.trim() }
+        : null;
       await api.post("/config", {
         ...config,
         api_id: Number(config.api_id),
-        proxy,
+        proxy: proxyPayload,
       });
       setMessage({ type: "success", text: "配置已保存" });
     } catch (error) {
@@ -443,7 +470,7 @@ export default function Settings() {
           <label>
             Host
             <input
-              value={proxy.host}
+              value={proxy.host ?? ""}
               onChange={(e) =>
                 setConfig({
                   ...config,

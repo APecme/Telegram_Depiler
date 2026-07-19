@@ -8,8 +8,8 @@ from pydantic import BaseModel, Field
 
 class ProxySettings(BaseModel):
     type: Optional[str] = "http"  # 'http', 'socks4', 'socks5'
-    host: str
-    port: int
+    host: Optional[str] = None
+    port: Optional[int] = None
     user: Optional[str] = None
     password: Optional[str] = None
 
@@ -17,9 +17,9 @@ class ProxySettings(BaseModel):
 class ConfigPayload(BaseModel):
     api_id: int
     api_hash: str
-    phone_number: str
+    phone_number: Optional[str] = None
     bot_token: Optional[str] = None
-    bot_username: str
+    bot_username: Optional[str] = None
     admin_user_ids: Optional[str] = None  # 逗号分隔的管理员ID字符串
     proxy: Optional[ProxySettings] = None
 
