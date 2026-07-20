@@ -326,10 +326,21 @@ button {
   padding: 0.85rem;
 }
 
+.telegram-video-thumbnail {
+  background: #1e293b;
+}
+
 .telegram-video-file-label {
+  position: absolute;
+  left: 0.85rem;
+  right: 0.85rem;
+  bottom: 0.7rem;
   font-size: 0.82rem;
   font-weight: 700;
   word-break: break-word;
+  color: white;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85);
+  z-index: 2;
 }
 
 .telegram-album-placeholder {

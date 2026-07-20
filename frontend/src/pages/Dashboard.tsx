@@ -1440,6 +1440,10 @@ export default function Dashboard() {
                           }
 
                           const previewType = getPreviewType(item);
+                          const videoFileName = (item.file_name || item.origin_file_name || "").toLowerCase();
+                          const videoThumbnailUrl = getMediaPreviewUrl(item, {
+                            transcode: /\.(mkv|avi|mov|m4v)$/i.test(videoFileName),
+                          });
                           return (
                             <button
                               key={item.id}
@@ -1459,9 +1463,21 @@ export default function Dashboard() {
                                 <img className="telegram-media-preview telegram-album-media" src={getMediaPreviewUrl(item)} alt={item.file_name || item.origin_file_name || "preview"} />
                               ) : (
                                 <div className="telegram-video-thumb telegram-album-video-wrap">
-                                  <div className="telegram-media-preview telegram-album-media telegram-video-poster">
-                                    <span className="telegram-video-file-label">{item.file_name || item.origin_file_name || "video"}</span>
-                                  </div>
+                                  <video
+                                    className="telegram-media-preview telegram-album-media telegram-video-thumbnail"
+                                    src={videoThumbnailUrl}
+                                    muted
+                                    playsInline
+                                    preload="metadata"
+                                    aria-label={item.file_name || item.origin_file_name || "video"}
+                                    onLoadedMetadata={(event) => {
+                                      const video = event.currentTarget;
+                                      if (video.duration > 0) {
+                                        video.currentTime = Math.min(0.1, video.duration / 2);
+                                      }
+                                    }}
+                                  />
+                                  <span className="telegram-video-file-label">{item.file_name || item.origin_file_name || "video"}</span>
                                   <span className="telegram-video-play">▶</span>
                                 </div>
                               )}
