@@ -17,7 +17,7 @@ from typing import Optional
 from fastapi import FastAPI, HTTPException, Body, Header, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from starlette.responses import FileResponse, Response
+from starlette.responses import FileResponse, Response, StreamingResponse
 import mimetypes
 from telethon import events
 
@@ -958,7 +958,7 @@ async def get_download_media(
     x_admin_token: str | None = Header(default=None, alias="X-Admin-Token"),
     token: str | None = Query(default=None, description="管理员 token，可用于 img/video 直链预览"),
     transcode: bool = Query(default=False, description="是否对视频进行转码预览"),
-) -> FileResponse:
+) -> Response:
     """安全返回下载文件，用于前端预览图片/视频。"""
     _require_admin(x_admin_token or token)
     logger.info("[Media] request download_id=%s transcode=%s", download_id, transcode)
@@ -984,31 +984,83 @@ async def get_download_media(
         preview_dir.mkdir(parents=True, exist_ok=True)
         preview_path = preview_dir / f"{download_id}.mp4"
         logger.info("[Media] transcode requested download_id=%s preview_path=%s", download_id, preview_path)
-        if not preview_path.exists() or preview_path.stat().st_mtime < target.stat().st_mtime:
-            cmd = [
-                "ffmpeg",
-                "-y",
-                "-i",
-                str(target),
-                "-movflags",
-                "+faststart",
-                "-pix_fmt",
-                "yuv420p",
-                "-vcodec",
-                "libx264",
-                "-acodec",
-                "aac",
-                str(preview_path),
-            ]
-            try:
-                logger.info("[Media] running ffmpeg download_id=%s", download_id)
-                subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                logger.info("[Media] ffmpeg finished download_id=%s exists=%s", download_id, preview_path.exists())
-            except (subprocess.CalledProcessError, FileNotFoundError) as exc:
-                logger.warning("视频预览转码失败 (download_id=%s): %s", download_id, exc)
-        if preview_path.exists():
+        if preview_path.exists() and preview_path.stat().st_mtime >= target.stat().st_mtime:
             logger.info("[Media] serving transcoded preview download_id=%s", download_id)
             return FileResponse(path=preview_path, filename=preview_path.name, media_type="video/mp4")
+
+        cmd = [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            str(target),
+            "-f",
+            "mp4",
+            "-movflags",
+            "+frag_keyframe+empty_moov+default_base_moof",
+            "-preset",
+            "ultrafast",
+            "-threads",
+            "0",
+            "-pix_fmt",
+            "yuv420p",
+            "-vcodec",
+            "libx264",
+            "-acodec",
+            "aac",
+            "pipe:1",
+        ]
+        try:
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=503, detail="服务器未安装 ffmpeg") from exc
+
+        partial_path = preview_path.with_suffix(".mp4.partial")
+        try:
+            partial_path.unlink()
+        except FileNotFoundError:
+            pass
+
+        async def stream_transcoded_video():
+            try:
+                with partial_path.open("wb") as cache_file:
+                    while process.stdout is not None:
+                        chunk = await asyncio.to_thread(process.stdout.read, 1024 * 1024)
+                        if not chunk:
+                            break
+                        cache_file.write(chunk)
+                        yield chunk
+
+                return_code = await asyncio.to_thread(process.wait)
+                if return_code == 0 and partial_path.exists():
+                    os.replace(partial_path, preview_path)
+                    logger.info("[Media] ffmpeg stream cached download_id=%s", download_id)
+                elif partial_path.exists():
+                    partial_path.unlink()
+                    logger.warning("[Media] ffmpeg stream failed download_id=%s code=%s", download_id, return_code)
+            except asyncio.CancelledError:
+                raise
+            finally:
+                if process.poll() is None:
+                    process.terminate()
+                    await asyncio.to_thread(process.wait)
+                if partial_path.exists() and not preview_path.exists():
+                    try:
+                        partial_path.unlink()
+                    except OSError:
+                        pass
+
+        logger.info("[Media] streaming ffmpeg preview download_id=%s", download_id)
+        return StreamingResponse(
+            stream_transcoded_video(),
+            media_type="video/mp4",
+            headers={"Content-Disposition": f'inline; filename="{preview_path.name}"'},
+        )
 
     logger.info("[Media] serving original file download_id=%s", download_id)
     return FileResponse(path=target, filename=target.name, media_type=media_type or "application/octet-stream")

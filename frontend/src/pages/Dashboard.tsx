@@ -766,7 +766,9 @@ export default function Dashboard() {
 
   const getLightboxVideoUrl = (record: DownloadRecord) => {
     const useFallback = !!lightboxVideoFallback[record.id];
-    return getMediaPreviewUrl(record, { transcode: useFallback });
+    const fileName = (record.file_name || record.origin_file_name || "").toLowerCase();
+    const needsTranscode = /\.(mkv|avi|mov|m4v)$/i.test(fileName);
+    return getMediaPreviewUrl(record, { transcode: useFallback || needsTranscode });
   };
 
   const getDialogAvatarUrl = (chatId?: number) => {
@@ -3497,7 +3499,7 @@ export default function Dashboard() {
                   controls
                   autoPlay
                   playsInline
-                  preload="metadata"
+                  preload="auto"
                   onLoadedData={() => {
                     console.log("[Lightbox] video loaded", {
                       downloadId: lightboxRecord.id,

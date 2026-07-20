@@ -83,7 +83,7 @@ export default function Settings() {
       config.proxy ?? {
         type: "socks5",
         host: "",
-        port: 0,
+        port: 7890,
         user: "",
         password: "",
       },
@@ -143,7 +143,7 @@ export default function Settings() {
       proxy: {
         type: data.proxy?.type ?? "socks5",
         host: data.proxy?.host ?? "",
-        port: data.proxy?.port ? Number(data.proxy.port) : 0,
+        port: data.proxy?.port ? Number(data.proxy.port) : 7890,
         user: data.proxy?.user ?? "",
         password: data.proxy?.password ?? "",
       },
@@ -520,11 +520,11 @@ export default function Settings() {
             Port
             <input
               type="number"
-              value={proxy.port ?? ""}
+              value={proxy.port || 7890}
               onChange={(e) => {
                 setConfig({
                   ...config,
-                  proxy: { ...proxy, port: Number(e.target.value) },
+                  proxy: { ...proxy, port: Number(e.target.value) || 7890 },
                 });
                 setValidationErrors({ ...validationErrors, proxy_port: "" });
                 setProxyTestResult(null);
