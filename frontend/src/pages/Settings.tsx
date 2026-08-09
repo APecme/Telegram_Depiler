@@ -339,13 +339,13 @@ export default function Settings() {
   };
 
   return (
-    <div className="app" style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>
+    <div className="app settings-page" style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "2rem" }}>
         <h1>系统设置</h1>
         <Link to="/" style={{ 
           padding: "0.5rem 1rem", 
-          backgroundColor: "#2196f3", 
-          color: "white", 
+          backgroundColor: "var(--theme-primary)",
+          color: "var(--theme-on-primary)",
           textDecoration: "none", 
           borderRadius: "4px" 
         }}>
@@ -366,14 +366,14 @@ export default function Settings() {
               }}
               required
               placeholder="12345678"
-              style={{ borderColor: validationErrors.api_id ? "#f44336" : "#ddd" }}
+              style={{ borderColor: validationErrors.api_id ? "var(--color-danger)" : "var(--theme-border)" }}
             />
             {validationErrors.api_id && (
-              <small style={{ color: "#f44336", display: "block", marginTop: "4px" }}>
+              <small style={{ color: "var(--color-danger)", display: "block", marginTop: "4px" }}>
                 {validationErrors.api_id}
               </small>
             )}
-            <small style={{ display: "block", color: "#666", marginTop: "4px" }}>
+            <small style={{ display: "block", color: "var(--theme-muted-text)", marginTop: "4px" }}>
               从 https://my.telegram.org 获取，必须是纯数字
             </small>
           </label>
@@ -387,14 +387,14 @@ export default function Settings() {
               }}
               required
               placeholder="1234567890abcdef1234567890abcdef"
-              style={{ borderColor: validationErrors.api_hash ? "#f44336" : "#ddd" }}
+              style={{ borderColor: validationErrors.api_hash ? "var(--color-danger)" : "var(--theme-border)" }}
             />
             {validationErrors.api_hash && (
-              <small style={{ color: "#f44336", display: "block", marginTop: "4px" }}>
+              <small style={{ color: "var(--color-danger)", display: "block", marginTop: "4px" }}>
                 {validationErrors.api_hash}
               </small>
             )}
-            <small style={{ display: "block", color: "#666", marginTop: "4px" }}>
+            <small style={{ display: "block", color: "var(--theme-muted-text)", marginTop: "4px" }}>
               从 https://my.telegram.org 获取，必须是32位字符串
             </small>
           </label>
@@ -407,14 +407,14 @@ export default function Settings() {
                 setValidationErrors({ ...validationErrors, phone_number: "" });
               }}
               placeholder="+8612345678901"
-              style={{ borderColor: validationErrors.phone_number ? "#f44336" : "#ddd" }}
+              style={{ borderColor: validationErrors.phone_number ? "var(--color-danger)" : "var(--theme-border)" }}
             />
             {validationErrors.phone_number && (
-              <small style={{ color: "#f44336", display: "block", marginTop: "4px" }}>
+              <small style={{ color: "var(--color-danger)", display: "block", marginTop: "4px" }}>
                 {validationErrors.phone_number}
               </small>
             )}
-            <small style={{ display: "block", color: "#666", marginTop: "4px" }}>
+            <small style={{ display: "block", color: "var(--theme-muted-text)", marginTop: "4px" }}>
               格式：+国家码+手机号，如 +8612345678901
             </small>
           </label>
@@ -428,14 +428,14 @@ export default function Settings() {
                 setValidationErrors({ ...validationErrors, bot_token: "" });
               }}
               placeholder="123456789:ABCdefGHIjklMNOpqrsTUVwxyz"
-              style={{ borderColor: validationErrors.bot_token ? "#f44336" : "#ddd" }}
+              style={{ borderColor: validationErrors.bot_token ? "var(--color-danger)" : "var(--theme-border)" }}
             />
             {validationErrors.bot_token && (
-              <small style={{ color: "#f44336", display: "block", marginTop: "4px" }}>
+              <small style={{ color: "var(--color-danger)", display: "block", marginTop: "4px" }}>
                 {validationErrors.bot_token}
               </small>
             )}
-            <small style={{ display: "block", color: "#666", marginTop: "4px" }}>
+            <small style={{ display: "block", color: "var(--theme-muted-text)", marginTop: "4px" }}>
               从 @BotFather 获取，格式：123456789:ABCdef...
             </small>
           </label>
@@ -448,7 +448,7 @@ export default function Settings() {
               }
               required
             />
-            <small style={{ display: "block", color: "#666", marginTop: "4px" }}>
+            <small style={{ display: "block", color: "var(--theme-muted-text)", marginTop: "4px" }}>
               当使用用户账户时，只接收来自此Bot的消息；当使用Bot账户时，接收所有发送给Bot的消息
             </small>
           </label>
@@ -461,14 +461,14 @@ export default function Settings() {
                 setValidationErrors({ ...validationErrors, admin_user_ids: "" });
               }}
               placeholder="123456789,987654321"
-              style={{ borderColor: validationErrors.admin_user_ids ? "#f44336" : "#ddd" }}
+              style={{ borderColor: validationErrors.admin_user_ids ? "var(--color-danger)" : "var(--theme-border)" }}
             />
             {validationErrors.admin_user_ids && (
-              <small style={{ color: "#f44336", display: "block", marginTop: "4px" }}>
+              <small style={{ color: "var(--color-danger)", display: "block", marginTop: "4px" }}>
                 {validationErrors.admin_user_ids}
               </small>
             )}
-            <small style={{ display: "block", color: "#666", marginTop: "4px" }}>
+            <small style={{ display: "block", color: "var(--theme-muted-text)", marginTop: "4px" }}>
               必须是纯数字ID，多个用逗号分隔。获取ID：搜索 @userinfobot
             </small>
           </label>
@@ -488,12 +488,12 @@ export default function Settings() {
                 });
                 setProxyTestResult(null);
               }}
-              style={{ width: "100%", padding: "0.5rem", borderRadius: "4px", border: "1px solid #ddd" }}
+              style={{ width: "100%", padding: "0.5rem", borderRadius: "4px", border: "1px solid var(--theme-border)" }}
             >
               <option value="socks5">SOCKS5</option>
               <option value="http">HTTP</option>
             </select>
-            <small style={{ display: "block", color: "#666", marginTop: "4px" }}>
+            <small style={{ display: "block", color: "var(--theme-muted-text)", marginTop: "4px" }}>
               选择代理协议类型
             </small>
           </label>
@@ -511,7 +511,7 @@ export default function Settings() {
               }}
               placeholder="127.0.0.1 或 host.docker.internal"
             />
-            <small style={{ display: "block", color: "#666", marginTop: "4px" }}>
+            <small style={{ display: "block", color: "var(--theme-muted-text)", marginTop: "4px" }}>
               Docker 容器访问宿主机代理请使用：host.docker.internal
             </small>
           </label>
@@ -532,10 +532,10 @@ export default function Settings() {
               placeholder="1080"
               min="1"
               max="65535"
-              style={{ borderColor: validationErrors.proxy_port ? "#f44336" : "#ddd" }}
+              style={{ borderColor: validationErrors.proxy_port ? "var(--color-danger)" : "var(--theme-border)" }}
             />
             {validationErrors.proxy_port && (
-              <small style={{ color: "#f44336", display: "block", marginTop: "4px" }}>
+              <small style={{ color: "var(--color-danger)", display: "block", marginTop: "4px" }}>
                 {validationErrors.proxy_port}
               </small>
             )}
@@ -581,7 +581,7 @@ export default function Settings() {
             {proxyTestResult && (
               <span
                 style={{
-                  color: proxyTestResult.type === "success" ? "#2e7d32" : "#c62828",
+                  color: proxyTestResult.type === "success" ? "var(--color-success-strong)" : "var(--color-danger-strong)",
                   fontSize: "0.85rem",
                 }}
               >
@@ -598,7 +598,7 @@ export default function Settings() {
 
       <div className="card">
         <h2>面板账号</h2>
-        <p style={{ color: "#666", fontSize: "0.9rem", marginTop: 0 }}>
+        <p style={{ color: "var(--theme-muted-text)", fontSize: "0.9rem", marginTop: 0 }}>
           默认账号密码为 <code>admin / admin</code>，建议登录后尽快修改。
         </p>
         <div style={{ display: "grid", gap: "0.75rem", maxWidth: "400px" }}>
@@ -668,18 +668,18 @@ export default function Settings() {
       <div className="card">
         <h2>登录状态</h2>
         {loginState?.is_authorized ? (
-          <div style={{ 
+          <div className="auth-status auth-status-connected" style={{
             padding: "1rem", 
-            backgroundColor: "#d4edda", 
-            border: "1px solid #c3e6cb", 
+            backgroundColor: "var(--color-success-surface)",
+            border: "1px solid var(--color-success-border)",
             borderRadius: "4px",
             marginBottom: "1rem"
           }}>
             <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
               <span style={{ fontSize: "1.5rem" }}>✅</span>
-              <strong style={{ color: "#155724" }}>已登录</strong>
+              <strong style={{ color: "var(--color-success-strong)" }}>已登录</strong>
             </div>
-            <div style={{ color: "#155724", marginTop: "0.5rem" }}>
+            <div style={{ color: "var(--color-success-strong)", marginTop: "0.5rem" }}>
               <p style={{ margin: "0.25rem 0" }}>
                 <strong>账户类型：</strong>{loginState.account_type === "bot" ? "Bot账户" : "用户账户"}
               </p>
@@ -706,18 +706,18 @@ export default function Settings() {
             </div>
           </div>
         ) : (
-          <div style={{ 
+          <div className="auth-status auth-status-disconnected" style={{
             padding: "1rem", 
-            backgroundColor: "#fff3cd", 
-            border: "1px solid #ffeaa7", 
+            backgroundColor: "var(--color-warning-surface)",
+            border: "1px solid var(--color-warning-border)",
             borderRadius: "4px",
             marginBottom: "1rem"
           }}>
             <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
               <span style={{ fontSize: "1.5rem" }}>⚠️</span>
-              <strong style={{ color: "#856404" }}>未登录</strong>
+              <strong style={{ color: "var(--color-warning-strong)" }}>未登录</strong>
             </div>
-            <p style={{ color: "#856404", marginTop: "0.5rem", marginBottom: 0 }}>
+            <p style={{ color: "var(--color-warning-strong)", marginTop: "0.5rem", marginBottom: 0 }}>
               请完成登录流程以使用机器人功能。
             </p>
           </div>
@@ -765,7 +765,7 @@ export default function Settings() {
         )}
       </div>
 
-      <div style={{ marginTop: "2rem", paddingTop: "1rem", borderTop: "1px solid #e5e7eb", textAlign: "center", color: "#6b7280", fontSize: "0.9rem" }}>
+      <div style={{ marginTop: "2rem", paddingTop: "1rem", borderTop: "1px solid var(--theme-border)", textAlign: "center", color: "var(--theme-muted-text)", fontSize: "0.9rem" }}>
         <div style={{ marginBottom: "0.75rem", display: "flex", justifyContent: "center", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
           <span>当前版本：v{__APP_VERSION__}</span>
           <button
@@ -774,16 +774,16 @@ export default function Settings() {
             style={{
               color:
                 versionCheck?.has_update === true
-                  ? "#b45309"
+                  ? "var(--color-warning-strong)"
                   : versionCheck?.has_update === false
-                  ? "#15803d"
-                  : "#6b7280",
+                  ? "var(--color-success-strong)"
+                  : "var(--theme-muted-text)",
               backgroundColor:
                 versionCheck?.has_update === true
-                  ? "#fef3c7"
+                  ? "var(--color-warning-surface)"
                   : versionCheck?.has_update === false
-                  ? "#dcfce7"
-                  : "#f3f4f6",
+                  ? "var(--color-success-surface)"
+                  : "var(--theme-surface-muted)",
               borderRadius: "999px",
               padding: "0.2rem 0.6rem",
               border: "none",
@@ -803,7 +803,7 @@ export default function Settings() {
           href="https://github.com/APecme/Telegram_Depiler"
           target="_blank"
           rel="noreferrer"
-          style={{ color: "#2563eb", textDecoration: "none" }}
+          style={{ color: "var(--theme-primary)", textDecoration: "none" }}
         >
           GitHub: https://github.com/APecme/Telegram_Depiler
         </a>

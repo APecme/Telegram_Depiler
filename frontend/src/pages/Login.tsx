@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import axios from "axios";
+import ThemeToggle from "../components/ThemeToggle";
+import ThemeLogo from "../components/ThemeLogo";
 
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL ?? "/api",
@@ -46,33 +48,32 @@ export default function Login() {
 
   return (
     <div
+      className="login-page"
       style={{
         minHeight: "100vh",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        backgroundColor: "#f3f4f6",
         padding: "1rem",
       }}
     >
+      <div className="login-theme-control">
+        <ThemeToggle />
+      </div>
       <div
+        className="login-card"
         style={{
           width: "100%",
           maxWidth: "400px",
-          backgroundColor: "#ffffff",
           borderRadius: "0.75rem",
-          boxShadow: "0 10px 25px rgba(15,23,42,0.08)",
+          boxShadow: "0 10px 25px var(--theme-shadow)",
           padding: "2rem",
         }}
       >
         <div style={{ textAlign: "center", marginBottom: "1.5rem" }}>
-          <img
-            src="/images/logo2.png"
-            alt="Telegram Depiler Logo"
-            style={{ height: "72px", objectFit: "contain", marginBottom: "0.75rem" }}
-          />
-          <h2 style={{ margin: 0, fontSize: "1.25rem" }}>Telegram Depiler 控制台</h2>
-          <p style={{ margin: "0.5rem 0 0", color: "#6b7280", fontSize: "0.9rem" }}>
+          <ThemeLogo height="72px" width="215px" />
+          <h2 className="login-title" style={{ margin: 0, fontSize: "1.25rem" }}>Telegram Depiler 控制台</h2>
+          <p className="login-subtitle" style={{ margin: "0.5rem 0 0", fontSize: "0.9rem" }}>
             请输入面板账号密码登录（默认账号/密码：admin / admin）
           </p>
         </div>
@@ -88,7 +89,7 @@ export default function Login() {
               style={{
                 padding: "0.6rem 0.75rem",
                 borderRadius: "0.5rem",
-                border: "1px solid #d1d5db",
+                border: "1px solid var(--theme-border)",
                 outline: "none",
               }}
             />
@@ -105,7 +106,7 @@ export default function Login() {
               style={{
                 padding: "0.6rem 0.75rem",
                 borderRadius: "0.5rem",
-                border: "1px solid #d1d5db",
+                border: "1px solid var(--theme-border)",
                 outline: "none",
               }}
             />
@@ -117,8 +118,8 @@ export default function Login() {
                 marginTop: "0.25rem",
                 padding: "0.5rem 0.75rem",
                 borderRadius: "0.5rem",
-                backgroundColor: "#fef2f2",
-                color: "#b91c1c",
+                backgroundColor: "var(--color-danger-surface)",
+                color: "var(--color-danger-strong)",
                 fontSize: "0.85rem",
               }}
             >
@@ -134,8 +135,8 @@ export default function Login() {
               padding: "0.6rem 0.75rem",
               borderRadius: "0.5rem",
               border: "none",
-              backgroundColor: loading ? "#93c5fd" : "#2563eb",
-              color: "#ffffff",
+              backgroundColor: loading ? "var(--theme-primary-muted)" : "var(--theme-primary)",
+              color: "var(--theme-on-primary)",
               fontWeight: 500,
               cursor: loading ? "not-allowed" : "pointer",
             }}

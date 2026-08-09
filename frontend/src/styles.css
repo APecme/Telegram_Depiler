@@ -2,14 +2,97 @@
   font-family: "Inter", system-ui, Avenir, Helvetica, Arial, sans-serif;
   line-height: 1.5;
   font-weight: 400;
-  color: #0f172a;
-  background-color: #f8fafc;
+  color: var(--theme-text);
+  background-color: var(--theme-page-background);
+  --theme-primary: #2563eb;
+  --theme-primary-muted: #93c5fd;
+  --theme-primary-soft: #dbeafe;
+  --theme-page-background: #f1f5f9;
+  --theme-surface: #ffffff;
+  --theme-text: #0f172a;
+  --theme-muted-text: #64748b;
+  --theme-border: #cbd5e1;
+  --theme-preview: #7eaad1;
+  --theme-surface-muted: #f5f5f5;
+  --theme-on-primary: #ffffff;
+  --theme-muted-disabled: #94a3b8;
+  --theme-shadow: rgba(15, 23, 42, 0.1);
+  --theme-overlay: rgba(0, 0, 0, 0.5);
+  --color-info: #2196f3;
+  --color-info-surface: #e3f2fd;
+  --color-info-strong: #1565c0;
+  --color-cyan-surface: #e0f2fe;
+  --color-cyan-strong: #0369a1;
+  --color-indigo-surface: #eef2ff;
+  --color-indigo-strong: #4338ca;
+  --color-success: #4caf50;
+  --color-success-surface: #e8f5e9;
+  --color-success-strong: #2e7d32;
+  --color-success-border: #c3e6cb;
+  --color-warning: #ff9800;
+  --color-warning-surface: #fff3e0;
+  --color-warning-strong: #e65100;
+  --color-warning-border: #ffeaa7;
+  --color-danger: #f44336;
+  --color-danger-surface: #ffebee;
+  --color-danger-strong: #c62828;
+  --color-danger-border: #fecdd3;
+  --color-danger-disabled: #fca5a5;
+  --color-purple: #7c3aed;
+  --color-purple-surface: #f3e8ff;
+  --color-purple-strong: #6d28d9;
+  --color-paused-surface: #fce4ec;
+  --color-paused-strong: #880e4f;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  color: var(--theme-text);
+  --theme-primary: #60a5fa;
+  --theme-primary-muted: #334f76;
+  --theme-primary-soft: #1e3a5f;
+  --theme-page-background: #0f172a;
+  --theme-surface: #172033;
+  --theme-text: #f1f5f9;
+  --theme-muted-text: #aebcd0;
+  --theme-border: #3b4b66;
+  --theme-preview: #315774;
+  --theme-surface-muted: #202d44;
+  --theme-on-primary: #f8fafc;
+  --theme-muted-disabled: #7c8ca4;
+  --theme-shadow: rgba(2, 6, 23, 0.46);
+  --theme-overlay: rgba(2, 6, 23, 0.76);
+  --color-info: #60a5fa;
+  --color-info-surface: #123a5a;
+  --color-info-strong: #93c5fd;
+  --color-cyan-surface: #123d48;
+  --color-cyan-strong: #7dd3fc;
+  --color-indigo-surface: #312e62;
+  --color-indigo-strong: #c4b5fd;
+  --color-success: #4ade80;
+  --color-success-surface: #123c31;
+  --color-success-strong: #9ce7cf;
+  --color-success-border: #277665;
+  --color-warning: #fbbf24;
+  --color-warning-surface: #4a3612;
+  --color-warning-strong: #f9dc8f;
+  --color-warning-border: #927125;
+  --color-danger: #fb7185;
+  --color-danger-surface: #4b1f2a;
+  --color-danger-strong: #fecdd3;
+  --color-danger-border: #9f3b4c;
+  --color-danger-disabled: #9f5361;
+  --color-purple: #a78bfa;
+  --color-purple-surface: #372856;
+  --color-purple-strong: #d8b4fe;
+  --color-paused-surface: #4a2440;
+  --color-paused-strong: #f5b5de;
 }
 
 body {
   margin: 0;
   min-height: 100vh;
-  background: #f1f5f9;
+  background: var(--theme-page-background);
 }
 
 #root {
@@ -324,6 +407,225 @@ button {
   background: linear-gradient(135deg, #1e293b, #475569);
   color: white;
   padding: 0.85rem;
+}
+
+.theme-switcher {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem;
+  border: 1px solid var(--theme-border);
+  border-radius: 999px;
+  background: var(--theme-surface);
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.08);
+}
+
+.brand-logo {
+  display: inline-grid;
+  margin-bottom: 0.75rem;
+  width: auto;
+}
+
+.brand-logo img {
+  grid-area: 1 / 1;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.brand-logo-dark {
+  display: none !important;
+}
+
+:root[data-theme="dark"] .brand-logo-light {
+  display: none !important;
+}
+
+:root[data-theme="dark"] .brand-logo-dark {
+  display: block !important;
+}
+
+.dashboard-page .brand-logo {
+  margin-bottom: 0;
+}
+
+.theme-option {
+  width: 1.35rem;
+  height: 1.35rem;
+  min-width: 1.35rem;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--theme-muted-text);
+  font-size: 0.9rem;
+  line-height: 1;
+  box-shadow: none;
+}
+
+.theme-option.is-active {
+  border-color: var(--theme-text);
+  box-shadow: 0 0 0 2px var(--theme-surface);
+}
+
+.login-page {
+  position: relative;
+  background: var(--theme-page-background);
+  color: var(--theme-text);
+}
+
+.login-theme-control {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+}
+
+.login-card {
+  background-color: var(--theme-surface) !important;
+  border: 1px solid var(--theme-border);
+}
+
+.login-title { color: var(--theme-text); }
+.login-subtitle { color: var(--theme-muted-text) !important; }
+
+.dashboard-page {
+  color: var(--theme-text);
+}
+
+.dashboard-page > .card {
+  background-color: var(--theme-surface) !important;
+  border-top: 3px solid var(--theme-primary-soft);
+}
+
+.dashboard-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+:root[data-theme="dark"] input,
+:root[data-theme="dark"] select,
+:root[data-theme="dark"] textarea {
+  color: var(--theme-text);
+  background-color: var(--theme-surface);
+  border-color: var(--theme-border);
+}
+
+:root[data-theme="dark"] .telegram-preview-shell,
+:root[data-theme="dark"] .download-filter-shell,
+:root[data-theme="dark"] .rule-modal-panel {
+  border-color: var(--theme-border) !important;
+  background: var(--theme-surface) !important;
+}
+
+:root[data-theme="dark"] .telegram-chat-window {
+  background: linear-gradient(180deg, #315774 0%, #284760 100%);
+}
+
+:root[data-theme="dark"] .download-record-card,
+:root[data-theme="dark"] .download-record-meta-item,
+:root[data-theme="dark"] .download-record-path-block,
+:root[data-theme="dark"] .rule-modal-form > div {
+  background: var(--theme-surface) !important;
+  border-color: var(--theme-border) !important;
+}
+
+:root[data-theme="dark"] .telegram-bubble,
+:root[data-theme="dark"] .download-summary-badge,
+:root[data-theme="dark"] .download-toolbar-count {
+  background: #202d44;
+  color: var(--theme-text);
+}
+
+:root[data-theme="dark"] .telegram-preview-title,
+:root[data-theme="dark"] .download-filter-title,
+:root[data-theme="dark"] .download-record-title,
+:root[data-theme="dark"] .download-record-meta-item strong,
+:root[data-theme="dark"] .telegram-bubble-text,
+:root[data-theme="dark"] .rule-modal-title {
+  color: var(--theme-text);
+}
+
+:root[data-theme="dark"] .telegram-preview-subtitle,
+:root[data-theme="dark"] .download-filter-subtitle,
+:root[data-theme="dark"] .download-filter-field,
+:root[data-theme="dark"] .download-filter-field span,
+:root[data-theme="dark"] .download-record-origin,
+:root[data-theme="dark"] .download-record-meta-label,
+:root[data-theme="dark"] .download-progress-labels {
+  color: var(--theme-muted-text);
+}
+
+/* Dashboard uses legacy inline light surfaces. Keep those readable in dark mode. */
+:root[data-theme="dark"] .dashboard-page [style*="background-color: white"],
+:root[data-theme="dark"] .dashboard-page [style*="background-color: #f5f5f5"],
+:root[data-theme="dark"] .dashboard-page [style*="background-color: #fafafa"] {
+  background-color: var(--theme-surface) !important;
+}
+
+:root[data-theme="dark"] .dashboard-page [style*="color: #666"],
+:root[data-theme="dark"] .dashboard-page [style*="color: #555"],
+:root[data-theme="dark"] .dashboard-page [style*="color: #6b7280"],
+:root[data-theme="dark"] .dashboard-page [style*="color: #999"] {
+  color: var(--theme-muted-text) !important;
+}
+
+:root[data-theme="dark"] .settings-page .card {
+  background: var(--theme-surface);
+  border: 1px solid var(--theme-border);
+  box-shadow: 0 1px 3px rgba(2, 6, 23, 0.45);
+}
+
+:root[data-theme="dark"] .settings-page label,
+:root[data-theme="dark"] .settings-page [style*="color: #666"],
+:root[data-theme="dark"] .settings-page [style*="color: #6b7280"] {
+  color: var(--theme-muted-text) !important;
+}
+
+:root[data-theme="dark"] .settings-page .btn-primary {
+  background: var(--theme-primary);
+  color: #0f172a;
+}
+
+:root[data-theme="dark"] .settings-page .btn-secondary {
+  background: #283852;
+  color: var(--theme-text);
+  border: 1px solid var(--theme-border);
+}
+
+:root[data-theme="dark"] .settings-page code {
+  color: #d8e7ff;
+  background: #0f172a;
+}
+
+:root[data-theme="dark"] .settings-page .auth-status-connected {
+  background: #123d35 !important;
+  border-color: #277665 !important;
+}
+
+:root[data-theme="dark"] .settings-page .auth-status-connected strong,
+:root[data-theme="dark"] .settings-page .auth-status-connected > div {
+  color: #9ce7cf !important;
+}
+
+:root[data-theme="dark"] .settings-page .auth-status-disconnected {
+  background: #4a3612 !important;
+  border-color: #927125 !important;
+}
+
+:root[data-theme="dark"] .settings-page .auth-status-disconnected strong,
+:root[data-theme="dark"] .settings-page .auth-status-disconnected p {
+  color: #f9dc8f !important;
+}
+
+:root[data-theme="dark"] .settings-page [style*="border-top: 1px solid #e5e7eb"] {
+  border-top-color: var(--theme-border) !important;
+}
+
+:root[data-theme="dark"] .settings-page a[style*="color: #2563eb"] {
+  color: var(--theme-primary) !important;
 }
 
 .telegram-video-thumbnail {
@@ -794,4 +1096,181 @@ button {
   .rule-modal-form > div {
     padding: 0.85rem;
   }
+}
+
+/* Complete dark-mode treatment for shared dashboard components. */
+:root[data-theme="dark"] .card,
+:root[data-theme="dark"] .rule-card,
+:root[data-theme="dark"] .rule-modal-panel,
+:root[data-theme="dark"] .download-filter-shell,
+:root[data-theme="dark"] .download-record-card {
+  background: var(--theme-surface) !important;
+  border-color: var(--theme-border) !important;
+  box-shadow: 0 12px 28px var(--theme-shadow);
+}
+
+:root[data-theme="dark"] label,
+:root[data-theme="dark"] .download-filter-field,
+:root[data-theme="dark"] .download-progress-labels,
+:root[data-theme="dark"] .download-toolbar-count,
+:root[data-theme="dark"] .telegram-bubble-time,
+:root[data-theme="dark"] .telegram-bubble-footer,
+:root[data-theme="dark"] .download-record-origin,
+:root[data-theme="dark"] .download-record-meta-label {
+  color: var(--theme-muted-text);
+}
+
+:root[data-theme="dark"] button:not(.theme-option):not(.telegram-media-button) {
+  background-color: var(--theme-surface-muted);
+  color: var(--theme-text);
+  border-color: var(--theme-border);
+}
+
+:root[data-theme="dark"] .btn-primary {
+  background: var(--theme-primary) !important;
+  color: var(--theme-on-primary) !important;
+}
+
+:root[data-theme="dark"] .btn-secondary {
+  background: var(--theme-surface-muted) !important;
+  color: var(--theme-text) !important;
+  border: 1px solid var(--theme-border) !important;
+}
+
+:root[data-theme="dark"] input,
+:root[data-theme="dark"] select,
+:root[data-theme="dark"] textarea,
+:root[data-theme="dark"] option {
+  background: var(--theme-surface) !important;
+  color: var(--theme-text) !important;
+  border-color: var(--theme-border) !important;
+}
+
+:root[data-theme="dark"] input::placeholder,
+:root[data-theme="dark"] textarea::placeholder {
+  color: var(--theme-muted-text);
+  opacity: 0.82;
+}
+
+:root[data-theme="dark"] .downloads th,
+:root[data-theme="dark"] .downloads td {
+  border-bottom-color: var(--theme-border);
+}
+
+:root[data-theme="dark"] .status-pill.completed {
+  background: var(--color-success-surface);
+  color: var(--color-success-strong);
+}
+
+:root[data-theme="dark"] .status-pill.failed {
+  background: var(--color-danger-surface);
+  color: var(--color-danger-strong);
+}
+
+:root[data-theme="dark"] .status-pill.downloading {
+  background: var(--color-info-surface);
+  color: var(--color-info-strong);
+}
+
+:root[data-theme="dark"] .feedback.success {
+  color: var(--color-success-strong);
+}
+
+:root[data-theme="dark"] .feedback.error {
+  color: var(--color-danger-strong);
+}
+
+:root[data-theme="dark"] .download-summary-badge,
+:root[data-theme="dark"] .download-toolbar-count {
+  background: var(--theme-surface-muted);
+  border-color: var(--theme-border);
+  color: var(--theme-text);
+}
+
+:root[data-theme="dark"] .telegram-preview-shell {
+  background: var(--theme-surface) !important;
+  border-color: var(--theme-border) !important;
+}
+
+:root[data-theme="dark"] .telegram-preview-title,
+:root[data-theme="dark"] .download-filter-title,
+:root[data-theme="dark"] .download-record-title,
+:root[data-theme="dark"] .download-record-meta-item strong,
+:root[data-theme="dark"] .download-record-path-block,
+:root[data-theme="dark"] .telegram-bubble-text,
+:root[data-theme="dark"] .rule-modal-title {
+  color: var(--theme-text);
+}
+
+:root[data-theme="dark"] .telegram-preview-subtitle,
+:root[data-theme="dark"] .download-filter-subtitle {
+  color: var(--theme-muted-text);
+}
+
+:root[data-theme="dark"] .telegram-preview-count,
+:root[data-theme="dark"] .telegram-bubble-rule {
+  background: var(--color-cyan-surface);
+  color: var(--color-cyan-strong);
+}
+
+:root[data-theme="dark"] .telegram-bot-avatar {
+  background: var(--theme-primary);
+  box-shadow: 0 8px 20px rgba(96, 165, 250, 0.26);
+}
+
+:root[data-theme="dark"] .telegram-bubble {
+  background: var(--theme-surface);
+  box-shadow: 0 10px 24px var(--theme-shadow);
+}
+
+:root[data-theme="dark"] .telegram-bubble-name {
+  color: var(--color-info-strong);
+}
+
+:root[data-theme="dark"] .telegram-video-thumbnail,
+:root[data-theme="dark"] .telegram-media-preview {
+  background: #0b1220;
+}
+
+:root[data-theme="dark"] .telegram-media-loading {
+  background: var(--color-info-surface);
+  color: var(--color-info-strong);
+}
+
+:root[data-theme="dark"] .download-filter-shell,
+:root[data-theme="dark"] .rule-modal-panel {
+  background: var(--theme-surface) !important;
+}
+
+:root[data-theme="dark"] .download-filter-field input,
+:root[data-theme="dark"] .download-filter-field select {
+  background: var(--theme-surface) !important;
+  border-color: var(--theme-border) !important;
+  color: var(--theme-text) !important;
+}
+
+:root[data-theme="dark"] .download-record-meta-item,
+:root[data-theme="dark"] .download-record-path-block,
+:root[data-theme="dark"] .rule-modal-form > div {
+  background: var(--theme-surface-muted) !important;
+  border-color: var(--theme-border) !important;
+}
+
+:root[data-theme="dark"] .download-progress-track {
+  background: var(--color-info-surface);
+}
+
+:root[data-theme="dark"] .download-record-error {
+  background: var(--color-danger-surface);
+  border-color: var(--color-danger-border);
+  color: var(--color-danger-strong);
+}
+
+:root[data-theme="dark"] .rule-card {
+  background: var(--theme-surface) !important;
+}
+
+:root[data-theme="dark"] .telegram-album-placeholder {
+  background: #2b3d56;
+  box-shadow: inset 0 0 0 1px var(--theme-border);
 }

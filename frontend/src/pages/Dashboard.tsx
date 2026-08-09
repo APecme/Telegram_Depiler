@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import axios from "axios";
+import ThemeToggle from "../components/ThemeToggle";
+import ThemeLogo from "../components/ThemeLogo";
 
 const api = axios.create({
   // 默认使用相对路径，始终请求当前站点下的 /api，避免端口写死为 8000
@@ -831,19 +833,19 @@ export default function Dashboard() {
   const getStatusMeta = (status: string) => {
     switch (status) {
       case "completed":
-        return { label: "已完成", emoji: "✅", bg: "#e8f5e9", color: "#2e7d32" };
+        return { label: "已完成", emoji: "✅", bg: "var(--color-success-surface)", color: "var(--color-success-strong)" };
       case "downloading":
-        return { label: "下载中", emoji: "⏳", bg: "#e3f2fd", color: "#1565c0" };
+        return { label: "下载中", emoji: "⏳", bg: "var(--color-info-surface)", color: "var(--color-info-strong)" };
       case "queued":
-        return { label: "队列中", emoji: "📋", bg: "#fff3e0", color: "#e65100" };
+        return { label: "队列中", emoji: "📋", bg: "var(--color-warning-surface)", color: "var(--color-warning-strong)" };
       case "paused":
-        return { label: "已暂停", emoji: "⏸️", bg: "#fce4ec", color: "#880e4f" };
+        return { label: "已暂停", emoji: "⏸️", bg: "var(--color-paused-surface)", color: "var(--color-paused-strong)" };
       case "failed":
-        return { label: "失败", emoji: "❌", bg: "#ffebee", color: "#c62828" };
+        return { label: "失败", emoji: "❌", bg: "var(--color-danger-surface)", color: "var(--color-danger-strong)" };
       case "pending":
-        return { label: "待开始", emoji: "🕓", bg: "#f3f4f6", color: "#4b5563" };
+        return { label: "待开始", emoji: "🕓", bg: "var(--theme-surface-muted)", color: "var(--theme-text)" };
       default:
-        return { label: status || "未知", emoji: "•", bg: "#eef2ff", color: "#4338ca" };
+        return { label: status || "未知", emoji: "•", bg: "var(--color-indigo-surface)", color: "var(--color-indigo-strong)" };
     }
   };
 
@@ -987,7 +989,7 @@ export default function Dashboard() {
       <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", alignItems: "flex-start", flexWrap: "wrap", marginBottom: "1rem" }}>
         <div>
           <h2 style={{ margin: "0 0 0.35rem 0" }}>📥 下载记录</h2>
-          <p style={{ margin: 0, color: "#64748b", fontSize: "0.92rem" }}>
+          <p style={{ margin: 0, color: "var(--theme-muted-text)", fontSize: "0.92rem" }}>
             用卡片浏览每条任务，筛选、批量处理和状态观察都会更直观。
           </p>
         </div>
@@ -1011,9 +1013,9 @@ export default function Dashboard() {
             style={{
               padding: "0.5rem 0.9rem",
               borderRadius: "999px",
-              border: "1px solid #cbd5e1",
-              background: hasActiveDownloadFilters ? "#fff" : "#f8fafc",
-              color: hasActiveDownloadFilters ? "#334155" : "#94a3b8",
+              border: "1px solid var(--theme-border)",
+              background: hasActiveDownloadFilters ? "var(--theme-surface)" : "var(--theme-surface-muted)",
+              color: hasActiveDownloadFilters ? "var(--theme-text)" : "var(--theme-muted-disabled)",
               cursor: hasActiveDownloadFilters ? "pointer" : "not-allowed",
             }}
           >
@@ -1129,7 +1131,7 @@ export default function Dashboard() {
 
       <div className="download-toolbar">
         <div className="download-toolbar-selection">
-          <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.92rem", color: "#334155" }}>
+          <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.92rem", color: "var(--theme-text)" }}>
             <input
               type="checkbox"
               checked={allCurrentPageSelected}
@@ -1149,27 +1151,27 @@ export default function Dashboard() {
         <div className="download-toolbar-actions">
           <button
             onClick={handlePauseAll}
-            style={{ padding: "0.45rem 0.95rem", borderRadius: "999px", border: "1px solid #ff9800", background: "#fff3e0", color: "#e65100", cursor: "pointer" }}
+            style={{ padding: "0.45rem 0.95rem", borderRadius: "999px", border: "1px solid var(--color-warning)", background: "var(--color-warning-surface)", color: "var(--color-warning-strong)", cursor: "pointer" }}
           >
             ⏸️ 全部暂停
           </button>
           <button
             onClick={handleResumeAll}
-            style={{ padding: "0.45rem 0.95rem", borderRadius: "999px", border: "1px solid #4caf50", background: "#e8f5e9", color: "#2e7d32", cursor: "pointer" }}
+            style={{ padding: "0.45rem 0.95rem", borderRadius: "999px", border: "1px solid var(--color-success)", background: "var(--color-success-surface)", color: "var(--color-success-strong)", cursor: "pointer" }}
           >
             ▶️ 全部恢复
           </button>
           <button
             onClick={() => bulkDelete(false)}
             disabled={selectedIds.length === 0}
-            style={{ padding: "0.45rem 0.95rem", borderRadius: "999px", border: "1px solid #cbd5e1", background: selectedIds.length ? "#f8fafc" : "#f1f5f9", color: selectedIds.length ? "#334155" : "#94a3b8", cursor: selectedIds.length ? "pointer" : "not-allowed" }}
+            style={{ padding: "0.45rem 0.95rem", borderRadius: "999px", border: "1px solid var(--theme-border)", background: selectedIds.length ? "var(--theme-surface-muted)" : "var(--theme-surface-muted)", color: selectedIds.length ? "var(--theme-text)" : "var(--theme-muted-disabled)", cursor: selectedIds.length ? "pointer" : "not-allowed" }}
           >
             🗑️ 删除记录
           </button>
           <button
             onClick={() => bulkDelete(true)}
             disabled={selectedIds.length === 0}
-            style={{ padding: "0.45rem 0.95rem", borderRadius: "999px", border: "1px solid #f44336", background: selectedIds.length ? "#ffebee" : "#fef2f2", color: selectedIds.length ? "#c62828" : "#fca5a5", cursor: selectedIds.length ? "pointer" : "not-allowed" }}
+            style={{ padding: "0.45rem 0.95rem", borderRadius: "999px", border: "1px solid var(--color-danger)", background: selectedIds.length ? "var(--color-danger-surface)" : "var(--color-danger-surface)", color: selectedIds.length ? "var(--color-danger-strong)" : "var(--color-danger-disabled)", cursor: selectedIds.length ? "pointer" : "not-allowed" }}
           >
             🗑️ 删除记录并删除文件
           </button>
@@ -1178,7 +1180,7 @@ export default function Dashboard() {
 
       <div>
         {downloads.length === 0 ? (
-          <p style={{ textAlign: "center", color: "#666", padding: "2rem" }}>
+          <p style={{ textAlign: "center", color: "var(--theme-muted-text)", padding: "2rem" }}>
             暂无下载记录
           </p>
         ) : (
@@ -1222,8 +1224,8 @@ export default function Dashboard() {
                     <span
                       className="download-record-chip"
                       style={{
-                        backgroundColor: record.source === "rule" ? "#ede9fe" : "#e0f2fe",
-                        color: record.source === "rule" ? "#6d28d9" : "#0369a1",
+                        backgroundColor: record.source === "rule" ? "var(--color-purple-surface)" : "var(--color-cyan-surface)",
+                        color: record.source === "rule" ? "var(--color-purple-strong)" : "var(--color-cyan-strong)",
                       }}
                     >
                       {sourceLabel(record)}
@@ -1277,7 +1279,7 @@ export default function Dashboard() {
                         className="download-progress-fill"
                         style={{
                           width: `${Math.min(100, Math.max(0, record.progress || 0))}%`,
-                          backgroundColor: record.status === "completed" ? "#4caf50" : "#2196f3",
+                          backgroundColor: record.status === "completed" ? "var(--color-success)" : "var(--color-info)",
                         }}
                       />
                     </div>
@@ -1291,7 +1293,7 @@ export default function Dashboard() {
                     {record.status === "downloading" && (
                       <button
                         onClick={() => handlePauseDownload(record.id)}
-                        style={{ padding: "0.45rem 0.75rem", fontSize: "0.85rem", border: "1px solid #ff9800", backgroundColor: "#fff3e0", color: "#e65100", borderRadius: "8px", cursor: "pointer" }}
+                        style={{ padding: "0.45rem 0.75rem", fontSize: "0.85rem", border: "1px solid var(--color-warning)", backgroundColor: "var(--color-warning-surface)", color: "var(--color-warning-strong)", borderRadius: "8px", cursor: "pointer" }}
                       >
                         ⏸️ 暂停
                       </button>
@@ -1299,7 +1301,7 @@ export default function Dashboard() {
                     {record.status === "paused" && (
                       <button
                         onClick={() => handleResumeDownload(record.id)}
-                        style={{ padding: "0.45rem 0.75rem", fontSize: "0.85rem", border: "1px solid #4caf50", backgroundColor: "#e8f5e9", color: "#2e7d32", borderRadius: "8px", cursor: "pointer" }}
+                        style={{ padding: "0.45rem 0.75rem", fontSize: "0.85rem", border: "1px solid var(--color-success)", backgroundColor: "var(--color-success-surface)", color: "var(--color-success-strong)", borderRadius: "8px", cursor: "pointer" }}
                       >
                         ▶️ 开始
                       </button>
@@ -1307,7 +1309,7 @@ export default function Dashboard() {
                     {record.status === "failed" && (
                       <button
                         onClick={() => handleRetryDownload(record.id)}
-                        style={{ padding: "0.45rem 0.75rem", fontSize: "0.85rem", border: "1px solid #7c3aed", backgroundColor: "#f3e8ff", color: "#6d28d9", borderRadius: "8px", cursor: "pointer" }}
+                        style={{ padding: "0.45rem 0.75rem", fontSize: "0.85rem", border: "1px solid var(--color-purple)", backgroundColor: "var(--color-purple-surface)", color: "var(--color-purple-strong)", borderRadius: "8px", cursor: "pointer" }}
                       >
                         🔄 重试
                       </button>
@@ -1315,20 +1317,20 @@ export default function Dashboard() {
                     {(record.status === "downloading" || record.status === "pending" || record.status === "queued" || record.status === "paused") && (
                       <button
                         onClick={() => handlePriorityDownload(record.id)}
-                        style={{ padding: "0.45rem 0.75rem", fontSize: "0.85rem", border: "1px solid #ffc107", backgroundColor: "#fff8e1", color: "#f57f17", borderRadius: "8px", cursor: "pointer" }}
+                        style={{ padding: "0.45rem 0.75rem", fontSize: "0.85rem", border: "1px solid var(--color-warning)", backgroundColor: "var(--color-warning-surface)", color: "var(--color-warning-strong)", borderRadius: "8px", cursor: "pointer" }}
                       >
                         ⭐ 置顶
                       </button>
                     )}
                     <button
                       onClick={() => handleDeleteDownload(record.id, false)}
-                      style={{ padding: "0.45rem 0.75rem", fontSize: "0.85rem", border: "1px solid #9e9e9e", backgroundColor: "#f5f5f5", color: "#424242", borderRadius: "8px", cursor: "pointer" }}
+                      style={{ padding: "0.45rem 0.75rem", fontSize: "0.85rem", border: "1px solid var(--theme-border)", backgroundColor: "var(--theme-surface-muted)", color: "var(--theme-text)", borderRadius: "8px", cursor: "pointer" }}
                     >
                       🗑️ 删记录
                     </button>
                     <button
                       onClick={() => handleDeleteDownload(record.id, true)}
-                      style={{ padding: "0.45rem 0.75rem", fontSize: "0.85rem", border: "1px solid #f44336", backgroundColor: "#ffebee", color: "#c62828", borderRadius: "8px", cursor: "pointer" }}
+                      style={{ padding: "0.45rem 0.75rem", fontSize: "0.85rem", border: "1px solid var(--color-danger)", backgroundColor: "var(--color-danger-surface)", color: "var(--color-danger-strong)", borderRadius: "8px", cursor: "pointer" }}
                     >
                       🗑️ 记录+文件
                     </button>
@@ -1343,15 +1345,11 @@ export default function Dashboard() {
   );
 
   return (
-    <div style={{ padding: isMobile ? "1rem" : "2rem", maxWidth: "1400px", margin: "0 auto", minHeight: "100vh", display: "flex", flexDirection: "column" }}>
+    <div className="dashboard-page" style={{ padding: isMobile ? "1rem" : "2rem", maxWidth: "1400px", margin: "0 auto", minHeight: "100vh", display: "flex", flexDirection: "column" }}>
       <div style={{ marginBottom: "2rem", display: "flex", justifyContent: "space-between", alignItems: "center", gap: "1rem", flexWrap: "wrap" }}>
         <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
-          <img
-            src="/images/logo2.png"
-            alt="Telegram Depiler Logo"
-            style={{ height: isMobile ? "64px" : "100px", objectFit: "contain" }}
-          />
-          <span style={{ fontSize: "0.9rem", color: "#6b7280" }}>v{__APP_VERSION__}</span>
+          <ThemeLogo height={isMobile ? "64px" : "100px"} width={isMobile ? "191px" : "298px"} />
+          <span style={{ fontSize: "0.9rem", color: "var(--theme-muted-text)" }}>v{__APP_VERSION__}</span>
           <button
             type="button"
             onClick={fetchVersionCheck}
@@ -1359,16 +1357,16 @@ export default function Dashboard() {
               fontSize: "0.85rem",
               color:
                 versionCheck?.has_update === true
-                  ? "#b45309"
+                  ? "var(--color-warning-strong)"
                   : versionCheck?.has_update === false
-                  ? "#15803d"
-                  : "#6b7280",
+                  ? "var(--color-success-strong)"
+                  : "var(--theme-muted-text)",
               backgroundColor:
                 versionCheck?.has_update === true
-                  ? "#fef3c7"
+                  ? "var(--color-warning-surface)"
                   : versionCheck?.has_update === false
-                  ? "#dcfce7"
-                  : "#f3f4f6",
+                  ? "var(--color-success-surface)"
+                  : "var(--theme-surface-muted)",
               borderRadius: "999px",
               padding: "0.2rem 0.6rem",
               border: "none",
@@ -1385,13 +1383,16 @@ export default function Dashboard() {
               : "暂时无法检查更新"}
           </button>
         </div>
-        <Link to="/settings" style={{ textDecoration: "none" }}>
-          <button style={{ padding: "0.5rem 1rem", cursor: "pointer" }}>⚙️ Settings</button>
-        </Link>
+        <div className="dashboard-header-actions">
+          <ThemeToggle />
+          <Link to="/settings" style={{ textDecoration: "none" }}>
+            <button style={{ padding: "0.5rem 1rem", cursor: "pointer" }}>⚙️ Settings</button>
+          </Link>
+        </div>
       </div>
 
       {/* 群聊下载规则 */}
-      <div className="card" style={{ marginBottom: "2rem", padding: "1.5rem", backgroundColor: "white", borderRadius: "8px", boxShadow: "0 2px 4px rgba(0,0,0,0.1)" }}>
+      <div className="card" style={{ marginBottom: "2rem", padding: "1.5rem", backgroundColor: "var(--theme-surface)", borderRadius: "8px", boxShadow: "0 2px 4px var(--theme-shadow)" }}>
         <div className="telegram-preview-shell">
           <div className="telegram-preview-header">
             <div>
@@ -1500,7 +1501,7 @@ export default function Dashboard() {
         <div style={{ marginBottom: "1rem", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div>
             <h2 style={{ margin: "0 0 0.5rem 0" }}>📂 群聊下载规则</h2>
-            <p style={{ margin: 0, color: "#666", fontSize: "0.9rem" }}>
+            <p style={{ margin: 0, color: "var(--theme-muted-text)", fontSize: "0.9rem" }}>
               为群聊配置自动下载规则，支持监控新消息和下载历史文件
             </p>
           </div>
@@ -1508,8 +1509,8 @@ export default function Dashboard() {
             onClick={handleCreateRule}
             style={{
               padding: "0.6rem 1.2rem",
-              backgroundColor: "#2196f3",
-              color: "white",
+              backgroundColor: "var(--color-info)",
+              color: "var(--theme-on-primary)",
               border: "none",
               borderRadius: "6px",
               cursor: "pointer",
@@ -1526,8 +1527,8 @@ export default function Dashboard() {
           <div style={{
             marginBottom: "1.5rem",
             padding: "0.75rem 1rem",
-            backgroundColor: "#e3f2fd",
-            border: "1px solid #2196f3",
+            backgroundColor: "var(--color-info-surface)",
+            border: "1px solid var(--color-info)",
             borderRadius: "6px",
             display: "flex",
             alignItems: "center",
@@ -1535,16 +1536,16 @@ export default function Dashboard() {
           }}>
             <span style={{ fontSize: "1.2rem" }}>📁</span>
             <div style={{ flex: 1 }}>
-              <div style={{ fontWeight: "600", marginBottom: "0.25rem", color: "#1976d2" }}>
+              <div style={{ fontWeight: "600", marginBottom: "0.25rem", color: "var(--color-info-strong)" }}>
                 默认下载路径（不可删除/禁用）
               </div>
-              <div style={{ fontSize: "0.9rem", color: "#1565c0" }}>
+              <div style={{ fontSize: "0.9rem", color: "var(--color-info-strong)" }}>
                 {defaultDownloadPath}
               </div>
-              <div style={{ fontSize: "0.75rem", color: "#666", marginTop: "0.25rem" }}>
+              <div style={{ fontSize: "0.75rem", color: "var(--theme-muted-text)", marginTop: "0.25rem" }}>
                 默认文件名模板：{defaultFilenameTemplate}
               </div>
-              <div style={{ fontSize: "0.75rem", color: "#666", marginTop: "0.25rem" }}>
+              <div style={{ fontSize: "0.75rem", color: "var(--theme-muted-text)", marginTop: "0.25rem" }}>
                 当规则未指定保存路径时，文件将保存到此路径
               </div>
             </div>
@@ -1555,9 +1556,9 @@ export default function Dashboard() {
                   padding: "0.4rem 0.8rem",
                   fontSize: "0.8rem",
                   borderRadius: "6px",
-                  border: "1px solid #2196f3",
-                  backgroundColor: "white",
-                  color: "#2196f3",
+                  border: "1px solid var(--color-info)",
+                  backgroundColor: "var(--theme-surface)",
+                  color: "var(--color-info)",
                   cursor: "pointer",
                   whiteSpace: "nowrap",
                 }}
@@ -1575,9 +1576,9 @@ export default function Dashboard() {
                   padding: "0.4rem 0.8rem",
                   fontSize: "0.8rem",
                   borderRadius: "6px",
-                  border: "1px solid #2196f3",
-                  backgroundColor: "white",
-                  color: "#2196f3",
+                  border: "1px solid var(--color-info)",
+                  backgroundColor: "var(--theme-surface)",
+                  color: "var(--color-info)",
                   cursor: "pointer",
                   whiteSpace: "nowrap",
                 }}
@@ -1589,7 +1590,7 @@ export default function Dashboard() {
         )}
 
         {groupRules.length === 0 ? (
-          <div style={{ textAlign: "center", padding: "3rem", color: "#999" }}>
+          <div style={{ textAlign: "center", padding: "3rem", color: "var(--theme-muted-text)" }}>
             <div style={{ fontSize: "3rem", marginBottom: "1rem" }}>📭</div>
             <p>暂无下载规则</p>
             <button
@@ -1597,8 +1598,8 @@ export default function Dashboard() {
               style={{
                 marginTop: "1rem",
                 padding: "0.6rem 1.5rem",
-                backgroundColor: "#2196f3",
-                color: "white",
+                backgroundColor: "var(--color-info)",
+                color: "var(--theme-on-primary)",
                 border: "none",
                 borderRadius: "6px",
                 cursor: "pointer",
@@ -1615,10 +1616,10 @@ export default function Dashboard() {
                 key={rule.id}
                 className="rule-card"
                 style={{
-                  border: "1px solid #e0e0e0",
+                  border: "1px solid var(--theme-border)",
                   borderRadius: "8px",
                   padding: "1rem",
-                  backgroundColor: "#fafafa",
+                  backgroundColor: "var(--theme-surface-muted)",
                 }}
               >
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "0.75rem" }}>
@@ -1632,8 +1633,8 @@ export default function Dashboard() {
                         padding: "0.2rem 0.6rem",
                         fontSize: "0.75rem",
                         borderRadius: "12px",
-                        backgroundColor: rule.mode === "monitor" ? "#e3f2fd" : "#fff3e0",
-                        color: rule.mode === "monitor" ? "#1976d2" : "#f57c00",
+                        backgroundColor: rule.mode === "monitor" ? "var(--color-info-surface)" : "var(--color-warning-surface)",
+                        color: rule.mode === "monitor" ? "var(--color-info-strong)" : "var(--color-warning-strong)",
                         fontWeight: "500",
                       }}
                     >
@@ -1647,8 +1648,8 @@ export default function Dashboard() {
                           padding: "0.2rem 0.6rem",
                           fontSize: "0.75rem",
                           borderRadius: "12px",
-                          backgroundColor: "#ffebee",
-                          color: "#c62828",
+                          backgroundColor: "var(--color-danger-surface)",
+                          color: "var(--color-danger-strong)",
                         }}
                       >
                         已禁用
@@ -1661,9 +1662,9 @@ export default function Dashboard() {
                       style={{
                         padding: "0.4rem 0.8rem",
                         fontSize: "0.85rem",
-                        backgroundColor: rule.enabled ? "#fff3e0" : "#e8f5e9",
-                        color: rule.enabled ? "#e65100" : "#2e7d32",
-                        border: `1px solid ${rule.enabled ? "#ff9800" : "#4caf50"}`,
+                        backgroundColor: rule.enabled ? "var(--color-warning-surface)" : "var(--color-success-surface)",
+                        color: rule.enabled ? "var(--color-warning-strong)" : "var(--color-success-strong)",
+                        border: `1px solid ${rule.enabled ? "var(--color-warning)" : "var(--color-success)"}`,
                         borderRadius: "6px",
                         cursor: "pointer",
                       }}
@@ -1675,9 +1676,9 @@ export default function Dashboard() {
                       style={{
                         padding: "0.4rem 0.8rem",
                         fontSize: "0.85rem",
-                        backgroundColor: "white",
-                        color: "#2196f3",
-                        border: "1px solid #2196f3",
+                        backgroundColor: "var(--theme-surface)",
+                        color: "var(--color-info)",
+                        border: "1px solid var(--color-info)",
                         borderRadius: "6px",
                         cursor: "pointer",
                       }}
@@ -1689,9 +1690,9 @@ export default function Dashboard() {
                       style={{
                         padding: "0.4rem 0.8rem",
                         fontSize: "0.85rem",
-                        backgroundColor: "white",
-                        color: "#f44336",
-                        border: "1px solid #f44336",
+                        backgroundColor: "var(--theme-surface)",
+                        color: "var(--color-danger)",
+                        border: "1px solid var(--color-danger)",
                         borderRadius: "6px",
                         cursor: "pointer",
                       }}
@@ -1703,13 +1704,13 @@ export default function Dashboard() {
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "0.5rem", fontSize: "0.85rem" }}>
                   {rule.include_extensions && (
                     <div>
-                      <span style={{ color: "#666" }}>文件类型：</span>
+                      <span style={{ color: "var(--theme-muted-text)" }}>文件类型：</span>
                       <span style={{ fontWeight: "500" }}>{rule.include_extensions}</span>
                     </div>
                   )}
                   {rule.size_range && rule.size_range !== "0" && (
                     <div>
-                      <span style={{ color: "#666" }}>体积范围：</span>
+                      <span style={{ color: "var(--theme-muted-text)" }}>体积范围：</span>
                       <span style={{ fontWeight: "500" }}>
                         {(() => {
                           const range = rule.size_range;
@@ -1725,13 +1726,13 @@ export default function Dashboard() {
                   )}
                   {rule.save_dir && (
                     <div>
-                      <span style={{ color: "#666" }}>保存路径：</span>
+                      <span style={{ color: "var(--theme-muted-text)" }}>保存路径：</span>
                       <span style={{ fontWeight: "500" }}>{rule.save_dir}</span>
                     </div>
                   )}
                   {rule.match_mode && rule.match_mode !== "all" && (
                     <div>
-                      <span style={{ color: "#666" }}>关键词模式：</span>
+                      <span style={{ color: "var(--theme-muted-text)" }}>关键词模式：</span>
                       <span style={{ fontWeight: "500" }}>
                         {rule.match_mode === "include" ? "包含" : "排除"}
                       </span>
@@ -1739,7 +1740,7 @@ export default function Dashboard() {
                   )}
                   {rule.include_comments && (
                     <div>
-                      <span style={{ color: "#666" }}>评论/讨论组：</span>
+                      <span style={{ color: "var(--theme-muted-text)" }}>评论/讨论组：</span>
                       <span style={{ fontWeight: "500" }}>已包含</span>
                     </div>
                   )}
@@ -1751,7 +1752,7 @@ export default function Dashboard() {
       </div>
 
       {/* 下载记录 */}
-      <div className="card" style={{ padding: "1.5rem", backgroundColor: "white", borderRadius: "8px", boxShadow: "0 2px 4px rgba(0,0,0,0.1)" }}>
+      <div className="card" style={{ padding: "1.5rem", backgroundColor: "var(--theme-surface)", borderRadius: "8px", boxShadow: "0 2px 4px var(--theme-shadow)" }}>
         {renderDownloadRecordsSection()}
 
         {false && (
@@ -1769,14 +1770,14 @@ export default function Dashboard() {
           }}
         >
           <div>
-            <label style={{ fontSize: "0.8rem", color: "#555" }}>状态</label>
+            <label style={{ fontSize: "0.8rem", color: "var(--theme-muted-text)" }}>状态</label>
             <select
               value={downloadStatusFilter}
               onChange={(e) => {
                 setDownloadStatusFilter(e.target.value);
                 setDownloadPage(1);
               }}
-              style={{ width: "100%", padding: "0.35rem", borderRadius: "4px", border: "1px solid #ddd", fontSize: "0.85rem" }}
+              style={{ width: "100%", padding: "0.35rem", borderRadius: "4px", border: "1px solid var(--theme-border)", fontSize: "0.85rem" }}
             >
               <option value="all">全部状态</option>
               <option value="downloading">下载中</option>
@@ -1788,7 +1789,7 @@ export default function Dashboard() {
             </select>
           </div>
           <div>
-            <label style={{ fontSize: "0.8rem", color: "#555" }}>规则</label>
+            <label style={{ fontSize: "0.8rem", color: "var(--theme-muted-text)" }}>规则</label>
             <select
               value={downloadRuleFilter === "all" ? "all" : String(downloadRuleFilter)}
               onChange={(e) => {
@@ -1796,7 +1797,7 @@ export default function Dashboard() {
                 setDownloadRuleFilter(v);
                 setDownloadPage(1);
               }}
-              style={{ width: "100%", padding: "0.35rem", borderRadius: "4px", border: "1px solid #ddd", fontSize: "0.85rem" }}
+              style={{ width: "100%", padding: "0.35rem", borderRadius: "4px", border: "1px solid var(--theme-border)", fontSize: "0.85rem" }}
             >
               <option value="all">全部规则 / Bot</option>
               {groupRules.map((rule) => (
@@ -1807,7 +1808,7 @@ export default function Dashboard() {
             </select>
           </div>
           <div>
-            <label style={{ fontSize: "0.8rem", color: "#555" }}>保存路径包含</label>
+            <label style={{ fontSize: "0.8rem", color: "var(--theme-muted-text)" }}>保存路径包含</label>
             <input
               type="text"
               value={downloadPathFilter}
@@ -1816,11 +1817,11 @@ export default function Dashboard() {
                 setDownloadPage(1);
               }}
               placeholder="例如：/overwach"
-              style={{ width: "100%", padding: "0.35rem", borderRadius: "4px", border: "1px solid #ddd", fontSize: "0.85rem" }}
+              style={{ width: "100%", padding: "0.35rem", borderRadius: "4px", border: "1px solid var(--theme-border)", fontSize: "0.85rem" }}
             />
           </div>
           <div>
-            <label style={{ fontSize: "0.8rem", color: "#555" }}>大小区间 (MB)</label>
+            <label style={{ fontSize: "0.8rem", color: "var(--theme-muted-text)" }}>大小区间 (MB)</label>
             <div style={{ display: "flex", gap: "0.25rem" }}>
               <input
                 type="number"
@@ -1831,9 +1832,9 @@ export default function Dashboard() {
                   setDownloadPage(1);
                 }}
                 placeholder="最小"
-                style={{ flex: 1, padding: "0.35rem", borderRadius: "4px", border: "1px solid #ddd", fontSize: "0.85rem" }}
+                style={{ flex: 1, padding: "0.35rem", borderRadius: "4px", border: "1px solid var(--theme-border)", fontSize: "0.85rem" }}
               />
-              <span style={{ alignSelf: "center", fontSize: "0.8rem", color: "#666" }}>~</span>
+              <span style={{ alignSelf: "center", fontSize: "0.8rem", color: "var(--theme-muted-text)" }}>~</span>
               <input
                 type="number"
                 min={0}
@@ -1843,12 +1844,12 @@ export default function Dashboard() {
                   setDownloadPage(1);
                 }}
                 placeholder="最大"
-                style={{ flex: 1, padding: "0.35rem", borderRadius: "4px", border: "1px solid #ddd", fontSize: "0.85rem" }}
+                style={{ flex: 1, padding: "0.35rem", borderRadius: "4px", border: "1px solid var(--theme-border)", fontSize: "0.85rem" }}
               />
             </div>
           </div>
           <div>
-            <label style={{ fontSize: "0.8rem", color: "#555" }}>开始时间</label>
+            <label style={{ fontSize: "0.8rem", color: "var(--theme-muted-text)" }}>开始时间</label>
             <input
               type="datetime-local"
               value={downloadStartTime}
@@ -1856,11 +1857,11 @@ export default function Dashboard() {
                 setDownloadStartTime(e.target.value);
                 setDownloadPage(1);
               }}
-              style={{ width: "100%", padding: "0.35rem", borderRadius: "4px", border: "1px solid #ddd", fontSize: "0.85rem" }}
+              style={{ width: "100%", padding: "0.35rem", borderRadius: "4px", border: "1px solid var(--theme-border)", fontSize: "0.85rem" }}
             />
           </div>
           <div>
-            <label style={{ fontSize: "0.8rem", color: "#555" }}>结束时间</label>
+            <label style={{ fontSize: "0.8rem", color: "var(--theme-muted-text)" }}>结束时间</label>
             <input
               type="datetime-local"
               value={downloadEndTime}
@@ -1868,7 +1869,7 @@ export default function Dashboard() {
                 setDownloadEndTime(e.target.value);
                 setDownloadPage(1);
               }}
-              style={{ width: "100%", padding: "0.35rem", borderRadius: "4px", border: "1px solid #ddd", fontSize: "0.85rem" }}
+              style={{ width: "100%", padding: "0.35rem", borderRadius: "4px", border: "1px solid var(--theme-border)", fontSize: "0.85rem" }}
             />
           </div>
         </div>
@@ -1877,43 +1878,43 @@ export default function Dashboard() {
         <div style={{ marginBottom: "0.75rem", display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "center" }}>
           <button
             onClick={handlePauseAll}
-            style={{ padding: "0.35rem 0.9rem", borderRadius: "6px", border: "1px solid #ff9800", background: "#fff3e0", color: "#e65100", cursor: "pointer" }}
+            style={{ padding: "0.35rem 0.9rem", borderRadius: "6px", border: "1px solid var(--color-warning)", background: "var(--color-warning-surface)", color: "var(--color-warning-strong)", cursor: "pointer" }}
           >
             ⏸️ 全部暂停
           </button>
           <button
             onClick={handleResumeAll}
-            style={{ padding: "0.35rem 0.9rem", borderRadius: "6px", border: "1px solid #4caf50", background: "#e8f5e9", color: "#2e7d32", cursor: "pointer" }}
+            style={{ padding: "0.35rem 0.9rem", borderRadius: "6px", border: "1px solid var(--color-success)", background: "var(--color-success-surface)", color: "var(--color-success-strong)", cursor: "pointer" }}
           >
             ▶️ 全部恢复
           </button>
           <div style={{ flex: 1 }} />
-          <span style={{ color: "#555", fontSize: "0.9rem" }}>已选 {selectedIds.length} 项</span>
+          <span style={{ color: "var(--theme-muted-text)", fontSize: "0.9rem" }}>已选 {selectedIds.length} 项</span>
           <button
             onClick={() => bulkDelete(false)}
             disabled={selectedIds.length === 0}
-            style={{ padding: "0.35rem 0.9rem", borderRadius: "6px", border: "1px solid #ccc", background: "#f5f5f5", color: "#333", cursor: selectedIds.length ? "pointer" : "not-allowed" }}
+            style={{ padding: "0.35rem 0.9rem", borderRadius: "6px", border: "1px solid var(--theme-border)", background: "var(--theme-surface-muted)", color: "var(--theme-text)", cursor: selectedIds.length ? "pointer" : "not-allowed" }}
           >
             🗑️ 删除记录
           </button>
           <button
             onClick={() => bulkDelete(true)}
             disabled={selectedIds.length === 0}
-            style={{ padding: "0.35rem 0.9rem", borderRadius: "6px", border: "1px solid #f44336", background: "#ffebee", color: "#c62828", cursor: selectedIds.length ? "pointer" : "not-allowed" }}
+            style={{ padding: "0.35rem 0.9rem", borderRadius: "6px", border: "1px solid var(--color-danger)", background: "var(--color-danger-surface)", color: "var(--color-danger-strong)", cursor: selectedIds.length ? "pointer" : "not-allowed" }}
           >
             🗑️ 删除记录并删除文件
           </button>
         </div>
         <div>
           {downloads.length === 0 ? (
-            <p style={{ textAlign: "center", color: "#666", padding: "2rem" }}>
+            <p style={{ textAlign: "center", color: "var(--theme-muted-text)", padding: "2rem" }}>
               暂无下载记录
             </p>
           ) : (
             isMobile ? (
               <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.75rem" }}>
-                  <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.9rem", color: "#374151" }}>
+                  <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.9rem", color: "var(--theme-text)" }}>
                     <input
                       type="checkbox"
                       checked={selectedIds.length > 0 && selectedIds.length === downloads.length}
@@ -1927,15 +1928,15 @@ export default function Dashboard() {
                     />
                     全选本页
                   </label>
-                  <span style={{ fontSize: "0.85rem", color: "#6b7280" }}>共 {downloads.length} 条</span>
+                  <span style={{ fontSize: "0.85rem", color: "var(--theme-muted-text)" }}>共 {downloads.length} 条</span>
                 </div>
                 {downloads.map((record: DownloadRecord) => (
                   <div
                     key={record.id}
                     style={{
-                      border: "1px solid #e5e7eb",
+                      border: "1px solid var(--theme-border)",
                       borderRadius: "10px",
-                      background: "#fff",
+                      background: "var(--theme-surface)",
                       padding: "0.9rem",
                       display: "flex",
                       flexDirection: "column",
@@ -1957,11 +1958,11 @@ export default function Dashboard() {
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ fontWeight: 700, wordBreak: "break-word" }}>{record.file_name}</div>
                         {record.origin_file_name && record.origin_file_name !== record.file_name && (
-                          <div style={{ marginTop: "0.25rem", fontSize: "0.85rem", color: "#6b7280", wordBreak: "break-word" }}>
+                          <div style={{ marginTop: "0.25rem", fontSize: "0.85rem", color: "var(--theme-muted-text)", wordBreak: "break-word" }}>
                             源文件名：{record.origin_file_name}
                           </div>
                         )}
-                        <div style={{ marginTop: "0.35rem", fontSize: "0.85rem", color: "#374151", wordBreak: "break-word" }}>
+                        <div style={{ marginTop: "0.35rem", fontSize: "0.85rem", color: "var(--theme-text)", wordBreak: "break-word" }}>
                           保存：{record.save_dir || record.file_path || "-"}
                         </div>
                       </div>
@@ -1973,8 +1974,8 @@ export default function Dashboard() {
                           padding: "0.2rem 0.55rem",
                           borderRadius: "999px",
                           fontSize: "0.8rem",
-                          backgroundColor: record.source === "rule" ? "#ede9fe" : "#e0f2fe",
-                          color: record.source === "rule" ? "#6d28d9" : "#0369a1",
+                          backgroundColor: record.source === "rule" ? "var(--color-purple-surface)" : "var(--color-cyan-surface)",
+                          color: record.source === "rule" ? "var(--color-purple-strong)" : "var(--color-cyan-strong)",
                           fontWeight: 600,
                         }}
                       >
@@ -1987,24 +1988,24 @@ export default function Dashboard() {
                           fontSize: "0.8rem",
                           backgroundColor:
                             record.status === "completed"
-                              ? "#e8f5e9"
+                              ? "var(--color-success-surface)"
                               : record.status === "failed"
-                              ? "#ffebee"
+                              ? "var(--color-danger-surface)"
                               : record.status === "queued"
-                              ? "#fff3e0"
+                              ? "var(--color-warning-surface)"
                               : record.status === "paused"
-                              ? "#fce4ec"
-                              : "#e3f2fd",
+                              ? "var(--color-paused-surface)"
+                              : "var(--color-info-surface)",
                           color:
                             record.status === "completed"
-                              ? "#2e7d32"
+                              ? "var(--color-success-strong)"
                               : record.status === "failed"
-                              ? "#c62828"
+                              ? "var(--color-danger-strong)"
                               : record.status === "queued"
-                              ? "#e65100"
+                              ? "var(--color-warning-strong)"
                               : record.status === "paused"
-                              ? "#880e4f"
-                              : "#1565c0",
+                              ? "var(--color-paused-strong)"
+                              : "var(--color-info-strong)",
                           fontWeight: 600,
                         }}
                       >
@@ -2021,11 +2022,11 @@ export default function Dashboard() {
                           : record.status}
                       </span>
                       {record.file_size && record.file_size > 0 && (
-                        <span style={{ fontSize: "0.8rem", color: "#6b7280" }}>{formatBytes(record.file_size)}</span>
+                        <span style={{ fontSize: "0.8rem", color: "var(--theme-muted-text)" }}>{formatBytes(record.file_size)}</span>
                       )}
-                      <span style={{ fontSize: "0.8rem", color: "#6b7280" }}>{new Date(record.created_at).toLocaleString()}</span>
+                      <span style={{ fontSize: "0.8rem", color: "var(--theme-muted-text)" }}>{new Date(record.created_at).toLocaleString()}</span>
                       {record.download_speed && record.download_speed > 0 && (
-                        <span style={{ fontSize: "0.8rem", color: "#6b7280" }}>{formatBytes(record.download_speed)}/s</span>
+                        <span style={{ fontSize: "0.8rem", color: "var(--theme-muted-text)" }}>{formatBytes(record.download_speed)}/s</span>
                       )}
                     </div>
 
@@ -2035,7 +2036,7 @@ export default function Dashboard() {
                           style={{
                             width: "100%",
                             height: "18px",
-                            backgroundColor: "#e0e0e0",
+                            backgroundColor: "var(--theme-border)",
                             borderRadius: "10px",
                             overflow: "hidden",
                           }}
@@ -2044,12 +2045,12 @@ export default function Dashboard() {
                             style={{
                               width: `${Math.min(100, Math.max(0, record.progress || 0))}%`,
                               height: "100%",
-                              backgroundColor: record.status === "completed" ? "#4caf50" : "#2196f3",
+                              backgroundColor: record.status === "completed" ? "var(--color-success)" : "var(--color-info)",
                               transition: "width 0.3s ease",
                               display: "flex",
                               alignItems: "center",
                               justifyContent: "center",
-                              color: "#fff",
+                              color: "var(--theme-on-primary)",
                               fontSize: "0.75em",
                               fontWeight: "bold",
                             }}
@@ -2067,9 +2068,9 @@ export default function Dashboard() {
                           style={{
                             padding: "0.35rem 0.6rem",
                             fontSize: "0.85rem",
-                            border: "1px solid #ff9800",
-                            backgroundColor: "#fff3e0",
-                            color: "#e65100",
+                            border: "1px solid var(--color-warning)",
+                            backgroundColor: "var(--color-warning-surface)",
+                            color: "var(--color-warning-strong)",
                             borderRadius: "6px",
                             cursor: "pointer",
                           }}
@@ -2083,9 +2084,9 @@ export default function Dashboard() {
                           style={{
                             padding: "0.35rem 0.6rem",
                             fontSize: "0.85rem",
-                            border: "1px solid #4caf50",
-                            backgroundColor: "#e8f5e9",
-                            color: "#2e7d32",
+                            border: "1px solid var(--color-success)",
+                            backgroundColor: "var(--color-success-surface)",
+                            color: "var(--color-success-strong)",
                             borderRadius: "6px",
                             cursor: "pointer",
                           }}
@@ -2099,9 +2100,9 @@ export default function Dashboard() {
                           style={{
                             padding: "0.35rem 0.6rem",
                             fontSize: "0.85rem",
-                            border: "1px solid #ffc107",
-                            backgroundColor: "#fff8e1",
-                            color: "#f57f17",
+                            border: "1px solid var(--color-warning)",
+                            backgroundColor: "var(--color-warning-surface)",
+                            color: "var(--color-warning-strong)",
                             borderRadius: "6px",
                             cursor: "pointer",
                           }}
@@ -2114,9 +2115,9 @@ export default function Dashboard() {
                         style={{
                           padding: "0.35rem 0.6rem",
                           fontSize: "0.85rem",
-                          border: "1px solid #9e9e9e",
-                          backgroundColor: "#f5f5f5",
-                          color: "#424242",
+                          border: "1px solid var(--theme-border)",
+                          backgroundColor: "var(--theme-surface-muted)",
+                          color: "var(--theme-text)",
                           borderRadius: "6px",
                           cursor: "pointer",
                         }}
@@ -2128,9 +2129,9 @@ export default function Dashboard() {
                         style={{
                           padding: "0.35rem 0.6rem",
                           fontSize: "0.85rem",
-                          border: "1px solid #f44336",
-                          backgroundColor: "#ffebee",
-                          color: "#c62828",
+                          border: "1px solid var(--color-danger)",
+                          backgroundColor: "var(--color-danger-surface)",
+                          color: "var(--color-danger-strong)",
                           borderRadius: "6px",
                           cursor: "pointer",
                         }}
@@ -2145,7 +2146,7 @@ export default function Dashboard() {
               <div style={{ overflowX: "auto" }}>
                 <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "980px" }}>
                   <thead>
-                    <tr style={{ borderBottom: "2px solid #e0e0e0" }}>
+                    <tr style={{ borderBottom: "2px solid var(--theme-border)" }}>
                       <th style={{ padding: "0.75rem", textAlign: "left" }}>
                         <input
                           type="checkbox"
@@ -2172,7 +2173,7 @@ export default function Dashboard() {
                   </thead>
                   <tbody>
                     {downloads.map((record: DownloadRecord) => (
-                      <tr key={record.id} style={{ borderBottom: "1px solid #f0f0f0" }}>
+                      <tr key={record.id} style={{ borderBottom: "1px solid var(--theme-surface-muted)" }}>
                         <td style={{ padding: "0.75rem" }}>
                           <input
                             type="checkbox"
@@ -2206,10 +2207,10 @@ export default function Dashboard() {
                           {record.file_size && record.file_size > 0 ? (
                             formatBytes(record.file_size)
                           ) : (
-                            <span style={{ color: "#999" }}>未知</span>
+                            <span style={{ color: "var(--theme-muted-text)" }}>未知</span>
                           )}
                         </td>
-                        <td style={{ padding: "0.75rem", maxWidth: "260px", wordBreak: "break-all", fontSize: "0.8rem", color: "#374151" }}>
+                        <td style={{ padding: "0.75rem", maxWidth: "260px", wordBreak: "break-all", fontSize: "0.8rem", color: "var(--theme-text)" }}>
                           {record.save_dir || record.file_path || "-"}
                         </td>
                         <td style={{ padding: "0.75rem" }}>
@@ -2219,8 +2220,8 @@ export default function Dashboard() {
                                 padding: "0.2rem 0.5rem",
                                 borderRadius: "999px",
                                 fontSize: "0.8rem",
-                                backgroundColor: record.source === "rule" ? "#ede9fe" : "#e0f2fe",
-                                color: record.source === "rule" ? "#6d28d9" : "#0369a1",
+                                backgroundColor: record.source === "rule" ? "var(--color-purple-surface)" : "var(--color-cyan-surface)",
+                                color: record.source === "rule" ? "var(--color-purple-strong)" : "var(--color-cyan-strong)",
                                 fontWeight: 500,
                                 alignSelf: "flex-start",
                               }}
@@ -2234,24 +2235,24 @@ export default function Dashboard() {
                                 fontSize: "0.85rem",
                                 backgroundColor:
                                   record.status === "completed"
-                                    ? "#e8f5e9"
+                                    ? "var(--color-success-surface)"
                                     : record.status === "failed"
-                                    ? "#ffebee"
+                                    ? "var(--color-danger-surface)"
                                     : record.status === "queued"
-                                    ? "#fff3e0"
+                                    ? "var(--color-warning-surface)"
                                     : record.status === "paused"
-                                    ? "#fce4ec"
-                                    : "#e3f2fd",
+                                    ? "var(--color-paused-surface)"
+                                    : "var(--color-info-surface)",
                                 color:
                                   record.status === "completed"
-                                    ? "#2e7d32"
+                                    ? "var(--color-success-strong)"
                                     : record.status === "failed"
-                                    ? "#c62828"
+                                    ? "var(--color-danger-strong)"
                                     : record.status === "queued"
-                                    ? "#e65100"
+                                    ? "var(--color-warning-strong)"
                                     : record.status === "paused"
-                                    ? "#880e4f"
-                                    : "#1565c0",
+                                    ? "var(--color-paused-strong)"
+                                    : "var(--color-info-strong)",
                                 alignSelf: "flex-start",
                               }}
                             >
@@ -2276,7 +2277,7 @@ export default function Dashboard() {
                                 style={{
                                   width: "100%",
                                   height: "20px",
-                                  backgroundColor: "#e0e0e0",
+                                  backgroundColor: "var(--theme-border)",
                                   borderRadius: "10px",
                                   overflow: "hidden",
                                 }}
@@ -2285,12 +2286,12 @@ export default function Dashboard() {
                                   style={{
                                     width: `${Math.min(100, Math.max(0, record.progress || 0))}%`,
                                     height: "100%",
-                                    backgroundColor: record.status === "completed" ? "#4caf50" : "#2196f3",
+                                    backgroundColor: record.status === "completed" ? "var(--color-success)" : "var(--color-info)",
                                     transition: "width 0.3s ease",
                                     display: "flex",
                                     alignItems: "center",
                                     justifyContent: "center",
-                                    color: "#fff",
+                                    color: "var(--theme-on-primary)",
                                     fontSize: "0.75em",
                                     fontWeight: "bold",
                                   }}
@@ -2300,17 +2301,17 @@ export default function Dashboard() {
                               </div>
                             </div>
                           ) : (
-                            <span style={{ color: "#999" }}>-</span>
+                            <span style={{ color: "var(--theme-muted-text)" }}>-</span>
                           )}
                         </td>
                         <td style={{ padding: "0.75rem" }}>
                           {record.download_speed && record.download_speed > 0 ? (
                             <span style={{ fontSize: "0.9em" }}>{formatBytes(record.download_speed)}/s</span>
                           ) : (
-                            <span style={{ color: "#999" }}>-</span>
+                            <span style={{ color: "var(--theme-muted-text)" }}>-</span>
                           )}
                         </td>
-                        <td style={{ padding: "0.75rem", fontSize: "0.85rem", color: "#666" }}>
+                        <td style={{ padding: "0.75rem", fontSize: "0.85rem", color: "var(--theme-muted-text)" }}>
                           {new Date(record.created_at).toLocaleString()}
                         </td>
                         <td style={{ padding: "0.75rem", textAlign: "center" }}>
@@ -2321,9 +2322,9 @@ export default function Dashboard() {
                                 style={{
                                   padding: "0.25rem 0.5rem",
                                   fontSize: "0.8rem",
-                                  border: "1px solid #ff9800",
-                                  backgroundColor: "#fff3e0",
-                                  color: "#e65100",
+                                  border: "1px solid var(--color-warning)",
+                                  backgroundColor: "var(--color-warning-surface)",
+                                  color: "var(--color-warning-strong)",
                                   borderRadius: "4px",
                                   cursor: "pointer",
                                 }}
@@ -2338,9 +2339,9 @@ export default function Dashboard() {
                                 style={{
                                   padding: "0.25rem 0.5rem",
                                   fontSize: "0.8rem",
-                                  border: "1px solid #4caf50",
-                                  backgroundColor: "#e8f5e9",
-                                  color: "#2e7d32",
+                                  border: "1px solid var(--color-success)",
+                                  backgroundColor: "var(--color-success-surface)",
+                                  color: "var(--color-success-strong)",
                                   borderRadius: "4px",
                                   cursor: "pointer",
                                 }}
@@ -2355,9 +2356,9 @@ export default function Dashboard() {
                                 style={{
                                   padding: "0.25rem 0.5rem",
                                   fontSize: "0.8rem",
-                                  border: "1px solid #ffc107",
-                                  backgroundColor: "#fff8e1",
-                                  color: "#f57f17",
+                                  border: "1px solid var(--color-warning)",
+                                  backgroundColor: "var(--color-warning-surface)",
+                                  color: "var(--color-warning-strong)",
                                   borderRadius: "4px",
                                   cursor: "pointer",
                                 }}
@@ -2371,9 +2372,9 @@ export default function Dashboard() {
                               style={{
                                 padding: "0.25rem 0.5rem",
                                 fontSize: "0.8rem",
-                                border: "1px solid #9e9e9e",
-                                backgroundColor: "#f5f5f5",
-                                color: "#424242",
+                                border: "1px solid var(--theme-border)",
+                                backgroundColor: "var(--theme-surface-muted)",
+                                color: "var(--theme-text)",
                                 borderRadius: "4px",
                                 cursor: "pointer",
                               }}
@@ -2386,9 +2387,9 @@ export default function Dashboard() {
                               style={{
                                 padding: "0.25rem 0.5rem",
                                 fontSize: "0.8rem",
-                                border: "1px solid #f44336",
-                                backgroundColor: "#ffebee",
-                                color: "#c62828",
+                                border: "1px solid var(--color-danger)",
+                                backgroundColor: "var(--color-danger-surface)",
+                                color: "var(--color-danger-strong)",
                                 borderRadius: "4px",
                                 cursor: "pointer",
                               }}
@@ -2411,7 +2412,7 @@ export default function Dashboard() {
 
         {/* 分页控制 */}
         <div style={{ marginTop: "0.75rem", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "0.5rem" }}>
-          <div style={{ fontSize: "0.85rem", color: "#555" }}>
+          <div style={{ fontSize: "0.85rem", color: "var(--theme-muted-text)" }}>
             共 {downloadTotal} 条记录，每页
             <select
               value={downloadPageSize}
@@ -2435,16 +2436,16 @@ export default function Dashboard() {
               style={{
                 padding: "0.25rem 0.6rem",
                 borderRadius: "4px",
-                border: "1px solid #ddd",
-                backgroundColor: downloadPage <= 1 ? "#f5f5f5" : "white",
-                color: "#333",
+                border: "1px solid var(--theme-border)",
+                backgroundColor: downloadPage <= 1 ? "var(--theme-surface-muted)" : "var(--theme-surface)",
+                color: "var(--theme-text)",
                 cursor: downloadPage <= 1 ? "not-allowed" : "pointer",
                 fontSize: "0.85rem",
               }}
             >
               上一页
             </button>
-            <span style={{ fontSize: "0.85rem", color: "#555" }}>
+            <span style={{ fontSize: "0.85rem", color: "var(--theme-muted-text)" }}>
               第 {downloadPage} 页
             </span>
             <button
@@ -2456,9 +2457,9 @@ export default function Dashboard() {
               style={{
                 padding: "0.25rem 0.6rem",
                 borderRadius: "4px",
-                border: "1px solid #ddd",
-                backgroundColor: downloadTotal <= downloadPage * downloadPageSize ? "#f5f5f5" : "white",
-                color: "#333",
+                border: "1px solid var(--theme-border)",
+                backgroundColor: downloadTotal <= downloadPage * downloadPageSize ? "var(--theme-surface-muted)" : "var(--theme-surface)",
+                color: "var(--theme-text)",
                 cursor: downloadTotal <= downloadPage * downloadPageSize ? "not-allowed" : "pointer",
                 fontSize: "0.85rem",
               }}
@@ -2471,13 +2472,13 @@ export default function Dashboard() {
 
       {/* 日志显示 */}
       {logs.length > 0 && (
-        <div className="card" style={{ marginTop: "2rem", padding: "1.5rem", backgroundColor: "white", borderRadius: "8px", boxShadow: "0 2px 4px rgba(0,0,0,0.1)" }}>
+        <div className="card" style={{ marginTop: "2rem", padding: "1.5rem", backgroundColor: "var(--theme-surface)", borderRadius: "8px", boxShadow: "0 2px 4px var(--theme-shadow)" }}>
           <h2 style={{ margin: "0 0 1rem 0" }}>📋 实时日志</h2>
-          <div style={{ maxHeight: "400px", overflowY: "auto", backgroundColor: "#f5f5f5", padding: "1rem", borderRadius: "4px", fontFamily: "monospace", fontSize: "0.85rem" }}>
+          <div style={{ maxHeight: "400px", overflowY: "auto", backgroundColor: "var(--theme-surface-muted)", padding: "1rem", borderRadius: "4px", fontFamily: "monospace", fontSize: "0.85rem" }}>
             {logs.map((log: LogEntry, index: number) => (
               <div key={index} style={{ marginBottom: "0.5rem", display: "flex", gap: "0.5rem" }}>
-                <span style={{ color: "#666" }}>{log.timestamp}</span>
-                <span style={{ color: log.level === "ERROR" ? "#f44336" : log.level === "WARNING" ? "#ff9800" : "#4caf50", fontWeight: "bold" }}>
+                <span style={{ color: "var(--theme-muted-text)" }}>{log.timestamp}</span>
+                <span style={{ color: log.level === "ERROR" ? "var(--color-danger)" : log.level === "WARNING" ? "var(--color-warning)" : "var(--color-success)", fontWeight: "bold" }}>
                   [{log.level}]
                 </span>
                 <span>{log.message}</span>
@@ -2487,12 +2488,12 @@ export default function Dashboard() {
         </div>
       )}
 
-      <div style={{ marginTop: "2rem", paddingTop: "1rem", borderTop: "1px solid #e5e7eb", textAlign: "center", color: "#6b7280", fontSize: "0.9rem" }}>
+      <div style={{ marginTop: "2rem", paddingTop: "1rem", borderTop: "1px solid var(--theme-border)", textAlign: "center", color: "var(--theme-muted-text)", fontSize: "0.9rem" }}>
         <a
           href="https://github.com/APecme/Telegram_Depiler"
           target="_blank"
           rel="noreferrer"
-          style={{ color: "#2563eb", textDecoration: "none" }}
+          style={{ color: "var(--theme-primary)", textDecoration: "none" }}
         >
           GitHub: https://github.com/APecme/Telegram_Depiler
         </a>
@@ -2506,14 +2507,14 @@ export default function Dashboard() {
           left: 0,
           right: 0,
           bottom: 0,
-          backgroundColor: "rgba(0,0,0,0.5)",
+          backgroundColor: "var(--theme-overlay)",
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
           zIndex: 1000,
         }}>
           <div className="rule-modal-panel" style={{
-            backgroundColor: "white",
+            backgroundColor: "var(--theme-surface)",
             borderRadius: "8px",
             padding: "2rem",
             maxWidth: "600px",
@@ -2546,7 +2547,7 @@ export default function Dashboard() {
                     width: "100%",
                     padding: "0.5rem",
                     borderRadius: "4px",
-                    border: "1px solid #ddd",
+                    border: "1px solid var(--theme-border)",
                   }}
                 >
                   <option value="">请选择群聊</option>
@@ -2559,7 +2560,7 @@ export default function Dashboard() {
                       </option>
                     ))}
                 </select>
-                <small style={{ display: "block", marginTop: "0.25rem", color: "#666", fontSize: "0.8rem" }}>
+                <small style={{ display: "block", marginTop: "0.25rem", color: "var(--theme-muted-text)", fontSize: "0.8rem" }}>
                   下拉选择要应用规则的群聊或频道
                 </small>
               </div>
@@ -2577,11 +2578,11 @@ export default function Dashboard() {
                     width: "100%",
                     padding: "0.5rem",
                     borderRadius: "4px",
-                    border: "1px solid #ddd",
+                    border: "1px solid var(--theme-border)",
                     fontSize: "0.9rem"
                   }}
                 />
-                <small style={{ display: "block", marginTop: "0.25rem", color: "#666", fontSize: "0.8rem" }}>
+                <small style={{ display: "block", marginTop: "0.25rem", color: "var(--theme-muted-text)", fontSize: "0.8rem" }}>
                   用于下载记录和筛选中展示，留空会自动使用群聊名称
                 </small>
               </div>
@@ -2622,7 +2623,7 @@ export default function Dashboard() {
                   style={{
                     width: "100%",
                     padding: "0.5rem",
-                    border: "1px solid #ddd",
+                    border: "1px solid var(--theme-border)",
                     borderRadius: "4px",
                     fontSize: "0.9rem"
                   }}
@@ -2639,9 +2640,9 @@ export default function Dashboard() {
                     style={{
                       padding: "0.3rem 0.6rem",
                       fontSize: "0.8rem",
-                      border: "1px solid #ddd",
+                      border: "1px solid var(--theme-border)",
                       borderRadius: "4px",
-                      backgroundColor: "white",
+                      backgroundColor: "var(--theme-surface)",
                       cursor: "pointer"
                     }}
                   >
@@ -2658,9 +2659,9 @@ export default function Dashboard() {
                     style={{
                       padding: "0.3rem 0.6rem",
                       fontSize: "0.8rem",
-                      border: "1px solid #ddd",
+                      border: "1px solid var(--theme-border)",
                       borderRadius: "4px",
-                      backgroundColor: "white",
+                      backgroundColor: "var(--theme-surface)",
                       cursor: "pointer"
                     }}
                   >
@@ -2677,9 +2678,9 @@ export default function Dashboard() {
                     style={{
                       padding: "0.3rem 0.6rem",
                       fontSize: "0.8rem",
-                      border: "1px solid #ddd",
+                      border: "1px solid var(--theme-border)",
                       borderRadius: "4px",
-                      backgroundColor: "white",
+                      backgroundColor: "var(--theme-surface)",
                       cursor: "pointer"
                     }}
                   >
@@ -2696,9 +2697,9 @@ export default function Dashboard() {
                     style={{
                       padding: "0.3rem 0.6rem",
                       fontSize: "0.8rem",
-                      border: "1px solid #ddd",
+                      border: "1px solid var(--theme-border)",
                       borderRadius: "4px",
-                      backgroundColor: "white",
+                      backgroundColor: "var(--theme-surface)",
                       cursor: "pointer"
                     }}
                   >
@@ -2715,9 +2716,9 @@ export default function Dashboard() {
                     style={{
                       padding: "0.3rem 0.6rem",
                       fontSize: "0.8rem",
-                      border: "1px solid #ddd",
+                      border: "1px solid var(--theme-border)",
                       borderRadius: "4px",
-                      backgroundColor: "white",
+                      backgroundColor: "var(--theme-surface)",
                       cursor: "pointer"
                     }}
                   >
@@ -2734,9 +2735,9 @@ export default function Dashboard() {
                     style={{
                       padding: "0.3rem 0.6rem",
                       fontSize: "0.8rem",
-                      border: "1px solid #ddd",
+                      border: "1px solid var(--theme-border)",
                       borderRadius: "4px",
-                      backgroundColor: "white",
+                      backgroundColor: "var(--theme-surface)",
                       cursor: "pointer"
                     }}
                   >
@@ -2753,9 +2754,9 @@ export default function Dashboard() {
                     style={{
                       padding: "0.3rem 0.6rem",
                       fontSize: "0.8rem",
-                      border: "1px solid #ddd",
+                      border: "1px solid var(--theme-border)",
                       borderRadius: "4px",
-                      backgroundColor: "white",
+                      backgroundColor: "var(--theme-surface)",
                       cursor: "pointer"
                     }}
                   >
@@ -2767,17 +2768,17 @@ export default function Dashboard() {
                     style={{
                       padding: "0.3rem 0.6rem",
                       fontSize: "0.8rem",
-                      border: "1px solid #f44336",
+                      border: "1px solid var(--color-danger)",
                       borderRadius: "4px",
-                      backgroundColor: "white",
-                      color: "#f44336",
+                      backgroundColor: "var(--theme-surface)",
+                      color: "var(--color-danger)",
                       cursor: "pointer"
                     }}
                   >
                     清空
                   </button>
                 </div>
-                <p style={{ fontSize: "0.8rem", color: "#666", marginTop: "0.5rem" }}>
+                <p style={{ fontSize: "0.8rem", color: "var(--theme-muted-text)", marginTop: "0.5rem" }}>
                   输入文件扩展名，多个用逗号分隔（例如：mp4,mp3,jpg）。留空则下载所有类型文件。点击上方按钮可快速添加常用扩展名。
                 </p>
               </div>
@@ -2795,8 +2796,8 @@ export default function Dashboard() {
                       lineHeight: "18px",
                       textAlign: "center",
                       borderRadius: "50%",
-                      backgroundColor: "#2196f3",
-                      color: "white",
+                      backgroundColor: "var(--color-info)",
+                      color: "var(--theme-on-primary)",
                       fontSize: "0.75rem",
                       cursor: "help",
                     }}
@@ -2808,18 +2809,18 @@ export default function Dashboard() {
                         position: "absolute",
                         left: "25px",
                         top: "-10px",
-                        backgroundColor: "#333",
-                        color: "white",
+                        backgroundColor: "var(--theme-text)",
+                        color: "var(--theme-on-primary)",
                         padding: "0.75rem",
                         borderRadius: "6px",
                         fontSize: "0.85rem",
                         whiteSpace: "nowrap",
                         zIndex: 1000,
-                        boxShadow: "0 2px 8px rgba(0,0,0,0.2)",
+                        boxShadow: "0 2px 8px var(--theme-shadow)",
                       }}
                       className="tooltip-content"
                     >
-                      <div style={{ marginBottom: "0.5rem", fontWeight: "600", borderBottom: "1px solid #555", paddingBottom: "0.25rem" }}>
+                      <div style={{ marginBottom: "0.5rem", fontWeight: "600", borderBottom: "1px solid var(--theme-border)", paddingBottom: "0.25rem" }}>
                         格式说明：
                       </div>
                       <div style={{ lineHeight: "1.6" }}>
@@ -2836,7 +2837,7 @@ export default function Dashboard() {
                   value={formSizeRange}
                   onChange={(e) => setFormSizeRange(e.target.value)}
                   placeholder="例如: 0 或 10 或 10-100"
-                  style={{ width: "100%", padding: "0.5rem", borderRadius: "4px", border: "1px solid #ddd" }}
+                  style={{ width: "100%", padding: "0.5rem", borderRadius: "4px", border: "1px solid var(--theme-border)" }}
                 />
               </div>
 
@@ -2845,12 +2846,12 @@ export default function Dashboard() {
                   保存路径（可选）
                 </label>
                 <div style={{ 
-                  border: "1px solid #ddd", 
+                  border: "1px solid var(--theme-border)",
                   borderRadius: "4px", 
                   padding: "0.5rem",
                   maxHeight: "200px",
                   overflowY: "auto",
-                  backgroundColor: "#fafafa"
+                  backgroundColor: "var(--theme-surface-muted)"
                 }}>
                   <div style={{ marginBottom: "0.5rem", display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
                     <button 
@@ -2862,9 +2863,9 @@ export default function Dashboard() {
                       style={{ 
                         padding: "0.4rem 0.8rem",
                         fontSize: "0.85rem",
-                        border: "1px solid #2196f3",
-                        backgroundColor: "white",
-                        color: "#2196f3",
+                        border: "1px solid var(--color-info)",
+                        backgroundColor: "var(--theme-surface)",
+                        color: "var(--color-info)",
                         borderRadius: "4px",
                         cursor: "pointer"
                       }}
@@ -2878,12 +2879,12 @@ export default function Dashboard() {
                     )}
                   </div>
                   {dirLoading ? (
-                    <div style={{ padding: "1rem", textAlign: "center", color: "#666" }}>加载中...</div>
+                    <div style={{ padding: "1rem", textAlign: "center", color: "var(--theme-muted-text)" }}>加载中...</div>
                   ) : (
                     <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
                       {/* 面包屑导航 */}
                       {currentBrowsePath && (
-                        <div style={{ marginBottom: "0.5rem", padding: "0.5rem", backgroundColor: "#f5f5f5", borderRadius: "4px", display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                        <div style={{ marginBottom: "0.5rem", padding: "0.5rem", backgroundColor: "var(--theme-surface-muted)", borderRadius: "4px", display: "flex", alignItems: "center", gap: "0.5rem" }}>
                           <button
                             type="button"
                             onClick={() => {
@@ -2894,15 +2895,15 @@ export default function Dashboard() {
                             style={{
                               padding: "0.25rem 0.5rem",
                               fontSize: "0.8rem",
-                              border: "1px solid #ddd",
+                              border: "1px solid var(--theme-border)",
                               borderRadius: "4px",
-                              backgroundColor: "white",
+                              backgroundColor: "var(--theme-surface)",
                               cursor: "pointer"
                             }}
                           >
                             ← 返回
                           </button>
-                          <span style={{ fontSize: "0.85rem", color: "#666" }}>
+                          <span style={{ fontSize: "0.85rem", color: "var(--theme-muted-text)" }}>
                             当前路径: /{currentBrowsePath || "根目录"}
                           </span>
                         </div>
@@ -2927,10 +2928,10 @@ export default function Dashboard() {
                                   flex: 1,
                                   padding: "0.5rem 0.75rem",
                                   textAlign: "left",
-                                  border: "1px solid #e0e0e0",
+                                  border: "1px solid var(--theme-border)",
                                   borderRadius: "4px",
-                                  backgroundColor: "white",
-                                  color: "#333",
+                                  backgroundColor: "var(--theme-surface)",
+                                  color: "var(--theme-text)",
                                   cursor: "pointer",
                                   fontSize: "0.85rem",
                                   display: "flex",
@@ -2940,17 +2941,17 @@ export default function Dashboard() {
                               >
                                 <span>📁</span>
                                 <span style={{ flex: 1 }}>{displayName}</span>
-                                <span style={{ color: "#999", fontSize: "0.75rem" }}>→</span>
+                                <span style={{ color: "var(--theme-muted-text)", fontSize: "0.75rem" }}>→</span>
                               </button>
                               <button
                                 type="button"
                                 onClick={() => setFormSaveDir(path)}
                                 style={{
                                   padding: "0.5rem 0.75rem",
-                                  border: `1px solid ${isSelected ? "#2196f3" : "#e0e0e0"}`,
+                                  border: `1px solid ${isSelected ? "var(--color-info)" : "var(--theme-border)"}`,
                                   borderRadius: "4px",
-                                  backgroundColor: isSelected ? "#2196f3" : "white",
-                                  color: isSelected ? "white" : "#2196f3",
+                                  backgroundColor: isSelected ? "var(--color-info)" : "var(--theme-surface)",
+                                  color: isSelected ? "var(--theme-on-primary)" : "var(--color-info)",
                                   cursor: "pointer",
                                   fontSize: "0.85rem",
                                   whiteSpace: "nowrap"
@@ -2962,19 +2963,19 @@ export default function Dashboard() {
                           );
                         })}
                       {dirOptions.filter((p): p is string => typeof p === "string" && p !== "").length === 0 && (
-                        <div style={{ padding: "1rem", textAlign: "center", color: "#999", fontSize: "0.85rem" }}>
+                        <div style={{ padding: "1rem", textAlign: "center", color: "var(--theme-muted-text)", fontSize: "0.85rem" }}>
                           {currentBrowsePath ? "此目录下没有子目录" : '暂无目录，点击"新建文件夹"创建'}
                         </div>
                       )}
                     </div>
                   )}
                 </div>
-                <small style={{ display: "block", marginTop: "0.25rem", color: "#666", fontSize: "0.8rem" }}>
+                <small style={{ display: "block", marginTop: "0.25rem", color: "var(--theme-muted-text)", fontSize: "0.8rem" }}>
                   当前选择: {formSaveDir ? `/${formSaveDir}` : `默认路径: /${defaultDownloadPath}`}
                 </small>
                 {!formSaveDir && defaultDownloadPath && (
-                  <div style={{ marginTop: "0.5rem", padding: "0.5rem", backgroundColor: "#fff3cd", border: "1px solid #ffc107", borderRadius: "4px" }}>
-                    <small style={{ color: "#856404", fontSize: "0.8rem" }}>
+                  <div style={{ marginTop: "0.5rem", padding: "0.5rem", backgroundColor: "var(--color-warning-surface)", border: "1px solid var(--color-warning)", borderRadius: "4px" }}>
+                    <small style={{ color: "var(--color-warning-strong)", fontSize: "0.8rem" }}>
                       ⚠️ 未指定保存路径，将使用默认下载路径: <strong>/{defaultDownloadPath}</strong>
                     </small>
                   </div>
@@ -2990,9 +2991,9 @@ export default function Dashboard() {
                   value={formFilenameTemplate}
                   onChange={(e) => setFormFilenameTemplate(e.target.value)}
                   placeholder="{task_id}_{message_id}_{chat_title}"
-                  style={{ width: "100%", padding: "0.5rem", borderRadius: "4px", border: "1px solid #ddd" }}
+                  style={{ width: "100%", padding: "0.5rem", borderRadius: "4px", border: "1px solid var(--theme-border)" }}
                 />
-                <div style={{ marginTop: "0.5rem", border: "1px solid #eee", borderRadius: "6px", padding: "0.5rem" }}>
+                <div style={{ marginTop: "0.5rem", border: "1px solid var(--theme-border)", borderRadius: "6px", padding: "0.5rem" }}>
                   <div style={{ fontWeight: 600, marginBottom: "0.5rem" }}>可用变量（点击复制）</div>
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.5rem" }}>
                     {[
@@ -3017,25 +3018,25 @@ export default function Dashboard() {
                           width: "100%",
                           padding: "0.45rem 0.6rem",
                           borderRadius: "4px",
-                          border: "1px solid #ddd",
-                          background: "#fafafa",
+                          border: "1px solid var(--theme-border)",
+                          background: "var(--theme-surface-muted)",
                           cursor: "pointer",
                         }}
                         title="点击复制变量"
                       >
                         <span style={{ fontFamily: "monospace", fontSize: "0.8rem" }}>{item.key}</span>
-                        <span style={{ color: "#666", fontSize: "0.75rem" }}>{item.desc}</span>
+                        <span style={{ color: "var(--theme-muted-text)", fontSize: "0.75rem" }}>{item.desc}</span>
                       </button>
                     ))}
                   </div>
-                  <small style={{ display: "block", marginTop: "0.5rem", color: "#666", fontSize: "0.8rem" }}>
-                    💡 支持文件夹：<code style={{ background: "#f0f0f0", padding: "0.1rem 0.3rem", borderRadius: "3px" }}>{`{chat_title}/{year}-{month}/{file_name}`}</code>
+                  <small style={{ display: "block", marginTop: "0.5rem", color: "var(--theme-muted-text)", fontSize: "0.8rem" }}>
+                    💡 支持文件夹：<code style={{ background: "var(--theme-surface-muted)", padding: "0.1rem 0.3rem", borderRadius: "3px" }}>{`{chat_title}/{year}-{month}/{file_name}`}</code>
                   </small>
-                  <small style={{ display: "block", marginTop: "0.25rem", color: "#666", fontSize: "0.8rem" }}>
-                    限制变量长度：<code style={{ background: "#f0f0f0", padding: "0.1rem 0.3rem", borderRadius: "3px" }}>{`{message_text:30}`}</code>
+                  <small style={{ display: "block", marginTop: "0.25rem", color: "var(--theme-muted-text)", fontSize: "0.8rem" }}>
+                    限制变量长度：<code style={{ background: "var(--theme-surface-muted)", padding: "0.1rem 0.3rem", borderRadius: "3px" }}>{`{message_text:30}`}</code>
                   </small>
-                  <small style={{ display: "block", marginTop: "0.25rem", color: "#666", fontSize: "0.8rem" }}>
-                    示例：<code style={{ background: "#f0f0f0", padding: "0.1rem 0.3rem", borderRadius: "3px" }}>{`{task_id}_{message_id}_{file_name}`}</code>
+                  <small style={{ display: "block", marginTop: "0.25rem", color: "var(--theme-muted-text)", fontSize: "0.8rem" }}>
+                    示例：<code style={{ background: "var(--theme-surface-muted)", padding: "0.1rem 0.3rem", borderRadius: "3px" }}>{`{task_id}_{message_id}_{file_name}`}</code>
                   </small>
                 </div>
               </div>
@@ -3076,7 +3077,7 @@ export default function Dashboard() {
                     value={formIncludeKeywords}
                     onChange={(e) => setFormIncludeKeywords(e.target.value)}
                     placeholder="包含关键词，逗号分隔"
-                    style={{ width: "100%", padding: "0.5rem", borderRadius: "4px", border: "1px solid #ddd" }}
+                    style={{ width: "100%", padding: "0.5rem", borderRadius: "4px", border: "1px solid var(--theme-border)" }}
                   />
                 )}
                 {formMatchMode === "exclude" && (
@@ -3085,7 +3086,7 @@ export default function Dashboard() {
                     value={formExcludeKeywords}
                     onChange={(e) => setFormExcludeKeywords(e.target.value)}
                     placeholder="排除关键词，逗号分隔"
-                    style={{ width: "100%", padding: "0.5rem", borderRadius: "4px", border: "1px solid #ddd" }}
+                    style={{ width: "100%", padding: "0.5rem", borderRadius: "4px", border: "1px solid var(--theme-border)" }}
                   />
                 )}
               </div>
@@ -3099,7 +3100,7 @@ export default function Dashboard() {
                   />
                   为未完成文件添加 .download 后缀
                 </label>
-                <small style={{ display: "block", marginTop: "0.25rem", color: "#666", fontSize: "0.8rem" }}>
+                <small style={{ display: "block", marginTop: "0.25rem", color: "var(--theme-muted-text)", fontSize: "0.8rem" }}>
                   下载过程中会在文件名末尾添加 .download 后缀，下载完成后自动移除
                 </small>
               </div>
@@ -3113,7 +3114,7 @@ export default function Dashboard() {
                   />
                   文件完整下载后才移动到目标目录
                 </label>
-                <small style={{ display: "block", marginTop: "0.25rem", color: "#666", fontSize: "0.8rem" }}>
+                <small style={{ display: "block", marginTop: "0.25rem", color: "var(--theme-muted-text)", fontSize: "0.8rem" }}>
                   开启后会先下载到目标目录下的隐藏临时目录，完成后再移动到最终路径，避免目标目录出现未完成文件
                 </small>
               </div>
@@ -3127,7 +3128,7 @@ export default function Dashboard() {
                   />
                   启动时自动下载遗漏消息
                 </label>
-                <small style={{ display: "block", marginTop: "0.25rem", color: "#666", fontSize: "0.8rem" }}>
+                <small style={{ display: "block", marginTop: "0.25rem", color: "var(--theme-muted-text)", fontSize: "0.8rem" }}>
                   开启后程序启动会扫描本群自上次记录以来的新消息，并按本规则匹配下载
                 </small>
               </div>
@@ -3141,7 +3142,7 @@ export default function Dashboard() {
                   />
                   包含评论 / 讨论组 / 留言板回复内容
                 </label>
-                <small style={{ display: "block", marginTop: "0.25rem", color: "#666", fontSize: "0.8rem" }}>
+                <small style={{ display: "block", marginTop: "0.25rem", color: "var(--theme-muted-text)", fontSize: "0.8rem" }}>
                   默认只下载频道或群组主消息中的媒体；开启后会额外匹配下载其评论、回复和讨论组中的媒体文件
                 </small>
               </div>
@@ -3152,8 +3153,8 @@ export default function Dashboard() {
                 onClick={() => setShowRuleModal(false)}
                 style={{
                   padding: "0.6rem 1.5rem",
-                  backgroundColor: "#f5f5f5",
-                  color: "#333",
+                  backgroundColor: "var(--theme-surface-muted)",
+                  color: "var(--theme-text)",
                   border: "none",
                   borderRadius: "6px",
                   cursor: "pointer",
@@ -3165,8 +3166,8 @@ export default function Dashboard() {
                 onClick={handleSaveRule}
                 style={{
                   padding: "0.6rem 1.5rem",
-                  backgroundColor: "#2196f3",
-                  color: "white",
+                  backgroundColor: "var(--color-info)",
+                  color: "var(--theme-on-primary)",
                   border: "none",
                   borderRadius: "6px",
                   cursor: "pointer",
@@ -3188,14 +3189,14 @@ export default function Dashboard() {
           left: 0,
           right: 0,
           bottom: 0,
-          backgroundColor: "rgba(0,0,0,0.5)",
+          backgroundColor: "var(--theme-overlay)",
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
           zIndex: 1000,
         }}>
           <div style={{
-            backgroundColor: "white",
+            backgroundColor: "var(--theme-surface)",
             borderRadius: "8px",
             padding: "1.5rem",
             maxWidth: "600px",
@@ -3204,16 +3205,16 @@ export default function Dashboard() {
             overflowY: "auto",
           }}>
             <h2 style={{ marginTop: 0, marginBottom: "1rem" }}>选择默认下载路径</h2>
-            <p style={{ marginTop: 0, marginBottom: "0.75rem", fontSize: "0.9rem", color: "#555" }}>
+            <p style={{ marginTop: 0, marginBottom: "0.75rem", fontSize: "0.9rem", color: "var(--theme-muted-text)" }}>
               该路径将作为所有未指定保存路径任务的默认保存位置，建议选择挂载到宿主机的目录（例如 <code>/overwach</code>）。
             </p>
             <div style={{ 
-              border: "1px solid #ddd", 
+              border: "1px solid var(--theme-border)",
               borderRadius: "4px", 
               padding: "0.5rem",
               maxHeight: "260px",
               overflowY: "auto",
-              backgroundColor: "#fafafa"
+              backgroundColor: "var(--theme-surface-muted)"
             }}>
               <div style={{ marginBottom: "0.5rem", display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
                 <button 
@@ -3224,9 +3225,9 @@ export default function Dashboard() {
                   style={{ 
                     padding: "0.4rem 0.8rem",
                     fontSize: "0.85rem",
-                    border: "1px solid #2196f3",
-                    backgroundColor: "white",
-                    color: "#2196f3",
+                    border: "1px solid var(--color-info)",
+                    backgroundColor: "var(--theme-surface)",
+                    color: "var(--color-info)",
                     borderRadius: "4px",
                     cursor: "pointer"
                   }}
@@ -3236,12 +3237,12 @@ export default function Dashboard() {
                 <button onClick={() => fetchDirectories(currentBrowsePath)} style={{ padding: "0.4rem 0.8rem", fontSize: "0.85rem" }}>🔄 刷新</button>
               </div>
               {dirLoading ? (
-                <div style={{ padding: "1rem", textAlign: "center", color: "#666" }}>加载中...</div>
+                <div style={{ padding: "1rem", textAlign: "center", color: "var(--theme-muted-text)" }}>加载中...</div>
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
                   {/* 面包屑导航 */}
                   {currentBrowsePath && (
-                    <div style={{ marginBottom: "0.5rem", padding: "0.5rem", backgroundColor: "#f5f5f5", borderRadius: "4px", display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                    <div style={{ marginBottom: "0.5rem", padding: "0.5rem", backgroundColor: "var(--theme-surface-muted)", borderRadius: "4px", display: "flex", alignItems: "center", gap: "0.5rem" }}>
                       <button
                         type="button"
                         onClick={() => {
@@ -3252,15 +3253,15 @@ export default function Dashboard() {
                         style={{
                           padding: "0.25rem 0.5rem",
                           fontSize: "0.8rem",
-                          border: "1px solid #ddd",
+                          border: "1px solid var(--theme-border)",
                           borderRadius: "4px",
-                          backgroundColor: "white",
+                          backgroundColor: "var(--theme-surface)",
                           cursor: "pointer"
                         }}
                       >
                         ← 返回
                       </button>
-                      <span style={{ fontSize: "0.85rem", color: "#666" }}>
+                      <span style={{ fontSize: "0.85rem", color: "var(--theme-muted-text)" }}>
                         当前路径: /{currentBrowsePath || "根目录"}
                       </span>
                     </div>
@@ -3285,10 +3286,10 @@ export default function Dashboard() {
                               flex: 1,
                               padding: "0.5rem 0.75rem",
                               textAlign: "left",
-                              border: "1px solid #e0e0e0",
+                              border: "1px solid var(--theme-border)",
                               borderRadius: "4px",
-                              backgroundColor: "white",
-                              color: "#333",
+                              backgroundColor: "var(--theme-surface)",
+                              color: "var(--theme-text)",
                               cursor: "pointer",
                               fontSize: "0.85rem",
                               display: "flex",
@@ -3298,17 +3299,17 @@ export default function Dashboard() {
                           >
                             <span>📁</span>
                             <span style={{ flex: 1 }}>{displayName}</span>
-                            <span style={{ color: "#999", fontSize: "0.75rem" }}>→</span>
+                            <span style={{ color: "var(--theme-muted-text)", fontSize: "0.75rem" }}>→</span>
                           </button>
                           <button
                             type="button"
                             onClick={() => setSelectedDefaultPath(path)}
                             style={{
                               padding: "0.5rem 0.75rem",
-                              border: `1px solid ${isSelected ? "#2196f3" : "#e0e0e0"}`,
+                              border: `1px solid ${isSelected ? "var(--color-info)" : "var(--theme-border)"}`,
                               borderRadius: "4px",
-                              backgroundColor: isSelected ? "#2196f3" : "white",
-                              color: isSelected ? "white" : "#2196f3",
+                              backgroundColor: isSelected ? "var(--color-info)" : "var(--theme-surface)",
+                              color: isSelected ? "var(--theme-on-primary)" : "var(--color-info)",
                               cursor: "pointer",
                               fontSize: "0.85rem",
                               whiteSpace: "nowrap"
@@ -3320,14 +3321,14 @@ export default function Dashboard() {
                       );
                     })}
                   {dirOptions.filter((p): p is string => typeof p === "string" && p !== "").length === 0 && (
-                    <div style={{ padding: "1rem", textAlign: "center", color: "#999", fontSize: "0.85rem" }}>
+                    <div style={{ padding: "1rem", textAlign: "center", color: "var(--theme-muted-text)", fontSize: "0.85rem" }}>
                       {currentBrowsePath ? "此目录下没有子目录" : '暂无目录，请在宿主机中创建或挂载目录后再刷新'}
                     </div>
                   )}
                 </div>
               )}
             </div>
-            <small style={{ display: "block", marginTop: "0.5rem", color: "#666", fontSize: "0.8rem" }}>
+            <small style={{ display: "block", marginTop: "0.5rem", color: "var(--theme-muted-text)", fontSize: "0.8rem" }}>
               当前选择：{selectedDefaultPath ? `/${selectedDefaultPath}` : defaultDownloadPath ? `保持现有：${defaultDownloadPath}` : "未选择"}
             </small>
             <div style={{ marginTop: "1.5rem", display: "flex", justifyContent: "flex-end", gap: "0.75rem" }}>
@@ -3335,7 +3336,7 @@ export default function Dashboard() {
                 onClick={() => setShowDefaultPathModal(false)}
                 style={{
                   padding: "0.5rem 1.2rem",
-                  backgroundColor: "#f5f5f5",
+                  backgroundColor: "var(--theme-surface-muted)",
                   borderRadius: "6px",
                   border: "none",
                   cursor: "pointer",
@@ -3365,8 +3366,8 @@ export default function Dashboard() {
                 }}
                 style={{
                   padding: "0.5rem 1.5rem",
-                  backgroundColor: "#2196f3",
-                  color: "white",
+                  backgroundColor: "var(--color-info)",
+                  color: "var(--theme-on-primary)",
                   borderRadius: "6px",
                   border: "none",
                   cursor: "pointer",
@@ -3388,21 +3389,21 @@ export default function Dashboard() {
           left: 0,
           right: 0,
           bottom: 0,
-          backgroundColor: "rgba(0,0,0,0.5)",
+          backgroundColor: "var(--theme-overlay)",
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
           zIndex: 1000,
         }}>
           <div style={{
-            backgroundColor: "white",
+            backgroundColor: "var(--theme-surface)",
             borderRadius: "8px",
             padding: "1.5rem",
             maxWidth: "500px",
             width: "90%",
           }}>
             <h2 style={{ marginTop: 0, marginBottom: "1rem" }}>编辑默认文件名模板</h2>
-            <p style={{ marginTop: 0, marginBottom: "1rem", fontSize: "0.9rem", color: "#555" }}>
+            <p style={{ marginTop: 0, marginBottom: "1rem", fontSize: "0.9rem", color: "var(--theme-muted-text)" }}>
               设置默认的文件名模板，当规则未指定文件名模板时将使用此模板。
             </p>
 
@@ -3418,16 +3419,16 @@ export default function Dashboard() {
                 style={{
                   width: "100%",
                   padding: "0.5rem",
-                  border: "1px solid #ddd",
+                  border: "1px solid var(--theme-border)",
                   borderRadius: "4px",
                   fontSize: "0.9rem",
                 }}
               />
             </div>
 
-            <div style={{ marginBottom: "1rem", padding: "0.75rem", backgroundColor: "#f8f9fa", borderRadius: "4px" }}>
-              <h4 style={{ margin: "0 0 0.5rem 0", fontSize: "0.9rem", color: "#333" }}>可用变量</h4>
-              <div style={{ fontSize: "0.85rem", color: "#666", lineHeight: "1.4" }}>
+            <div style={{ marginBottom: "1rem", padding: "0.75rem", backgroundColor: "var(--theme-surface-muted)", borderRadius: "4px" }}>
+              <h4 style={{ margin: "0 0 0.5rem 0", fontSize: "0.9rem", color: "var(--theme-text)" }}>可用变量</h4>
+              <div style={{ fontSize: "0.85rem", color: "var(--theme-muted-text)", lineHeight: "1.4" }}>
                 <div><code>{`{task_id}`}</code> - 下载任务ID</div>
                 <div><code>{`{message_id}`}</code> - 消息ID</div>
                 <div><code>{`{chat_title}`}</code> - 群聊标题</div>
@@ -3441,8 +3442,8 @@ export default function Dashboard() {
               </div>
             </div>
 
-            <div style={{ marginBottom: "1rem", padding: "0.75rem", backgroundColor: "#e3f2fd", borderRadius: "4px" }}>
-              <div style={{ fontSize: "0.85rem", color: "#1565c0" }}>
+            <div style={{ marginBottom: "1rem", padding: "0.75rem", backgroundColor: "var(--color-info-surface)", borderRadius: "4px" }}>
+              <div style={{ fontSize: "0.85rem", color: "var(--color-info-strong)" }}>
                 <strong>示例：</strong> {renderFilenameTemplatePreview(defaultFilenameTemplate)}
               </div>
             </div>
@@ -3452,7 +3453,7 @@ export default function Dashboard() {
                 onClick={() => setShowFilenameTemplateModal(false)}
                 style={{
                   padding: "0.5rem 1.2rem",
-                  backgroundColor: "#f5f5f5",
+                  backgroundColor: "var(--theme-surface-muted)",
                   borderRadius: "6px",
                   border: "none",
                   cursor: "pointer",
@@ -3480,8 +3481,8 @@ export default function Dashboard() {
                 }}
                 style={{
                   padding: "0.5rem 1.5rem",
-                  backgroundColor: "#2196f3",
-                  color: "white",
+                  backgroundColor: "var(--color-info)",
+                  color: "var(--theme-on-primary)",
                   borderRadius: "6px",
                   border: "none",
                   cursor: "pointer",
