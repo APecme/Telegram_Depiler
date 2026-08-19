@@ -4,7 +4,7 @@
 
 # Telegram Depiler
 
-[![Version](https://img.shields.io/badge/version-1.0.55-blue)](https://github.com/APecme/Telegram_Depiler/releases/tag/v1.0.55)
+[![Version](https://img.shields.io/badge/version-1.0.56-blue)](https://github.com/APecme/Telegram_Depiler/releases/tag/v1.0.56)
 [![Docker Image](https://img.shields.io/docker/v/apecme/telegram-depiler?label=Docker&logo=docker)](https://hub.docker.com/r/apecme/telegram-depiler)
 [![Docker Pulls](https://img.shields.io/docker/pulls/apecme/telegram-depiler)](https://hub.docker.com/r/apecme/telegram-depiler)
 [![GitHub Stars](https://img.shields.io/github/stars/APecme/Telegram_Depiler)](https://github.com/APecme/Telegram_Depiler)
@@ -50,8 +50,8 @@ docker run -d \
 ### 方式一：使用 Docker Hub 镜像（推荐）
 
 ```bash
-# 1. 下载 Docker Hub 镜像专用配置
-curl -o docker-compose.yml https://raw.githubusercontent.com/APecme/Telegram_Depiler/main/docker-compose.hub.yml
+# 1. 下载 Docker Compose 配置
+curl -O https://raw.githubusercontent.com/APecme/Telegram_Depiler/main/docker-compose.yml
 
 # 2. 拉取镜像并启动服务
 docker compose pull
