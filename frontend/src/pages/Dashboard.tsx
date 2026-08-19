@@ -84,6 +84,8 @@ type GroupRule = {
   exclude_keywords?: string;
   start_time?: string;
   end_time?: string;
+  min_message_id?: number;
+  max_message_id?: number;
   enabled: boolean;
   add_download_suffix?: boolean;
   move_after_complete?: boolean;
@@ -182,6 +184,10 @@ export default function Dashboard() {
   const [formChatId, setFormChatId] = useState<number | "">("");
   const [formRuleName, setFormRuleName] = useState("");
   const [formMode, setFormMode] = useState<"monitor" | "history">("monitor");
+  const [formMinMessageId, setFormMinMessageId] = useState("");
+  const [formMaxMessageId, setFormMaxMessageId] = useState("");
+  const [messageRange, setMessageRange] = useState<{ oldest_message_id: number | null; latest_message_id: number | null } | null>(null);
+  const [messageRangeLoading, setMessageRangeLoading] = useState(false);
   const [formExtensions, setFormExtensions] = useState("mp4,mp3,jpg");
   const [formSizeRange, setFormSizeRange] = useState("0");
   const [formSaveDir, setFormSaveDir] = useState("");
@@ -249,9 +255,7 @@ export default function Dashboard() {
       mq.addEventListener("change", update);
       return () => mq.removeEventListener("change", update);
     }
-    // @ts-expect-error older Safari
     mq.addListener(update);
-    // @ts-expect-error older Safari
     return () => mq.removeListener(update);
   }, []);
 
@@ -290,6 +294,13 @@ export default function Dashboard() {
   const showNotification = (message: string, type: "success" | "error" | "info" = "info") => {
     setNotification({ message, type });
     setTimeout(() => setNotification(null), 3000);
+  };
+
+  const formatError = (error: unknown) => {
+    if (axios.isAxiosError(error)) {
+      return error.response?.data?.detail || error.message;
+    }
+    return error instanceof Error ? error.message : String(error);
   };
 
   const fetchDownloads = async () => {
@@ -424,6 +435,25 @@ export default function Dashboard() {
       setDialogs(data.items || []);
     } catch (error) {
       console.error("Failed to fetch dialogs:", error);
+    }
+  };
+
+  const fetchMessageRange = async () => {
+    if (!formChatId) {
+      showNotification("请先选择目标群聊", "info");
+      return;
+    }
+    setMessageRangeLoading(true);
+    try {
+      const { data } = await api.get(`/dialogs/${formChatId}/message-range`);
+      setMessageRange(data);
+      if (data.oldest_message_id != null) setFormMinMessageId(String(data.oldest_message_id));
+      if (data.latest_message_id != null) setFormMaxMessageId(String(data.latest_message_id));
+      showNotification("已获取群聊消息 ID 范围", "success");
+    } catch (error) {
+      showNotification(`获取消息 ID 失败：${formatError(error)}`, "error");
+    } finally {
+      setMessageRangeLoading(false);
     }
   };
 
@@ -631,6 +661,9 @@ export default function Dashboard() {
     setFormChatId("");
     setFormRuleName("");
     setFormMode("monitor");
+    setFormMinMessageId("");
+    setFormMaxMessageId("");
+    setMessageRange(null);
     setFormExtensions("mp4,mp3,jpg");
     setFormSizeRange("0");
     setFormSaveDir("");
@@ -650,6 +683,9 @@ export default function Dashboard() {
     setFormChatId(rule.chat_id);
     setFormRuleName(rule.rule_name || rule.chat_title || "");
     setFormMode(rule.mode as "monitor" | "history");
+    setFormMinMessageId(rule.min_message_id ? String(rule.min_message_id) : "");
+    setFormMaxMessageId(rule.max_message_id ? String(rule.max_message_id) : "");
+    setMessageRange(null);
     setFormExtensions(rule.include_extensions || "");
     setFormSizeRange(rule.size_range || "0");
     setFormSaveDir(rule.save_dir || "");
@@ -687,6 +723,8 @@ export default function Dashboard() {
       chat_title: chatTitle,
       rule_name: normalizedRuleName,
       mode: formMode,
+      min_message_id: formMode === "history" && formMinMessageId ? Number(formMinMessageId) : null,
+      max_message_id: formMode === "history" && formMaxMessageId ? Number(formMaxMessageId) : null,
       include_extensions: formExtensions || null,
       size_range: formSizeRange || "0",
       save_dir: formSaveDir || null,
@@ -702,6 +740,10 @@ export default function Dashboard() {
     };
 
     try {
+      if (formMode === "history" && (!formMinMessageId || !formMaxMessageId || Number(formMinMessageId) <= 0 || Number(formMaxMessageId) < Number(formMinMessageId))) {
+        showNotification("请输入有效的历史消息 ID 起止范围", "error");
+        return;
+      }
       if (editingRuleId) {
         await api.put(`/group-rules/${editingRuleId}`, ruleData);
       } else {
@@ -1184,6 +1226,7 @@ export default function Dashboard() {
             暂无下载记录
           </p>
         ) : (
+          false ? (
           <div
             className="download-record-grid"
             style={{
@@ -1339,7 +1382,54 @@ export default function Dashboard() {
               );
             })}
           </div>
-        )}
+          ) : (
+            <div className="download-record-table-wrap">
+              <table className="download-record-table">
+                <thead>
+                  <tr>
+                    <th><input type="checkbox" checked={allCurrentPageSelected} onChange={(e) => setSelectedIds(e.target.checked ? downloads.map((d) => d.id) : [])} /></th>
+                    <th>文件</th>
+                    <th>规则 / 来源</th>
+                    <th>状态</th>
+                    <th>进度</th>
+                    <th>体积</th>
+                    <th>保存路径</th>
+                    <th>创建时间</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {downloads.map((record: DownloadRecord) => {
+                    const statusMeta = getStatusMeta(record.status);
+                    return (
+                      <tr key={record.id}>
+                        <td><input type="checkbox" checked={selectedIds.includes(record.id)} onChange={(e) => setSelectedIds(e.target.checked ? [...selectedIds, record.id] : selectedIds.filter((id) => id !== record.id))} /></td>
+                        <td className="download-table-file" title={record.file_path || record.file_name}>
+                          <strong>{record.file_name}</strong>
+                          {record.origin_file_name && record.origin_file_name !== record.file_name && <small>{record.origin_file_name}</small>}
+                        </td>
+                        <td><span className="download-table-rule">{record.rule_name || sourceLabel(record)}</span>{record.rule_id ? <small>规则 #{record.rule_id}</small> : null}</td>
+                        <td><span className="download-record-chip" style={{ backgroundColor: statusMeta.bg, color: statusMeta.color }}>{statusMeta.emoji} {statusMeta.label}</span></td>
+                        <td className="download-table-progress"><div className="download-progress-track"><div className="download-progress-fill" style={{ width: `${Math.min(100, Math.max(0, record.progress || 0))}%`, backgroundColor: record.status === "completed" ? "#16a34a" : "#2563eb" }} /></div><small>{Math.round(record.progress || 0)}%{record.download_speed ? ` · ${formatBytes(record.download_speed)}/s` : ""}</small></td>
+                        <td>{record.file_size && record.file_size > 0 ? formatBytes(record.file_size) : "-"}</td>
+                        <td className="download-table-path" title={record.file_path || record.save_dir || "-"}>{record.file_path || record.save_dir || "-"}</td>
+                        <td>{new Date(record.created_at).toLocaleString()}</td>
+                        <td className="download-table-actions">
+                          {record.status === "downloading" && <button title="暂停" onClick={() => handlePauseDownload(record.id)}>暂停</button>}
+                          {record.status === "paused" && <button title="恢复" onClick={() => handleResumeDownload(record.id)}>恢复</button>}
+                          {record.status === "failed" && <button title="重试" onClick={() => handleRetryDownload(record.id)}>重试</button>}
+                          {(record.status === "downloading" || record.status === "pending" || record.status === "queued" || record.status === "paused") && <button title="优先" onClick={() => handlePriorityDownload(record.id)}>优先</button>}
+                          <button title="删除记录" onClick={() => handleDeleteDownload(record.id, false)}>删除</button>
+                          <button title="删除记录和文件" className="danger" onClick={() => handleDeleteDownload(record.id, true)}>删文件</button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            )
+          )}
       </div>
     </>
   );
@@ -2615,6 +2705,24 @@ export default function Dashboard() {
                 <label style={{ display: "block", marginBottom: "0.5rem", fontWeight: "500" }}>
                   文件类型（可选）
                 </label>
+                {formMode === "history" && (
+                  <div style={{ padding: "0.85rem 1rem", marginBottom: "0.75rem", border: "1px solid #bfdbfe", background: "#eff6ff", borderRadius: "6px" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.75rem", flexWrap: "wrap" }}>
+                      <div>
+                        <strong>历史消息范围</strong>
+                        <div style={{ marginTop: "0.25rem", color: "#475569", fontSize: "0.85rem" }}>先获取群聊可用的消息 ID，再填写需要下载的闭区间。</div>
+                      </div>
+                      <button type="button" onClick={fetchMessageRange} disabled={!formChatId || messageRangeLoading} className="btn-secondary">
+                        {messageRangeLoading ? "获取中..." : "获取消息 ID 范围"}
+                      </button>
+                    </div>
+                    {messageRange && <div style={{ marginTop: "0.55rem", color: "#1d4ed8", fontSize: "0.85rem" }}>当前可用范围：{messageRange.oldest_message_id ?? "-"} ~ {messageRange.latest_message_id ?? "-"}</div>}
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem", marginTop: "0.75rem" }}>
+                      <label>起始消息 ID<input type="number" min={1} value={formMinMessageId} onChange={(e) => setFormMinMessageId(e.target.value)} placeholder="例如 1000" /></label>
+                      <label>结束消息 ID<input type="number" min={1} value={formMaxMessageId} onChange={(e) => setFormMaxMessageId(e.target.value)} placeholder="例如 1200" /></label>
+                    </div>
+                  </div>
+                )}
                 <input
                   type="text"
                   value={formExtensions}

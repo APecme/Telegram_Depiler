@@ -1444,6 +1444,14 @@ async def get_download_preview_messages(
         for (chat_id, message_id), value in items.items()
     }
     return {"items": serialized}
+@api.get("/dialogs/{chat_id}/message-range")
+async def get_dialog_message_range(chat_id: int) -> dict:
+    try:
+        return await worker.get_dialog_message_range(chat_id)
+    except PermissionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @api.get("/config/default-download-path")
@@ -1532,6 +1540,11 @@ async def list_group_rules(chat_id: int | None = None, mode: str | None = None) 
 
 @api.post("/group-rules")
 async def create_group_rule(body: GroupRuleCreate) -> dict:
+    if body.mode == "history" and (body.min_message_id is None or body.max_message_id is None):
+        raise HTTPException(status_code=422, detail="历史下载规则必须填写消息 ID 起止范围")
+    if body.mode == "history" and (body.min_message_id <= 0 or body.max_message_id < body.min_message_id):
+        raise HTTPException(status_code=422, detail="历史消息 ID 区间无效")
+
     # 解析体积范围字符串
     size_range = body.size_range or "0"
     min_size_bytes, max_size_bytes = database.parse_size_range(size_range)
@@ -1548,7 +1561,7 @@ async def create_group_rule(body: GroupRuleCreate) -> dict:
     if save_dir:
         save_path_obj = Path(save_dir)
         if not save_path_obj.is_absolute():
-            save_path_obj = Path("/") / save_path_obj
+            save_path_obj = settings.download_dir / save_path_obj
         save_dir = str(save_path_obj)
     
     rule_id = database.add_group_rule(
@@ -1568,12 +1581,16 @@ async def create_group_rule(body: GroupRuleCreate) -> dict:
         match_mode=body.match_mode,
         start_time=body.start_time.isoformat() if body.start_time else None,
         end_time=body.end_time.isoformat() if body.end_time else None,
+        min_message_id=body.min_message_id,
+        max_message_id=body.max_message_id,
         add_download_suffix=body.add_download_suffix,
         move_after_complete=body.move_after_complete,
         auto_catch_up=body.auto_catch_up,
         include_comments=body.include_comments,
     )
     rule = database.get_group_rule(rule_id)
+    if body.mode == "history" and body.min_message_id is not None and body.max_message_id is not None:
+        asyncio.create_task(worker.download_history_for_rule(rule_id))
     return {"id": rule_id, "rule": rule}
 
 
@@ -1599,7 +1616,7 @@ async def update_group_rule(rule_id: int, body: GroupRuleUpdate) -> dict:
     if save_dir is not None and save_dir:
         save_path_obj = Path(save_dir)
         if not save_path_obj.is_absolute():
-            save_path_obj = Path("/") / save_path_obj
+            save_path_obj = settings.download_dir / save_path_obj
         save_dir = str(save_path_obj)
 
     database.update_group_rule(
@@ -1619,6 +1636,8 @@ async def update_group_rule(rule_id: int, body: GroupRuleUpdate) -> dict:
         match_mode=body.match_mode,
         start_time=body.start_time.isoformat() if body.start_time else None,
         end_time=body.end_time.isoformat() if body.end_time else None,
+        min_message_id=body.min_message_id,
+        max_message_id=body.max_message_id,
         add_download_suffix=body.add_download_suffix,
         move_after_complete=body.move_after_complete,
         auto_catch_up=body.auto_catch_up,
@@ -1627,7 +1646,24 @@ async def update_group_rule(rule_id: int, body: GroupRuleUpdate) -> dict:
     rule = database.get_group_rule(rule_id)
     if not rule:
         raise HTTPException(status_code=404, detail="规则不存在")
+    if rule.get("mode") == "history" and rule.get("min_message_id") is not None and rule.get("max_message_id") is not None:
+        if int(rule["min_message_id"]) <= 0 or int(rule["max_message_id"]) < int(rule["min_message_id"]):
+            raise HTTPException(status_code=422, detail="历史消息 ID 区间无效")
+        asyncio.create_task(worker.download_history_for_rule(rule_id))
     return {"rule": rule}
+
+
+@api.post("/group-rules/{rule_id}/history-download")
+async def start_history_download(rule_id: int) -> dict:
+    rule = database.get_group_rule(rule_id)
+    if not rule or rule.get("mode") != "history":
+        raise HTTPException(status_code=404, detail="历史下载规则不存在")
+    if rule.get("min_message_id") is None or rule.get("max_message_id") is None:
+        raise HTTPException(status_code=422, detail="请先填写消息 ID 起止范围")
+    if rule_id in worker._history_tasks and not worker._history_tasks[rule_id].done():
+        return {"status": "running", "rule_id": rule_id}
+    asyncio.create_task(worker.download_history_for_rule(rule_id))
+    return {"status": "started", "rule_id": rule_id}
 
 
 @api.delete("/group-rules/{rule_id}")

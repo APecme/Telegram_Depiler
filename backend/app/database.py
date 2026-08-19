@@ -388,6 +388,14 @@ class Database:
             ).fetchall()
             return [dict(row) for row in rows]
 
+    def get_download(self, download_id: int) -> Optional[Dict[str, Any]]:
+        """Return one download record without applying a history-list limit."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM downloads WHERE id = ?", (int(download_id),)
+            ).fetchone()
+            return dict(row) if row else None
+
     def search_downloads(
         self,
         *,
@@ -492,7 +500,8 @@ class Database:
             row = conn.execute(
                 """
                 SELECT * FROM downloads
-                WHERE tg_file_id = ? AND tg_access_hash = ? AND status = 'completed'
+                WHERE tg_file_id = ? AND tg_access_hash = ?
+                  AND status IN ('pending', 'queued', 'downloading', 'paused', 'completed')
                 ORDER BY created_at DESC
                 LIMIT 1
                 """,

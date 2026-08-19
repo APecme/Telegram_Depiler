@@ -231,6 +231,7 @@ class TelegramWorker:
         reply_to = getattr(message, "reply_to", None)
         is_comment_like = reply_to is not None
         return include_comments or not is_comment_like
+        self._history_tasks: dict[int, asyncio.Task] = {}
 
     def _build_internal_tmp_path(self, file_name: str) -> Path:
         tmp_root = self.settings.data_dir / ".telegram_depiler_tmp" / "rule_downloads"
@@ -929,8 +930,7 @@ class TelegramWorker:
         """恢复队列中的下载任务（不创建新记录，直接继续下载）"""
         try:
             # 获取下载记录
-            downloads = self.database.list_downloads(limit=1000)
-            download = next((d for d in downloads if d.get('id') == download_id), None)
+            download = self.database.get_download(download_id)
             
             if not download:
                 logger.warning(f"恢复下载任务失败：找不到下载记录 {download_id}")
@@ -942,14 +942,13 @@ class TelegramWorker:
                 logger.warning(f"恢复下载任务失败：任务状态不是downloading，当前状态: {current_status}")
                 return
             
-            # 获取规则信息
-            rules = self.database.get_group_rules_for_chat(chat_id=chat_id, mode='monitor', only_enabled=True)
-            if not rules:
+            # A queued record must resume with the same rule that created it.
+            rule_id = download.get("rule_id")
+            rule = self.database.get_group_rule(int(rule_id)) if rule_id is not None else None
+            if not rule or not rule.get("enabled"):
                 logger.warning(f"恢复下载任务失败：找不到群聊规则 {chat_id}")
                 self.database.update_download(download_id, status="failed", error="找不到群聊规则")
                 return
-            
-            rule = rules[0]  # 使用第一个规则
             
             # 获取客户端
             client = await self._get_client()
@@ -984,8 +983,7 @@ class TelegramWorker:
             from telethon.tl.custom.button import Button
             
             # 获取下载记录
-            downloads = self.database.list_downloads(limit=1000)
-            download = next((d for d in downloads if d.get('id') == download_id), None)
+            download = self.database.get_download(download_id)
             if not download:
                 return
             
@@ -1033,7 +1031,7 @@ class TelegramWorker:
             # 将路径规范化为绝对路径（如果是相对路径，加上根目录前缀）
             save_path = Path(save_dir)
             if not save_path.is_absolute():
-                save_path = Path("/") / save_path
+                save_path = self.settings.download_dir / save_path
             
             target_path = save_path / file_name
             # 确保所有父目录都存在（支持文件名模板中的子目录）
@@ -1253,6 +1251,99 @@ class TelegramWorker:
                     logger.warning("遗漏回补已达上限，后续消息将留到下次启动处理 (chat_id=%s)", chat_id)
                     break
 
+    async def get_dialog_message_range(self, chat_id: int) -> dict[str, Any]:
+        """Return the oldest and newest message IDs in a selected dialog."""
+        client = await self._get_client()
+        if not await client.is_user_authorized():
+            raise PermissionError("Client not authorized. Complete login first.")
+
+        chat = await client.get_entity(chat_id)
+        latest = await client.get_messages(chat, limit=1)
+        if not latest:
+            return {"chat_id": chat_id, "oldest_message_id": None, "latest_message_id": None}
+
+        oldest_message_id: int | None = None
+        async for message in client.iter_messages(chat, reverse=True, limit=1):
+            oldest_message_id = int(message.id)
+            break
+
+        return {
+            "chat_id": chat_id,
+            "oldest_message_id": oldest_message_id,
+            "latest_message_id": int(latest[0].id),
+        }
+
+    async def download_history_for_rule(self, rule_id: int) -> dict[str, int]:
+        """Scan the inclusive message-ID range of one history rule and enqueue matches."""
+        existing_task = self._history_tasks.get(rule_id)
+        if existing_task and not existing_task.done():
+            raise RuntimeError("This history rule is already scanning")
+
+        async def run() -> dict[str, int]:
+            rule = self.database.get_group_rule(rule_id)
+            if not rule or not rule.get("enabled") or rule.get("mode") != "history":
+                raise ValueError("History rule is unavailable")
+
+            min_message_id = rule.get("min_message_id")
+            max_message_id = rule.get("max_message_id")
+            if min_message_id is None or max_message_id is None:
+                raise ValueError("History rules require both start and end message IDs")
+
+            start_id = int(min_message_id)
+            end_id = int(max_message_id)
+            if start_id <= 0 or end_id < start_id:
+                raise ValueError("Invalid history message-ID range")
+
+            client = await self._get_client()
+            if not await client.is_user_authorized():
+                raise PermissionError("Client not authorized. Complete login first.")
+
+            chat = await client.get_entity(int(rule["chat_id"]))
+            scanned = 0
+            matched = 0
+            seen_grouped_ids: set[int] = set()
+            async for message in client.iter_messages(
+                chat,
+                min_id=start_id - 1,
+                max_id=end_id + 1,
+                reverse=True,
+            ):
+                scanned += 1
+                try:
+                    sender = await message.get_sender()
+                except Exception:
+                    sender = None
+
+                before = len(self._download_tasks)
+                await self._apply_monitor_rules_to_message(
+                    msg=message,
+                    chat=chat,
+                    sender=sender,
+                    rules=[rule],
+                    seen_grouped_ids=seen_grouped_ids,
+                    min_message_id=start_id,
+                    max_message_id=end_id,
+                )
+                if len(self._download_tasks) > before:
+                    matched += 1
+
+            logger.info(
+                "History rule %s scanned %s messages in [%s, %s], matched %s",
+                rule_id,
+                scanned,
+                start_id,
+                end_id,
+                matched,
+            )
+            return {"scanned": scanned, "matched": matched}
+
+        task = asyncio.create_task(run())
+        self._history_tasks[rule_id] = task
+        try:
+            return await task
+        finally:
+            self._history_tasks.pop(rule_id, None)
+
     async def _apply_monitor_rules_to_message(
         self,
         *,
@@ -1261,6 +1352,8 @@ class TelegramWorker:
         sender: Any,
         rules: list[dict[str, Any]],
         seen_grouped_ids: set[int],
+        min_message_id: int | None = None,
+        max_message_id: int | None = None,
     ) -> int:
         last_seen_id = int(getattr(msg, "id", 0) or 0)
         messages_to_process: list[Any] = [msg]
@@ -1271,7 +1364,9 @@ class TelegramWorker:
                 media_group = await msg.get_media_group()
                 media_msgs = [
                     m for m in media_group
-                    if (getattr(m, "video", None) or getattr(m, "document", None) or getattr(m, "photo", None) or getattr(m, "audio", None))
+                    if (min_message_id is None or int(m.id) >= min_message_id)
+                    and (max_message_id is None or int(m.id) <= max_message_id)
+                    and (getattr(m, "video", None) or getattr(m, "document", None) or getattr(m, "photo", None) or getattr(m, "audio", None))
                 ]
                 if media_msgs:
                     min_id = min(m.id for m in media_msgs)
