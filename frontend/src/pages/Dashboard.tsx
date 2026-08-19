@@ -1042,9 +1042,6 @@ export default function Dashboard() {
       <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", alignItems: "flex-start", flexWrap: "wrap", marginBottom: "1rem" }}>
         <div>
           <h2 style={{ margin: "0 0 0.35rem 0" }}>📥 下载记录</h2>
-          <p style={{ margin: 0, color: "var(--theme-muted-text)", fontSize: "0.92rem" }}>
-            用卡片浏览每条任务，筛选、批量处理和状态观察都会更直观。
-          </p>
         </div>
         <div className="download-summary-badge">
           <span>总速度 {formatSpeed(downloadRuntimeSummary.total_speed)}</span>
@@ -1058,7 +1055,6 @@ export default function Dashboard() {
         <div className="download-filter-header">
           <div>
             <div className="download-filter-title">筛选下载记录</div>
-            <div className="download-filter-subtitle">按状态、规则、路径、体积和时间快速收窄结果。</div>
           </div>
           <button
             onClick={clearDownloadFilters}
@@ -2746,7 +2742,7 @@ export default function Dashboard() {
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.75rem", flexWrap: "wrap" }}>
                       <div>
                         <strong>历史消息范围</strong>
-                        <div style={{ marginTop: "0.25rem", color: "#475569", fontSize: "0.85rem" }}>先获取群聊可用的消息 ID，再填写需要下载的闭区间。</div>
+                        <div style={{ marginTop: "0.25rem", color: "#475569", fontSize: "0.85rem" }}>获取方法：先选择目标群聊，点击“获取消息 ID 范围”自动读取最早和最新消息 ID，再填写起止 ID。</div>
                       </div>
                       <button type="button" onClick={fetchMessageRange} disabled={!formChatId || messageRangeLoading} className="btn-secondary">
                         {messageRangeLoading ? "获取中..." : "获取消息 ID 范围"}
