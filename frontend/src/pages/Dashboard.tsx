@@ -444,7 +444,26 @@ export default function Dashboard() {
   const fetchGroupRules = async () => {
     try {
       const { data } = await api.get("/group-rules");
-      setGroupRules(data.items || []);
+      const rules: GroupRule[] = data.items || [];
+      setGroupRules(rules);
+      const historyRules = rules.filter((rule) => rule.mode === "history");
+      const results = await Promise.all(
+        historyRules.map(async (rule) => {
+          try {
+            const { data: status } = await api.get<HistoryRunStatus>(`/group-rules/${rule.id}/history-download`);
+            return [rule.id, status] as const;
+          } catch {
+            return null;
+          }
+        })
+      );
+      setHistoryRunStates((current) => {
+        const next = { ...current };
+        results.forEach((result) => {
+          if (result) next[result[0]] = result[1];
+        });
+        return next;
+      });
     } catch (error) {
       console.error("Failed to fetch group rules:", error);
     }
@@ -1791,7 +1810,7 @@ export default function Dashboard() {
                         已禁用
                       </span>
                     )}
-                    {rule.mode === "history" && (historyRunStates[rule.id]?.status === "starting" || historyRunStates[rule.id]?.status === "running") && (
+                    {rule.mode === "history" && historyRunStates[rule.id] && historyRunStates[rule.id].status !== "idle" && (
                       <span
                         style={{
                           display: "inline-block",
@@ -1799,11 +1818,26 @@ export default function Dashboard() {
                           padding: "0.2rem 0.6rem",
                           fontSize: "0.75rem",
                           borderRadius: "12px",
-                          backgroundColor: "var(--color-info-surface)",
-                          color: "var(--color-info-strong)",
+                          backgroundColor:
+                            historyRunStates[rule.id].status === "failed"
+                              ? "var(--color-danger-surface)"
+                              : historyRunStates[rule.id].status === "completed"
+                                ? "var(--color-success-surface)"
+                                : "var(--color-info-surface)",
+                          color:
+                            historyRunStates[rule.id].status === "failed"
+                              ? "var(--color-danger-strong)"
+                              : historyRunStates[rule.id].status === "completed"
+                                ? "var(--color-success-strong)"
+                                : "var(--color-info-strong)",
                         }}
+                        title={historyRunStates[rule.id].error || undefined}
                       >
-                        扫描中：{historyRunStates[rule.id].scanned || 0} 条消息，{historyRunStates[rule.id].added_tasks || 0} 个任务
+                        {historyRunStates[rule.id].status === "failed"
+                          ? `上次扫描失败：${historyRunStates[rule.id].error || "未知错误"}`
+                          : historyRunStates[rule.id].status === "completed"
+                            ? `上次扫描：${historyRunStates[rule.id].scanned || 0} 条消息，已添加 ${historyRunStates[rule.id].added_tasks || 0} 个任务`
+                            : `扫描中：${historyRunStates[rule.id].scanned || 0} 条消息，已添加 ${historyRunStates[rule.id].added_tasks || 0} 个任务`}
                       </span>
                     )}
                   </div>
