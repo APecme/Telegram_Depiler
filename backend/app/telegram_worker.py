@@ -156,6 +156,8 @@ class TelegramWorker:
         self._pending_notification_payloads: dict[tuple[int, int], dict[str, Any]] = {}
         self._linked_channel_cache: dict[int, tuple[float, Optional[int]]] = {}
         self._linked_channel_cache_ttl = 300.0
+        self._history_tasks: dict[int, asyncio.Task] = {}
+        self._history_runs: dict[int, dict[str, Any]] = {}
 
     async def _get_linked_channel_id_for_discussion(self, chat: Any) -> Optional[int]:
         """Return the broadcast channel linked to an incoming discussion group."""
@@ -233,7 +235,6 @@ class TelegramWorker:
         reply_to = getattr(message, "reply_to", None)
         is_comment_like = reply_to is not None
         return include_comments or not is_comment_like
-        self._history_tasks: dict[int, asyncio.Task] = {}
 
     def _build_internal_tmp_path(self, file_name: str) -> Path:
         tmp_root = self.settings.data_dir / ".telegram_depiler_tmp" / "rule_downloads"
@@ -1283,6 +1284,14 @@ class TelegramWorker:
         if existing_task and not existing_task.done():
             raise RuntimeError("This history rule is already scanning")
 
+        self._history_runs[rule_id] = {
+            "status": "running",
+            "rule_id": rule_id,
+            "scanned": 0,
+            "matched": 0,
+            "error": None,
+        }
+
         async def run() -> dict[str, int]:
             rule = self.database.get_group_rule(rule_id)
             if not rule or not rule.get("enabled") or rule.get("mode") != "history":
@@ -1313,12 +1322,12 @@ class TelegramWorker:
                 reverse=True,
             ):
                 scanned += 1
+                self._history_runs[rule_id].update(scanned=scanned)
                 try:
                     sender = await message.get_sender()
                 except Exception:
                     sender = None
 
-                before = len(self._download_tasks)
                 await self._apply_monitor_rules_to_message(
                     msg=message,
                     chat=chat,
@@ -1327,9 +1336,9 @@ class TelegramWorker:
                     seen_grouped_ids=seen_grouped_ids,
                     min_message_id=start_id,
                     max_message_id=end_id,
+                    on_matched=lambda: self._history_runs[rule_id].update(matched=matched + 1),
                 )
-                if len(self._download_tasks) > before:
-                    matched += 1
+                matched = int(self._history_runs[rule_id]["matched"])
 
             logger.info(
                 "History rule %s scanned %s messages in [%s, %s], matched %s",
@@ -1339,14 +1348,25 @@ class TelegramWorker:
                 end_id,
                 matched,
             )
+            self._history_runs[rule_id].update(status="completed", scanned=scanned, matched=matched)
             return {"scanned": scanned, "matched": matched}
 
         task = asyncio.create_task(run())
         self._history_tasks[rule_id] = task
         try:
             return await task
+        except Exception as exc:
+            logger.exception("History rule %s scan failed", rule_id)
+            self._history_runs[rule_id].update(status="failed", error=str(exc))
+            raise
         finally:
             self._history_tasks.pop(rule_id, None)
+
+    def get_history_run_status(self, rule_id: int) -> dict[str, Any]:
+        task = self._history_tasks.get(rule_id)
+        if task and not task.done():
+            return self._history_runs.get(rule_id, {"status": "running", "rule_id": rule_id})
+        return self._history_runs.get(rule_id, {"status": "idle", "rule_id": rule_id})
 
     async def _apply_monitor_rules_to_message(
         self,
@@ -1358,6 +1378,7 @@ class TelegramWorker:
         seen_grouped_ids: set[int],
         min_message_id: int | None = None,
         max_message_id: int | None = None,
+        on_matched: Callable[[], None] | None = None,
     ) -> int:
         last_seen_id = int(getattr(msg, "id", 0) or 0)
         messages_to_process: list[Any] = [msg]
@@ -1399,6 +1420,8 @@ class TelegramWorker:
                     break
 
         if any_matched:
+            if on_matched:
+                on_matched()
             return last_seen_id
         return last_seen_id
 

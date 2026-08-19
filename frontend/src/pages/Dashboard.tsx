@@ -128,6 +128,14 @@ type PreviewGroup = {
   totalCount: number;
 };
 
+type HistoryRunStatus = {
+  status: "idle" | "running" | "completed" | "failed";
+  rule_id: number;
+  scanned?: number;
+  matched?: number;
+  error?: string | null;
+};
+
 const renderFilenameTemplatePreview = (template: string) => {
   const values: Record<string, string> = {
     task_id: "123",
@@ -214,6 +222,7 @@ export default function Dashboard() {
   const [versionCheck, setVersionCheck] = useState<VersionCheck | null>(null);
   const [versionRefreshing, setVersionRefreshing] = useState(false);
   const [lightboxVideoFallback, setLightboxVideoFallback] = useState<Record<number, boolean>>({});
+  const [historyRunStates, setHistoryRunStates] = useState<Record<number, HistoryRunStatus>>({});
 
   useEffect(() => {
     api.get("/admin/me").catch((error) => {
@@ -723,11 +732,30 @@ export default function Dashboard() {
     }
   };
 
+  const pollHistoryRuleStatus = async (ruleId: number) => {
+    try {
+      const { data } = await api.get<HistoryRunStatus>(`/group-rules/${ruleId}/history-download`);
+      setHistoryRunStates((current) => ({ ...current, [ruleId]: data }));
+      if (data.status === "completed") {
+        await fetchDownloads();
+        showNotification(`历史扫描完成：已扫描 ${data.scanned || 0} 条消息，已匹配 ${data.matched || 0} 条`, "success");
+      } else if (data.status === "failed") {
+        showNotification(`历史扫描失败：${data.error || "未知错误"}`, "error");
+      } else if (data.status === "running") {
+        window.setTimeout(() => void pollHistoryRuleStatus(ruleId), 1000);
+      }
+    } catch (error) {
+      showNotification(`获取历史扫描状态失败：${formatError(error)}`, "error");
+    }
+  };
+
   const handleRunHistoryRule = async (rule: GroupRule) => {
     try {
-      await api.post(`/group-rules/${rule.id}/history-download`);
+      const { data } = await api.post(`/group-rules/${rule.id}/history-download`);
       await Promise.all([fetchDownloads(), fetchGroupRules()]);
-      showNotification("历史文件下载已启动", "success");
+      setHistoryRunStates((current) => ({ ...current, [rule.id]: { status: "running", rule_id: rule.id } }));
+      showNotification(data.status === "running" ? "历史扫描正在运行" : "历史文件扫描已启动", "success");
+      void pollHistoryRuleStatus(rule.id);
     } catch (error) {
       console.error("Failed to start history download:", error);
       showNotification(`启动历史下载失败：${formatError(error)}`, "error");
@@ -1763,18 +1791,35 @@ export default function Dashboard() {
                         已禁用
                       </span>
                     )}
+                    {rule.mode === "history" && historyRunStates[rule.id]?.status === "running" && (
+                      <span
+                        style={{
+                          display: "inline-block",
+                          marginLeft: "0.5rem",
+                          padding: "0.2rem 0.6rem",
+                          fontSize: "0.75rem",
+                          borderRadius: "12px",
+                          backgroundColor: "var(--color-info-surface)",
+                          color: "var(--color-info-strong)",
+                        }}
+                      >
+                        扫描中 {historyRunStates[rule.id].scanned || 0} 条
+                      </span>
+                    )}
                   </div>
                   <div style={{ display: "flex", gap: "0.5rem" }}>
                     {rule.mode === "history" && (
                       <button
                         onClick={() => handleRunHistoryRule(rule)}
-                        disabled={!rule.enabled || !rule.min_message_id || !rule.max_message_id}
+                        disabled={!rule.enabled || !rule.min_message_id || !rule.max_message_id || historyRunStates[rule.id]?.status === "running"}
                         title={
                           !rule.enabled
                             ? "规则已禁用"
                             : !rule.min_message_id || !rule.max_message_id
                               ? "请先设置有效的消息 ID 区间"
-                              : "立即运行历史下载"
+                              : historyRunStates[rule.id]?.status === "running"
+                                ? "历史扫描正在运行"
+                                : "立即运行历史下载"
                         }
                         style={{
                           padding: "0.4rem 0.8rem",
@@ -1783,11 +1828,11 @@ export default function Dashboard() {
                           color: "var(--color-info-strong)",
                           border: "1px solid var(--color-info)",
                           borderRadius: "6px",
-                          cursor: !rule.enabled || !rule.min_message_id || !rule.max_message_id ? "not-allowed" : "pointer",
-                          opacity: !rule.enabled || !rule.min_message_id || !rule.max_message_id ? 0.55 : 1,
+                          cursor: !rule.enabled || !rule.min_message_id || !rule.max_message_id || historyRunStates[rule.id]?.status === "running" ? "not-allowed" : "pointer",
+                          opacity: !rule.enabled || !rule.min_message_id || !rule.max_message_id || historyRunStates[rule.id]?.status === "running" ? 0.55 : 1,
                         }}
                       >
-                        立即运行
+                        {historyRunStates[rule.id]?.status === "running" ? "扫描中" : "立即运行"}
                       </button>
                     )}
                     <button

@@ -1622,8 +1622,6 @@ async def create_group_rule(body: GroupRuleCreate) -> dict:
         include_comments=body.include_comments,
     )
     rule = database.get_group_rule(rule_id)
-    if body.mode == "history" and body.min_message_id is not None and body.max_message_id is not None:
-        asyncio.create_task(worker.download_history_for_rule(rule_id))
     return {"id": rule_id, "rule": rule}
 
 
@@ -1682,7 +1680,6 @@ async def update_group_rule(rule_id: int, body: GroupRuleUpdate) -> dict:
     if rule.get("mode") == "history" and rule.get("min_message_id") is not None and rule.get("max_message_id") is not None:
         if int(rule["min_message_id"]) <= 0 or int(rule["max_message_id"]) < int(rule["min_message_id"]):
             raise HTTPException(status_code=422, detail="历史消息 ID 区间无效")
-        asyncio.create_task(worker.download_history_for_rule(rule_id))
     return {"rule": rule}
 
 
@@ -1693,10 +1690,20 @@ async def start_history_download(rule_id: int) -> dict:
         raise HTTPException(status_code=404, detail="历史下载规则不存在")
     if rule.get("min_message_id") is None or rule.get("max_message_id") is None:
         raise HTTPException(status_code=422, detail="请先填写消息 ID 起止范围")
+    if not rule.get("enabled"):
+        raise HTTPException(status_code=409, detail="规则已禁用，无法运行历史下载")
     if rule_id in worker._history_tasks and not worker._history_tasks[rule_id].done():
         return {"status": "running", "rule_id": rule_id}
     asyncio.create_task(worker.download_history_for_rule(rule_id))
     return {"status": "started", "rule_id": rule_id}
+
+
+@api.get("/group-rules/{rule_id}/history-download")
+async def get_history_download_status(rule_id: int) -> dict:
+    rule = database.get_group_rule(rule_id)
+    if not rule or rule.get("mode") != "history":
+        raise HTTPException(status_code=404, detail="历史下载规则不存在")
+    return worker.get_history_run_status(rule_id)
 
 
 @api.delete("/group-rules/{rule_id}")
