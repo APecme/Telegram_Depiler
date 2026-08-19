@@ -11,6 +11,7 @@ from telethon.tl.types import User, KeyboardButtonCallback
 
 from .config import Settings
 from .database import Database
+from .media_cache import generate_cover_cache
 
 logger = logging.getLogger(__name__)
 
@@ -737,10 +738,12 @@ class BotCommandHandler:
                     elapsed_time = time.time() - start_time
                     avg_speed = (file_size / elapsed_time) if elapsed_time > 0 else 0
                     
+                    cover_path = await generate_cover_cache(self.settings.data_dir, download_id, target_path)
                     self.database.update_download(
                         download_id,
                         file_path=str(target_path),
                         status="completed",
+                        cover_path=cover_path,
                         progress=100.0,
                         download_speed=avg_speed,
                     )
@@ -1011,10 +1014,12 @@ class BotCommandHandler:
                     elapsed = time.time() - start_time
                     avg_speed = (file_size / elapsed) if elapsed > 0 else 0.0
 
+                    cover_path = await generate_cover_cache(self.settings.data_dir, download_id, target_path)
                     self.database.update_download(
                         download_id,
                         file_path=str(target_path),
                         status="completed",
+                        cover_path=cover_path,
                         progress=100.0,
                         download_speed=avg_speed,
                     )

@@ -56,6 +56,8 @@ type DownloadRecord = {
   file_size?: number;
   save_dir?: string;
   file_path?: string;
+  cover_path?: string;
+  file_exists?: boolean;
   rule_id?: number;
   rule_name?: string;
 };
@@ -176,6 +178,7 @@ export default function Dashboard() {
   const [previewLoadingMore, setPreviewLoadingMore] = useState<boolean>(false);
   const [previewMessageTexts, setPreviewMessageTexts] = useState<Record<string, string>>({});
   const previewWindowRef = useRef<HTMLDivElement | null>(null);
+  const previewLoadingRef = useRef(false);
   const lightboxTouchStartXRef = useRef<number | null>(null);
   const lightboxTouchStartYRef = useRef<number | null>(null);
   const lightboxTouchLastYRef = useRef<number | null>(null);
@@ -237,6 +240,12 @@ export default function Dashboard() {
 
   useEffect(() => {
     fetchPreviewDownloads(1, false);
+    const interval = setInterval(() => {
+      const container = previewWindowRef.current;
+      if (container && container.scrollHeight - container.clientHeight - container.scrollTop > 120) return;
+      fetchPreviewDownloads(1, false);
+    }, 5000);
+    return () => clearInterval(interval);
   }, []);
 
   useEffect(() => {
@@ -361,6 +370,8 @@ export default function Dashboard() {
   };
 
   const fetchPreviewDownloads = async (page: number, append: boolean) => {
+    if (previewLoadingRef.current) return;
+    previewLoadingRef.current = true;
     try {
       setPreviewLoadingMore(true);
       console.log("[Preview] fetchPreviewDownloads:start", { page, append });
@@ -372,7 +383,7 @@ export default function Dashboard() {
         },
       });
 
-      const items: DownloadRecord[] = (data.items || []).filter((record: DownloadRecord) => !!record.file_path && !!getPreviewType(record));
+      const items: DownloadRecord[] = (data.items || []).filter((record: DownloadRecord) => record.file_exists !== false && !!record.file_path && !!getPreviewType(record));
       console.log("[Preview] fetchPreviewDownloads:downloads", {
         page,
         total: data.total,
@@ -416,6 +427,7 @@ export default function Dashboard() {
     } catch (error) {
       console.error("Failed to fetch preview downloads:", error);
     } finally {
+      previewLoadingRef.current = false;
       setPreviewLoadingMore(false);
     }
   };
@@ -626,7 +638,10 @@ export default function Dashboard() {
     }
     try {
       await api.delete(`/downloads/${downloadId}?delete_file=${deleteFile ? "true" : "false"}`);
-      await fetchDownloads();
+      await Promise.all([fetchDownloads(), fetchPreviewDownloads(1, false)]);
+      if (lightboxRecord?.id === downloadId) {
+        setLightboxRecord(null);
+      }
       showNotification(deleteFile ? "已删除记录并删除文件" : "已删除记录", "success");
     } catch (error) {
       console.error("Failed to delete download:", error);
@@ -647,7 +662,7 @@ export default function Dashboard() {
       for (const id of selectedIds) {
         await api.delete(`/downloads/${id}?delete_file=${deleteFile ? "true" : "false"}`);
       }
-      await fetchDownloads();
+      await Promise.all([fetchDownloads(), fetchPreviewDownloads(1, false)]);
       setSelectedIds([]);
       showNotification(deleteFile ? "已删除记录并删除文件" : "已删除记录", "success");
     } catch (error) {
@@ -817,6 +832,13 @@ export default function Dashboard() {
     const baseUrl = api.defaults.baseURL || "/api";
     const transcode = options?.transcode ? "&transcode=1" : "";
     return `${baseUrl}/downloads/${record.id}/media?token=${encodeURIComponent(token)}${transcode}`;
+  };
+
+  const getMediaCoverUrl = (record: DownloadRecord) => {
+    const token = localStorage.getItem("admin_token");
+    if (!token) return "";
+    const baseUrl = api.defaults.baseURL || "/api";
+    return `${baseUrl}/downloads/${record.id}/cover?token=${encodeURIComponent(token)}`;
   };
 
   const getLightboxVideoUrl = (record: DownloadRecord) => {
@@ -1538,10 +1560,7 @@ export default function Dashboard() {
                           }
 
                           const previewType = getPreviewType(item);
-                          const videoFileName = (item.file_name || item.origin_file_name || "").toLowerCase();
-                          const videoThumbnailUrl = getMediaPreviewUrl(item, {
-                            transcode: /\.(mkv|avi|mov|m4v)$/i.test(videoFileName),
-                          });
+                          const videoThumbnailUrl = getMediaCoverUrl(item);
                           return (
                             <button
                               key={item.id}
@@ -1558,22 +1577,14 @@ export default function Dashboard() {
                               }}
                             >
                               {previewType === "image" ? (
-                                <img className="telegram-media-preview telegram-album-media" src={getMediaPreviewUrl(item)} alt={item.file_name || item.origin_file_name || "preview"} />
+                                <img className="telegram-media-preview telegram-album-media" src={getMediaCoverUrl(item)} alt={item.file_name || item.origin_file_name || "preview"} />
                               ) : (
                                 <div className="telegram-video-thumb telegram-album-video-wrap">
-                                  <video
+                                  <img
                                     className="telegram-media-preview telegram-album-media telegram-video-thumbnail"
                                     src={videoThumbnailUrl}
-                                    muted
-                                    playsInline
-                                    preload="metadata"
                                     aria-label={item.file_name || item.origin_file_name || "video"}
-                                    onLoadedMetadata={(event) => {
-                                      const video = event.currentTarget;
-                                      if (video.duration > 0) {
-                                        video.currentTime = Math.min(0.1, video.duration / 2);
-                                      }
-                                    }}
+                                    alt={item.file_name || item.origin_file_name || "video"}
                                   />
                                   <span className="telegram-video-file-label">{item.file_name || item.origin_file_name || "video"}</span>
                                   <span className="telegram-video-play">▶</span>

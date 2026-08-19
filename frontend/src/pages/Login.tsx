@@ -78,14 +78,14 @@ export default function Login() {
           </p>
         </div>
 
-        <form onSubmit={handleSubmit} style={{ display: "grid", gap: "0.75rem" }} autoComplete="off">
+        <form onSubmit={handleSubmit} style={{ display: "grid", gap: "0.75rem" }} autoComplete="on">
           <label style={{ display: "grid", gap: "0.25rem", fontSize: "0.9rem" }}>
             <span>用户名</span>
             <input
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               autoComplete="username"
-              name="login-username"
+              name="username"
               style={{
                 padding: "0.6rem 0.75rem",
                 borderRadius: "0.5rem",
@@ -101,8 +101,8 @@ export default function Login() {
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              autoComplete="new-password"
-              name="login-password"
+              autoComplete="current-password"
+              name="password"
               style={{
                 padding: "0.6rem 0.75rem",
                 borderRadius: "0.5rem",

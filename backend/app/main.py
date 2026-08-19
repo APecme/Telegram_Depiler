@@ -39,6 +39,7 @@ from .schemas import (
 )
 from .telegram_worker import TelegramWorker
 from .bot_handler import BotCommandHandler
+from .media_cache import generate_cover_cache, remove_cover_cache
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -1066,6 +1067,36 @@ async def get_download_media(
     return FileResponse(path=target, filename=target.name, media_type=media_type or "application/octet-stream")
 
 
+@api.get("/downloads/{download_id}/cover")
+async def get_download_cover(
+    download_id: int,
+    x_admin_token: str | None = Header(default=None, alias="X-Admin-Token"),
+    token: str | None = Query(default=None, description="管理员 token，用于 img 直接链接预览"),
+) -> Response:
+    _require_admin(x_admin_token or token)
+    download = database.get_download(download_id)
+    if not download or download.get("status") != "completed":
+        raise HTTPException(status_code=404, detail="下载记录不存在")
+
+    file_path = download.get("file_path")
+    if not file_path or not Path(str(file_path)).is_file():
+        raise HTTPException(status_code=404, detail="目标文件不存在")
+
+    generated = await generate_cover_cache(settings.data_dir, download_id, file_path)
+    if not generated:
+        raise HTTPException(status_code=404, detail="封面缓存不可用")
+    target = Path(generated)
+    if download.get("cover_path") != str(target):
+        database.update_download(download_id, cover_path=str(target))
+
+    return FileResponse(
+        path=target,
+        filename=target.name,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
 @api.post("/downloads/{download_id}/pause")
 async def pause_download(download_id: int) -> dict:
     """暂停下载（支持 Bot 与群聊规则任务）。"""
@@ -1250,6 +1281,8 @@ async def delete_download(
                 )
         except Exception as exc:
             logger.debug("更新 Bot 消息为已删除失败: %s", exc)
+
+    remove_cover_cache(settings.data_dir, download_id, download.get("cover_path"))
 
     # 删除数据库记录
     database.delete_download(download_id)

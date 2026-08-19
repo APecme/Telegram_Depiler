@@ -35,6 +35,7 @@ class Database:
                     file_name TEXT,
                     origin_file_name TEXT,
                     file_path TEXT,
+                    cover_path TEXT,
                     status TEXT,
                     progress REAL,
                     download_speed REAL,
@@ -130,6 +131,8 @@ class Database:
         if has_column("downloads", "id"):
             if not has_column("downloads", "file_path"):
                 conn.execute("ALTER TABLE downloads ADD COLUMN file_path TEXT")
+            if not has_column("downloads", "cover_path"):
+                conn.execute("ALTER TABLE downloads ADD COLUMN cover_path TEXT")
             if not has_column("downloads", "status"):
                 conn.execute("ALTER TABLE downloads ADD COLUMN status TEXT")
             if not has_column("downloads", "progress"):
@@ -309,6 +312,7 @@ class Database:
         download_id: int,
         *,
         file_path: str | None = None,
+        cover_path: str | None = None,
         file_name: str | None = None,
         status: str | None = None,
         progress: float | None = None,
@@ -329,6 +333,9 @@ class Database:
         if file_path is not None:
             updates.append("file_path = ?")
             params.append(file_path)
+        if cover_path is not None:
+            updates.append("cover_path = ?")
+            params.append(cover_path)
         if file_name is not None:
             updates.append("file_name = ?")
             params.append(file_name)
@@ -477,7 +484,12 @@ class Database:
                 tuple(params) + (page_size, offset),
             ).fetchall()
 
-        items = [dict(row) for row in rows]
+        items = []
+        for row in rows:
+            item = dict(row)
+            file_path = item.get("file_path")
+            item["file_exists"] = bool(file_path and Path(str(file_path)).is_file())
+            items.append(item)
         return {
             "total": total,
             "page": page,

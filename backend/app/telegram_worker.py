@@ -11,6 +11,8 @@ from pathlib import Path
 import sqlite3
 from typing import Any, Awaitable, Callable, Literal, Optional
 
+from .media_cache import generate_cover_cache
+
 logger = logging.getLogger(__name__)
 
 _FILENAME_TEMPLATE_PATTERN = re.compile(
@@ -1120,10 +1122,12 @@ class TelegramWorker:
                 _move(str(downloaded_path), str(target_path))
                 downloaded_path = target_path
             
+            cover_path = await generate_cover_cache(self.settings.data_dir, download_id, target_path)
             self.database.update_download(
                 download_id, 
                 status="completed", 
                 file_path=str(target_path),
+                cover_path=cover_path,
                 progress=100.0,
                 download_speed=0.0
             )
@@ -1685,10 +1689,12 @@ class TelegramWorker:
                         file=target_path,
                         progress_callback=progress_callback if file_size > 0 else None,
                     )
+                    cover_path = await generate_cover_cache(self.settings.data_dir, download_id, target_path)
                     self.database.update_download(
                         download_id, 
                         status="completed", 
                         file_path=str(target_path),
+                        cover_path=cover_path,
                         progress=100.0,
                         download_speed=0.0
                     )
@@ -2299,10 +2305,12 @@ class TelegramWorker:
                         await self.queue_manager.on_download_finished(download_id)
                     return
 
+            cover_path = await generate_cover_cache(self.settings.data_dir, download_id, target_path)
             self.database.update_download(
                 download_id,
                 status="completed",
                 file_path=str(target_path),
+                cover_path=cover_path,
                 progress=100.0,
                 download_speed=0.0
             )
