@@ -2,7 +2,7 @@ name: Docker Build and Push
 
 on:
   push:
-    tags: [ 'v*.*.*' ]
+    tags: [ 'v*.*.*', 'bata' ]
   pull_request:
     branches: [ "main", "master" ]
 
@@ -59,6 +59,7 @@ jobs:
           tags: |
             type=semver,pattern={{version}}
             type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=bata,enable=${{ github.ref == 'refs/tags/bata' }}
 
       - name: Build and push Docker image
         id: build-and-push
