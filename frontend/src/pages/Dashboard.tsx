@@ -708,6 +708,17 @@ export default function Dashboard() {
     }
   };
 
+  const handleRunHistoryRule = async (rule: GroupRule) => {
+    try {
+      await api.post(`/group-rules/${rule.id}/history-download`);
+      await Promise.all([fetchDownloads(), fetchGroupRules()]);
+      showNotification("历史文件下载已启动", "success");
+    } catch (error) {
+      console.error("Failed to start history download:", error);
+      showNotification(`启动历史下载失败：${formatError(error)}`, "error");
+    }
+  };
+
   const handleSaveRule = async () => {
     if (!formChatId) {
       showNotification("请选择目标群聊", "info");
@@ -1747,6 +1758,31 @@ export default function Dashboard() {
                     )}
                   </div>
                   <div style={{ display: "flex", gap: "0.5rem" }}>
+                    {rule.mode === "history" && (
+                      <button
+                        onClick={() => handleRunHistoryRule(rule)}
+                        disabled={!rule.enabled || !rule.min_message_id || !rule.max_message_id}
+                        title={
+                          !rule.enabled
+                            ? "规则已禁用"
+                            : !rule.min_message_id || !rule.max_message_id
+                              ? "请先设置有效的消息 ID 区间"
+                              : "立即运行历史下载"
+                        }
+                        style={{
+                          padding: "0.4rem 0.8rem",
+                          fontSize: "0.85rem",
+                          backgroundColor: "var(--color-info-surface)",
+                          color: "var(--color-info-strong)",
+                          border: "1px solid var(--color-info)",
+                          borderRadius: "6px",
+                          cursor: !rule.enabled || !rule.min_message_id || !rule.max_message_id ? "not-allowed" : "pointer",
+                          opacity: !rule.enabled || !rule.min_message_id || !rule.max_message_id ? 0.55 : 1,
+                        }}
+                      >
+                        立即运行
+                      </button>
+                    )}
                     <button
                       onClick={() => handleToggleRule(rule.id, rule.enabled)}
                       style={{
