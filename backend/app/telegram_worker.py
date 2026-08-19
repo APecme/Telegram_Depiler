@@ -1288,7 +1288,7 @@ class TelegramWorker:
             "status": "running",
             "rule_id": rule_id,
             "scanned": 0,
-            "matched": 0,
+            "added_tasks": 0,
             "error": None,
         }
 
@@ -1313,8 +1313,13 @@ class TelegramWorker:
 
             chat = await client.get_entity(int(rule["chat_id"]))
             scanned = 0
-            matched = 0
+            added_tasks = 0
             seen_grouped_ids: set[int] = set()
+
+            def record_added_tasks(count: int) -> None:
+                current = int(self._history_runs[rule_id].get("added_tasks") or 0)
+                self._history_runs[rule_id].update(added_tasks=current + count)
+
             async for message in client.iter_messages(
                 chat,
                 min_id=start_id - 1,
@@ -1336,20 +1341,20 @@ class TelegramWorker:
                     seen_grouped_ids=seen_grouped_ids,
                     min_message_id=start_id,
                     max_message_id=end_id,
-                    on_matched=lambda: self._history_runs[rule_id].update(matched=matched + 1),
+                    on_tasks_added=record_added_tasks,
                 )
-                matched = int(self._history_runs[rule_id]["matched"])
+                added_tasks = int(self._history_runs[rule_id]["added_tasks"])
 
             logger.info(
-                "History rule %s scanned %s messages in [%s, %s], matched %s",
+                "History rule %s scanned %s messages in [%s, %s], added %s download tasks",
                 rule_id,
                 scanned,
                 start_id,
                 end_id,
-                matched,
+                added_tasks,
             )
-            self._history_runs[rule_id].update(status="completed", scanned=scanned, matched=matched)
-            return {"scanned": scanned, "matched": matched}
+            self._history_runs[rule_id].update(status="completed", scanned=scanned, added_tasks=added_tasks)
+            return {"scanned": scanned, "added_tasks": added_tasks}
 
         task = asyncio.create_task(run())
         self._history_tasks[rule_id] = task
@@ -1378,7 +1383,7 @@ class TelegramWorker:
         seen_grouped_ids: set[int],
         min_message_id: int | None = None,
         max_message_id: int | None = None,
-        on_matched: Callable[[], None] | None = None,
+        on_tasks_added: Callable[[int], None] | None = None,
     ) -> int:
         last_seen_id = int(getattr(msg, "id", 0) or 0)
         messages_to_process: list[Any] = [msg]
@@ -1405,7 +1410,7 @@ class TelegramWorker:
             except Exception:
                 pass
 
-        any_matched = False
+        added_tasks = 0
         for m in messages_to_process:
             if not (getattr(m, "video", None) or getattr(m, "document", None) or getattr(m, "photo", None) or getattr(m, "audio", None)):
                 continue
@@ -1416,12 +1421,12 @@ class TelegramWorker:
                 if self._should_download_by_rule(m, rule):
                     task = asyncio.create_task(self._download_file_by_rule(m, rule, chat, sender, media_group_size=len(messages_to_process)))
                     task.add_done_callback(lambda t: self._cleanup_download_task(t))
-                    any_matched = True
+                    added_tasks += 1
                     break
 
-        if any_matched:
-            if on_matched:
-                on_matched()
+        if added_tasks:
+            if on_tasks_added:
+                on_tasks_added(added_tasks)
             return last_seen_id
         return last_seen_id
 

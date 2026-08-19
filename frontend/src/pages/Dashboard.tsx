@@ -129,10 +129,10 @@ type PreviewGroup = {
 };
 
 type HistoryRunStatus = {
-  status: "idle" | "running" | "completed" | "failed";
+  status: "idle" | "starting" | "running" | "completed" | "failed";
   rule_id: number;
   scanned?: number;
-  matched?: number;
+  added_tasks?: number;
   error?: string | null;
 };
 
@@ -738,10 +738,10 @@ export default function Dashboard() {
       setHistoryRunStates((current) => ({ ...current, [ruleId]: data }));
       if (data.status === "completed") {
         await fetchDownloads();
-        showNotification(`历史扫描完成：已扫描 ${data.scanned || 0} 条消息，已匹配 ${data.matched || 0} 条`, "success");
+        showNotification(`历史扫描完成：已扫描 ${data.scanned || 0} 条消息，已添加 ${data.added_tasks || 0} 个下载任务`, "success");
       } else if (data.status === "failed") {
         showNotification(`历史扫描失败：${data.error || "未知错误"}`, "error");
-      } else if (data.status === "running") {
+      } else if (data.status === "starting" || data.status === "running") {
         window.setTimeout(() => void pollHistoryRuleStatus(ruleId), 1000);
       }
     } catch (error) {
@@ -1791,7 +1791,7 @@ export default function Dashboard() {
                         已禁用
                       </span>
                     )}
-                    {rule.mode === "history" && historyRunStates[rule.id]?.status === "running" && (
+                    {rule.mode === "history" && (historyRunStates[rule.id]?.status === "starting" || historyRunStates[rule.id]?.status === "running") && (
                       <span
                         style={{
                           display: "inline-block",
@@ -1803,7 +1803,7 @@ export default function Dashboard() {
                           color: "var(--color-info-strong)",
                         }}
                       >
-                        扫描中 {historyRunStates[rule.id].scanned || 0} 条
+                        扫描中：{historyRunStates[rule.id].scanned || 0} 条消息，{historyRunStates[rule.id].added_tasks || 0} 个任务
                       </span>
                     )}
                   </div>
@@ -1811,13 +1811,13 @@ export default function Dashboard() {
                     {rule.mode === "history" && (
                       <button
                         onClick={() => handleRunHistoryRule(rule)}
-                        disabled={!rule.enabled || !rule.min_message_id || !rule.max_message_id || historyRunStates[rule.id]?.status === "running"}
+                        disabled={!rule.enabled || !rule.min_message_id || !rule.max_message_id || historyRunStates[rule.id]?.status === "starting" || historyRunStates[rule.id]?.status === "running"}
                         title={
                           !rule.enabled
                             ? "规则已禁用"
                             : !rule.min_message_id || !rule.max_message_id
                               ? "请先设置有效的消息 ID 区间"
-                              : historyRunStates[rule.id]?.status === "running"
+                              : historyRunStates[rule.id]?.status === "starting" || historyRunStates[rule.id]?.status === "running"
                                 ? "历史扫描正在运行"
                                 : "立即运行历史下载"
                         }
@@ -1828,11 +1828,11 @@ export default function Dashboard() {
                           color: "var(--color-info-strong)",
                           border: "1px solid var(--color-info)",
                           borderRadius: "6px",
-                          cursor: !rule.enabled || !rule.min_message_id || !rule.max_message_id || historyRunStates[rule.id]?.status === "running" ? "not-allowed" : "pointer",
-                          opacity: !rule.enabled || !rule.min_message_id || !rule.max_message_id || historyRunStates[rule.id]?.status === "running" ? 0.55 : 1,
+                          cursor: !rule.enabled || !rule.min_message_id || !rule.max_message_id || historyRunStates[rule.id]?.status === "starting" || historyRunStates[rule.id]?.status === "running" ? "not-allowed" : "pointer",
+                          opacity: !rule.enabled || !rule.min_message_id || !rule.max_message_id || historyRunStates[rule.id]?.status === "starting" || historyRunStates[rule.id]?.status === "running" ? 0.55 : 1,
                         }}
                       >
-                        {historyRunStates[rule.id]?.status === "running" ? "扫描中" : "立即运行"}
+                        {historyRunStates[rule.id]?.status === "starting" || historyRunStates[rule.id]?.status === "running" ? "扫描中" : "立即运行"}
                       </button>
                     )}
                     <button
@@ -2798,7 +2798,7 @@ export default function Dashboard() {
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.75rem", flexWrap: "wrap" }}>
                       <div>
                         <strong>历史消息范围</strong>
-                        <div style={{ marginTop: "0.25rem", color: "#475569", fontSize: "0.85rem" }}>获取方法：先选择目标群聊，点击“获取消息 ID 范围”自动读取最早和最新消息 ID，再填写起止 ID。</div>
+                        <div style={{ marginTop: "0.25rem", color: "#475569", fontSize: "0.85rem" }}>获取方法：在 Telegram 中长按或右键目标消息，选择“复制消息链接”；链接最后一段数字就是消息 ID。分别复制起始和结束消息的链接，填入对应 ID。</div>
                       </div>
                       <button type="button" onClick={fetchMessageRange} disabled={!formChatId || messageRangeLoading} className="btn-secondary">
                         {messageRangeLoading ? "获取中..." : "获取消息 ID 范围"}

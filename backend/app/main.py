@@ -1694,8 +1694,15 @@ async def start_history_download(rule_id: int) -> dict:
         raise HTTPException(status_code=409, detail="规则已禁用，无法运行历史下载")
     if rule_id in worker._history_tasks and not worker._history_tasks[rule_id].done():
         return {"status": "running", "rule_id": rule_id}
+    worker._history_runs[rule_id] = {
+        "status": "starting",
+        "rule_id": rule_id,
+        "scanned": 0,
+        "added_tasks": 0,
+        "error": None,
+    }
     asyncio.create_task(worker.download_history_for_rule(rule_id))
-    return {"status": "started", "rule_id": rule_id}
+    return {"status": "starting", "rule_id": rule_id}
 
 
 @api.get("/group-rules/{rule_id}/history-download")
