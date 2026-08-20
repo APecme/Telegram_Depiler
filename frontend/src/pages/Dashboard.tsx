@@ -2823,7 +2823,7 @@ export default function Dashboard() {
                     <input
                       type="radio"
                       checked={formMode === "monitor"}
-                      onChange={() => setFormMode("monitor")}
+                      onChange={() => { setFormMode("monitor"); setFormContentType("media"); }}
                     />
                     监控下载（新消息）
                   </label>
@@ -2831,16 +2831,20 @@ export default function Dashboard() {
                     <input
                       type="radio"
                       checked={formMode === "history"}
-                      onChange={() => setFormMode("history")}
+                      onChange={() => { setFormMode("history"); setFormContentType("media"); }}
                     />
                     下载历史文件
+                  </label>
+                  <label style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                    <input type="radio" checked={formMode === "monitor" && formContentType === "message_text"} onChange={() => { setFormMode("monitor"); setFormContentType("message_text"); setFormAddDownloadSuffix(true); }} />
+                    消息文本
                   </label>
                 </div>
               </div>
 
               <div>
                 <label style={{ display: "block", marginBottom: "0.5rem", fontWeight: "500" }}>
-                  文件类型（可选）
+                  {formContentType === "message_text" ? "消息文本预处理" : "文件类型（可选）"}
                 </label>
                 {formMode === "history" && (
                   <div style={{ padding: "0.85rem 1rem", marginBottom: "0.75rem", border: "1px solid #bfdbfe", background: "#eff6ff", borderRadius: "6px" }}>
@@ -2860,7 +2864,7 @@ export default function Dashboard() {
                     </div>
                   </div>
                 )}
-                {formMode === "monitor" && (
+                {false && formMode === "monitor" && (
                   <div style={{ marginBottom: "0.75rem", padding: "0.75rem", border: "1px solid var(--theme-border)", borderRadius: "6px" }}>
                     <label style={{ display: "block", marginBottom: "0.5rem", fontWeight: "500" }}>监控内容</label>
                     <label style={{ marginRight: "1rem" }}><input type="radio" checked={formContentType === "media"} onChange={() => setFormContentType("media")} /> 媒体文件</label>
