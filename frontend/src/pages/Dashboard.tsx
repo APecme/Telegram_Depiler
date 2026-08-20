@@ -208,6 +208,9 @@ export default function Dashboard() {
   const [formTextPreprocess, setFormTextPreprocess] = useState('{"fields":[{"name":"title","start":"标题:","end":"\\n"}],"filename":"{title}/{message_id}","merge_filename":"messages","content":"{text}"}');
   const [formTextFormat, setFormTextFormat] = useState<"txt" | "json">("txt");
   const [formTextMerge, setFormTextMerge] = useState(false);
+  const [formTextTestInput, setFormTextTestInput] = useState("标题: 示例标题\\n正文: 这是一条测试消息");
+  const [formTextTestOutput, setFormTextTestOutput] = useState("");
+  const [formTextTestError, setFormTextTestError] = useState("");
   const [formSizeRange, setFormSizeRange] = useState("0");
   const [formSaveDir, setFormSaveDir] = useState("");
   const [currentBrowsePath, setCurrentBrowsePath] = useState(""); // 当前浏览的路径（用于导航）
@@ -720,6 +723,9 @@ export default function Dashboard() {
     setFormTextPreprocess('{"fields":[{"name":"title","start":"标题:","end":"\\n"}],"filename":"{title}/{message_id}","merge_filename":"messages","content":"{text}"}');
     setFormTextFormat("txt");
     setFormTextMerge(false);
+    setFormTextTestInput("标题: 示例标题\n正文: 这是一条测试消息");
+    setFormTextTestOutput("");
+    setFormTextTestError("");
     setFormSizeRange("0");
     setFormSaveDir("");
     setCurrentBrowsePath("");
@@ -747,6 +753,8 @@ export default function Dashboard() {
     setFormTextPreprocess(rule.text_preprocess || "{}");
     setFormTextFormat(rule.text_format || "txt");
     setFormTextMerge(Boolean(rule.text_merge));
+    setFormTextTestOutput("");
+    setFormTextTestError("");
     setFormSizeRange(rule.size_range || "0");
     setFormSaveDir(rule.save_dir || "");
     const parentPath = rule.save_dir ? rule.save_dir.split("/").slice(0, -1).join("/") : "";
@@ -795,6 +803,45 @@ export default function Dashboard() {
     } catch (error) {
       console.error("Failed to start history download:", error);
       showNotification(`启动历史下载失败：${formatError(error)}`, "error");
+    }
+  };
+
+  const handleTestTextPreprocess = () => {
+    setFormTextTestError("");
+    try {
+      const config = JSON.parse(formTextPreprocess || "{}");
+      const input = formTextTestInput;
+      const extracted: Record<string, string> = { text: input };
+      const extract = (start = "", end = "") => {
+        const startIndex = start ? input.indexOf(start) : -1;
+        if (start && startIndex < 0) return "";
+        const from = start ? input.slice(startIndex + start.length) : input;
+        const endIndex = end ? from.indexOf(end) : -1;
+        return (end && endIndex >= 0 ? from.slice(0, endIndex) : from).replace(/\s+/g, " ").trim();
+      };
+      (Array.isArray(config.fields) ? config.fields : []).forEach((field: any) => {
+        if (field?.name) extracted[String(field.name)] = extract(field.start || field.start_keyword || field.keyword || "", field.end || field.end_keyword || "");
+      });
+      const baseExtract = config.extract && typeof config.extract === "object" ? config.extract : config;
+      extracted.extracted = extract(baseExtract.start || baseExtract.start_keyword || baseExtract.keyword || "", baseExtract.end || baseExtract.end_keyword || "");
+      const variables: Record<string, string> = {
+        ...extracted,
+        message_id: "456", chat_id: "123456", chat_title: "测试群聊", sender_id: "789",
+        sender_name: "测试用户", date: "2026-08-20T12:00:00", timestamp: "1787227200",
+        year: "2026", month: "08", day: "20",
+      };
+      const render = (template: string) => template.replace(/\{([A-Za-z_][A-Za-z0-9_]*)(?::(\d+))?\}/g, (_m: string, key: string, limit?: string) => {
+        const value = variables[key] || "";
+        return limit ? value.slice(0, Math.min(Number(limit), 10000)) : value;
+      });
+      const content = render(String(config.content || "{text}"));
+      const result = formTextFormat === "json"
+        ? JSON.stringify({ variables, ...extracted }, null, 2)
+        : content;
+      setFormTextTestOutput(result);
+    } catch (error) {
+      setFormTextTestOutput("");
+      setFormTextTestError(`JSON 格式错误：${error instanceof Error ? error.message : String(error)}`);
     }
   };
 
@@ -2901,7 +2948,10 @@ export default function Dashboard() {
                       </label>
                     </div>
                     <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 220px", gap: "0.75rem", alignItems: "start" }}>
-                    <textarea value={formTextPreprocess} onChange={(e) => setFormTextPreprocess(e.target.value)} rows={14} style={{ width: "100%", minHeight: "320px", padding: "0.75rem", border: "1px solid var(--theme-border)", borderRadius: "4px", fontFamily: "monospace", boxSizing: "border-box", resize: "vertical" }} />
+                      <div>
+                        <label style={{ display: "block", marginBottom: "0.5rem", fontWeight: "500" }}>预处理 JSON</label>
+                        <textarea value={formTextPreprocess} onChange={(e) => setFormTextPreprocess(e.target.value)} rows={14} style={{ width: "100%", minHeight: "320px", padding: "0.75rem", border: "1px solid var(--theme-border)", borderRadius: "4px", fontFamily: "monospace", boxSizing: "border-box", resize: "vertical" }} />
+                      </div>
                       <div className="text-variable-panel" style={{ border: "1px solid var(--theme-border)", borderRadius: "4px", padding: "0.6rem", fontSize: "0.78rem", lineHeight: 1.6 }}>
                         <strong>可用变量（点击复制）</strong>
                         {[
@@ -2924,6 +2974,18 @@ export default function Dashboard() {
                           </button>
                         ))}
                         <div style={{ marginTop: "0.35rem", color: "var(--theme-muted-text)" }}>可在 filename 和 content 中使用，如 {"{title:40}"}。</div>
+                      </div>
+                    </div>
+                    <div style={{ marginTop: "0.85rem", display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", gap: "0.75rem" }}>
+                      <div>
+                        <label style={{ display: "block", marginBottom: "0.5rem", fontWeight: "500" }}>测试文本</label>
+                        <textarea value={formTextTestInput} onChange={(e) => setFormTextTestInput(e.target.value)} rows={6} style={{ width: "100%", padding: "0.75rem", border: "1px solid var(--theme-border)", borderRadius: "4px", boxSizing: "border-box", resize: "vertical" }} />
+                        <button type="button" onClick={handleTestTextPreprocess} style={{ marginTop: "0.5rem", padding: "0.45rem 0.8rem", border: "1px solid var(--theme-primary)", borderRadius: "4px", background: "var(--theme-primary)", color: "var(--theme-on-primary)", cursor: "pointer" }}>测试预处理 JSON</button>
+                        {formTextTestError && <div style={{ marginTop: "0.5rem", color: "var(--color-danger)", fontSize: "0.85rem" }}>{formTextTestError}</div>}
+                      </div>
+                      <div>
+                        <label style={{ display: "block", marginBottom: "0.5rem", fontWeight: "500" }}>输出预览</label>
+                        <pre style={{ minHeight: "148px", margin: 0, padding: "0.75rem", overflow: "auto", whiteSpace: "pre-wrap", wordBreak: "break-word", border: "1px solid var(--theme-border)", borderRadius: "4px", background: "var(--theme-surface-muted)", fontFamily: "monospace", fontSize: "0.82rem" }}>{formTextTestOutput || "运行测试后显示保存内容"}</pre>
                       </div>
                     </div>
                     <small style={{ display: "block", marginTop: "0.25rem", color: "var(--theme-muted-text)" }}>fields 使用 start/end 或 keyword/end_keyword 提取首尾关键词；filename 可用 {"{title}"}、{"{extracted}"}、{"{message_id}"} 生成文件夹和文件名。</small>
