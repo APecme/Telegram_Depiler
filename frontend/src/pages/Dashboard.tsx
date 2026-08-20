@@ -534,6 +534,9 @@ export default function Dashboard() {
     }
   };
 
+  const toAbsoluteContainerPath = (path: string) =>
+    path.startsWith("/") ? path : `/${path}`;
+
   const handleCreateDirectory = async () => {
     const name = window.prompt("输入新建文件夹名称：");
     if (!name) return;
@@ -542,7 +545,7 @@ export default function Dashboard() {
       const { data } = await api.post("/fs/dirs", { parent_path, name });
       await fetchDirectories(currentBrowsePath);
       if (data.path) {
-        setFormSaveDir(data.path);
+        setFormSaveDir(toAbsoluteContainerPath(data.path));
       }
       showNotification("已创建文件夹", "success");
     } catch (error) {
@@ -562,7 +565,7 @@ export default function Dashboard() {
       const { data } = await api.put("/fs/dirs/rename", { path: formSaveDir, new_name: newName });
       await fetchDirectories(currentBrowsePath);
       if (data.path) {
-        setFormSaveDir(data.path);
+        setFormSaveDir(toAbsoluteContainerPath(data.path));
       }
       showNotification("已重命名文件夹", "success");
     } catch (error) {
@@ -3291,7 +3294,8 @@ export default function Dashboard() {
                         .map((path) => {
                           const pathParts = path.split("/");
                           const displayName = pathParts[pathParts.length - 1];
-                          const isSelected = formSaveDir === path;
+                          const absolutePath = toAbsoluteContainerPath(path);
+                          const isSelected = formSaveDir === absolutePath;
                           return (
                             <div key={path} style={{ display: "flex", gap: "0.25rem" }}>
                               <button
@@ -3322,7 +3326,7 @@ export default function Dashboard() {
                               </button>
                               <button
                                 type="button"
-                                onClick={() => setFormSaveDir(path)}
+                                onClick={() => setFormSaveDir(absolutePath)}
                                 style={{
                                   padding: "0.5rem 0.75rem",
                                   border: `1px solid ${isSelected ? "var(--color-info)" : "var(--theme-border)"}`,

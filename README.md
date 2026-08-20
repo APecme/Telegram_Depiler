@@ -4,7 +4,7 @@
 
 # Telegram Depiler
 
-[![Version](https://img.shields.io/badge/version-1.0.56-blue)](https://github.com/APecme/Telegram_Depiler/releases/tag/v1.0.56)
+[![Version](https://img.shields.io/badge/version-1.0.57-blue)](https://github.com/APecme/Telegram_Depiler/releases/tag/v1.0.57)
 [![Docker Image](https://img.shields.io/docker/v/apecme/telegram-depiler?label=Docker&logo=docker)](https://hub.docker.com/r/apecme/telegram-depiler)
 [![Docker Pulls](https://img.shields.io/docker/pulls/apecme/telegram-depiler)](https://hub.docker.com/r/apecme/telegram-depiler)
 [![GitHub Stars](https://img.shields.io/github/stars/APecme/Telegram_Depiler)](https://github.com/APecme/Telegram_Depiler)
@@ -18,6 +18,7 @@
 ```bash
 docker run -d \
   --name telegram-depiler \
+  --restart unless-stopped \
   -p 8000:8000 \
   -v ~/DPanel-data:/app/data \
   apecme/telegram-depiler:bata
@@ -76,6 +77,7 @@ docker compose up -d --build
 services:
   telegram-depiler:
     container_name: telegram-depiler
+    restart: unless-stopped
     ports:
       - '8000:8000'
     volumes:
@@ -84,7 +86,8 @@ services:
 ```
 
 上述配置使用 Docker Hub 的 `bata` 镜像，Web 地址为 http://localhost:8000。应用数据
-保存在宿主机的 `~/DPanel-data` 目录中；上方的 `docker run` 示例使用相同的镜像、端口和数据卷配置。
+保存在宿主机的 `~/DPanel-data` 目录中；`restart: unless-stopped` 表示 Docker 服务启动后会自动恢复容器，
+除非用户明确停止该容器。上方的 `docker run` 示例使用相同的镜像、端口、数据卷和自动重启配置。
 
 ## 📖 使用指南
 

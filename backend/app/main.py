@@ -74,10 +74,37 @@ _ensure_default_admin()
 def _ensure_inside_download_dir(rel_path: str) -> Path:
     """将相对路径限制在下载目录内，防止目录穿越。"""
     root = Path(settings.download_dir).resolve()
-    target = (root / rel_path).resolve()
+    requested = Path(rel_path)
+    if requested.is_absolute():
+        target = requested.resolve()
+    else:
+        # Directory browser values are relative to the container root, such as
+        # "downloads/txt". Do not add the download root a second time.
+        container_path = (Path("/") / requested).resolve()
+        try:
+            container_path.relative_to(root)
+            target = container_path
+        except ValueError:
+            target = (root / requested).resolve()
     if not str(target).startswith(str(root)):
         raise HTTPException(status_code=400, detail="路径不合法")
     return target
+
+
+def _normalize_rule_save_dir(save_dir: str) -> str:
+    """Normalize a selected directory without duplicating the download root."""
+    requested = Path(save_dir.strip())
+    if requested.is_absolute():
+        return str(requested)
+
+    root = Path(settings.download_dir).resolve()
+    container_path = (Path("/") / requested).resolve()
+    try:
+        container_path.relative_to(root)
+        return str(container_path)
+    except ValueError:
+        # Continue to support manually supplied paths relative to the root.
+        return str(root / requested)
 
 
 def _get_admin_credentials() -> tuple[str, str]:
@@ -1592,10 +1619,7 @@ async def create_group_rule(body: GroupRuleCreate) -> dict:
     
     # 规范化保存路径为绝对路径
     if save_dir:
-        save_path_obj = Path(save_dir)
-        if not save_path_obj.is_absolute():
-            save_path_obj = settings.download_dir / save_path_obj
-        save_dir = str(save_path_obj)
+        save_dir = _normalize_rule_save_dir(save_dir)
     
     rule_id = database.add_group_rule(
         chat_id=body.chat_id,
@@ -1649,10 +1673,7 @@ async def update_group_rule(rule_id: int, body: GroupRuleUpdate) -> dict:
     
     # 规范化保存路径为绝对路径
     if save_dir is not None and save_dir:
-        save_path_obj = Path(save_dir)
-        if not save_path_obj.is_absolute():
-            save_path_obj = settings.download_dir / save_path_obj
-        save_dir = str(save_path_obj)
+        save_dir = _normalize_rule_save_dir(save_dir)
 
     database.update_group_rule(
         rule_id,
