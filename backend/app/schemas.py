@@ -81,6 +81,8 @@ class GroupRuleCreate(BaseModel):
     rule_name: Optional[str] = Field(default=None, description="规则名称（可自定义）")
     mode: Literal["monitor", "history"] = "monitor"
     content_type: Literal["media", "message_text"] = "media"
+    text_format: Literal["txt", "json"] = "txt"
+    text_merge: bool = False
     enabled: bool = True
     text_preprocess: Optional[str] = None
     include_extensions: Optional[str] = None  # 逗号分隔的扩展名，如 mp4,mp3,jpg
@@ -105,6 +107,8 @@ class GroupRuleUpdate(BaseModel):
     rule_name: Optional[str] = None
     mode: Optional[Literal["monitor", "history"]] = None
     content_type: Optional[Literal["media", "message_text"]] = None
+    text_format: Optional[Literal["txt", "json"]] = None
+    text_merge: Optional[bool] = None
     enabled: Optional[bool] = None
     include_extensions: Optional[str] = None
     text_preprocess: Optional[str] = None

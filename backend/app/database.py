@@ -94,6 +94,8 @@ class Database:
                     rule_name TEXT,
                     mode TEXT NOT NULL DEFAULT 'monitor', -- 'monitor' 或 'history'
                     content_type TEXT NOT NULL DEFAULT 'media',
+                    text_format TEXT NOT NULL DEFAULT 'txt',
+                    text_merge BOOLEAN NOT NULL DEFAULT 0,
                     enabled BOOLEAN NOT NULL DEFAULT 1,
                     include_extensions TEXT,
                     text_preprocess TEXT,
@@ -235,6 +237,10 @@ class Database:
                 conn.execute("ALTER TABLE group_download_rules ADD COLUMN content_type TEXT NOT NULL DEFAULT 'media'")
             if not has_column("group_download_rules", "text_preprocess"):
                 conn.execute("ALTER TABLE group_download_rules ADD COLUMN text_preprocess TEXT")
+            if not has_column("group_download_rules", "text_format"):
+                conn.execute("ALTER TABLE group_download_rules ADD COLUMN text_format TEXT NOT NULL DEFAULT 'txt'")
+            if not has_column("group_download_rules", "text_merge"):
+                conn.execute("ALTER TABLE group_download_rules ADD COLUMN text_merge BOOLEAN NOT NULL DEFAULT 0")
 
         conn.commit()
 
@@ -731,6 +737,8 @@ class Database:
         rule_name: str | None = None,
         mode: str = "monitor",
         content_type: str = "media",
+        text_format: str = "txt",
+        text_merge: bool = False,
         enabled: bool = True,
         include_extensions: str | None = None,
         text_preprocess: str | None = None,
@@ -757,14 +765,14 @@ class Database:
             cur = conn.execute(
                 """
                 INSERT INTO group_download_rules (
-                    chat_id, chat_title, rule_name, mode, content_type, enabled,
+                    chat_id, chat_title, rule_name, mode, content_type, text_format, text_merge, enabled,
                     include_extensions, text_preprocess, min_size_bytes, max_size_bytes, size_range, save_dir,
                     filename_template, include_keywords, exclude_keywords,
                     match_mode, start_time, end_time,
                     min_message_id, max_message_id, add_download_suffix, move_after_complete,
                     auto_catch_up, include_comments, last_seen_message_id
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     chat_id,
@@ -772,6 +780,8 @@ class Database:
                     rule_name,
                     mode,
                     content_type,
+                    text_format,
+                    1 if text_merge else 0,
                     1 if enabled else 0,
                     (include_extensions or ""),
                     (text_preprocess or ""),
@@ -805,6 +815,8 @@ class Database:
         rule_name: str | None = None,
         mode: str | None = None,
         content_type: str | None = None,
+        text_format: str | None = None,
+        text_merge: bool | None = None,
         enabled: bool | None = None,
         include_extensions: str | None = None,
         text_preprocess: str | None = None,
@@ -842,6 +854,12 @@ class Database:
         if content_type is not None:
             updates.append("content_type = ?")
             params.append(content_type)
+        if text_format is not None:
+            updates.append("text_format = ?")
+            params.append(text_format)
+        if text_merge is not None:
+            updates.append("text_merge = ?")
+            params.append(1 if text_merge else 0)
         if enabled is not None:
             updates.append("enabled = ?")
             params.append(1 if enabled else 0)

@@ -78,6 +78,8 @@ type GroupRule = {
   content_type?: "media" | "message_text";
   include_extensions?: string;
   text_preprocess?: string;
+  text_format?: "txt" | "json";
+  text_merge?: boolean;
   min_size_bytes?: number;
   max_size_bytes?: number;
   size_range?: string;
@@ -203,7 +205,9 @@ export default function Dashboard() {
   const [messageRange, setMessageRange] = useState<{ oldest_message_id: number | null; latest_message_id: number | null } | null>(null);
   const [messageRangeLoading, setMessageRangeLoading] = useState(false);
   const [formExtensions, setFormExtensions] = useState("mp4,mp3,jpg");
-  const [formTextPreprocess, setFormTextPreprocess] = useState('{"fields":[{"name":"title","start":"标题:","end":"\\n"}],"filename":"{title}/{message_id}.json"}');
+  const [formTextPreprocess, setFormTextPreprocess] = useState('{"fields":[{"name":"title","start":"标题:","end":"\\n"}],"filename":"{title}/{message_id}","merge_filename":"messages","content":"{text}"}');
+  const [formTextFormat, setFormTextFormat] = useState<"txt" | "json">("txt");
+  const [formTextMerge, setFormTextMerge] = useState(false);
   const [formSizeRange, setFormSizeRange] = useState("0");
   const [formSaveDir, setFormSaveDir] = useState("");
   const [currentBrowsePath, setCurrentBrowsePath] = useState(""); // 当前浏览的路径（用于导航）
@@ -713,7 +717,9 @@ export default function Dashboard() {
     setFormMaxMessageId("");
     setMessageRange(null);
     setFormExtensions("mp4,mp3,jpg");
-    setFormTextPreprocess('{"fields":[{"name":"title","start":"标题:","end":"\\n"}],"filename":"{title}/{message_id}.json"}');
+    setFormTextPreprocess('{"fields":[{"name":"title","start":"标题:","end":"\\n"}],"filename":"{title}/{message_id}","merge_filename":"messages","content":"{text}"}');
+    setFormTextFormat("txt");
+    setFormTextMerge(false);
     setFormSizeRange("0");
     setFormSaveDir("");
     setCurrentBrowsePath("");
@@ -739,6 +745,8 @@ export default function Dashboard() {
     setMessageRange(null);
     setFormExtensions(rule.include_extensions || "");
     setFormTextPreprocess(rule.text_preprocess || "{}");
+    setFormTextFormat(rule.text_format || "txt");
+    setFormTextMerge(Boolean(rule.text_merge));
     setFormSizeRange(rule.size_range || "0");
     setFormSaveDir(rule.save_dir || "");
     const parentPath = rule.save_dir ? rule.save_dir.split("/").slice(0, -1).join("/") : "";
@@ -810,6 +818,8 @@ export default function Dashboard() {
       max_message_id: formMode === "history" && formMaxMessageId ? Number(formMaxMessageId) : null,
       include_extensions: formExtensions || null,
       text_preprocess: formContentType === "message_text" ? formTextPreprocess : null,
+      text_format: formTextFormat,
+      text_merge: formTextMerge,
       size_range: formContentType === "message_text" ? "0" : (formSizeRange || "0"),
       save_dir: formSaveDir || null,
       filename_template: formFilenameTemplate || null,
@@ -1929,6 +1939,12 @@ export default function Dashboard() {
                     <span style={{ color: "var(--theme-muted-text)" }}>监控内容：</span>
                     <span style={{ fontWeight: "500" }}>{rule.content_type === "message_text" ? "消息文本" : "媒体文件"}</span>
                   </div>
+                  {rule.content_type === "message_text" && (
+                    <div>
+                      <span style={{ color: "var(--theme-muted-text)" }}>文本保存：</span>
+                      <span style={{ fontWeight: "500" }}>{rule.text_format === "json" ? "JSON" : "TXT"}{rule.text_merge ? " · 合并文件" : " · 每条消息"}</span>
+                    </div>
+                  )}
                   {rule.include_extensions && (
                     <div>
                       <span style={{ color: "var(--theme-muted-text)" }}>文件类型：</span>
@@ -2874,7 +2890,35 @@ export default function Dashboard() {
                 {formContentType === "message_text" ? (
                   <>
                     <label style={{ display: "block", marginBottom: "0.5rem", fontWeight: "500" }}>消息文本预处理 JSON</label>
-                    <textarea value={formTextPreprocess} onChange={(e) => setFormTextPreprocess(e.target.value)} rows={6} style={{ width: "100%", padding: "0.5rem", border: "1px solid var(--theme-border)", borderRadius: "4px", fontFamily: "monospace" }} />
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem", marginBottom: "0.75rem" }}>
+                      <label>保存格式
+                        <select value={formTextFormat} onChange={(e) => setFormTextFormat(e.target.value as "txt" | "json")} style={{ display: "block", width: "100%", padding: "0.5rem", marginTop: "0.25rem" }}>
+                          <option value="txt">TXT 文本</option>
+                          <option value="json">JSON 结构化数据</option>
+                        </select>
+                      </label>
+                      <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", paddingTop: "1.5rem" }}>
+                        <input type="checkbox" checked={formTextMerge} onChange={(e) => setFormTextMerge(e.target.checked)} /> 合并到同一个文件
+                      </label>
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 220px", gap: "0.75rem", alignItems: "start" }}>
+                      <textarea value={formTextPreprocess} onChange={(e) => setFormTextPreprocess(e.target.value)} rows={9} style={{ width: "100%", padding: "0.5rem", border: "1px solid var(--theme-border)", borderRadius: "4px", fontFamily: "monospace", boxSizing: "border-box" }} />
+                      <div style={{ border: "1px solid var(--theme-border)", borderRadius: "4px", padding: "0.6rem", fontSize: "0.78rem", lineHeight: 1.6 }}>
+                        <strong>可用变量</strong>
+                        <div><code>{"{text}"}</code> 原始文本</div>
+                        <div><code>{"{extracted}"}</code> 默认提取值</div>
+                        <div><code>{"{字段名}"}</code> fields 提取值</div>
+                        <div><code>{"{message_id}"}</code> 消息 ID</div>
+                        <div><code>{"{chat_id}"}</code> 群聊 ID</div>
+                        <div><code>{"{chat_title}"}</code> 群聊名称</div>
+                        <div><code>{"{sender_id}"}</code> 发送者 ID</div>
+                        <div><code>{"{sender_name}"}</code> 发送者名称</div>
+                        <div><code>{"{date}"}</code> ISO 时间</div>
+                        <div><code>{"{timestamp}"}</code> Unix 时间</div>
+                        <div><code>{"{year}"}</code> / <code>{"{month}"}</code> / <code>{"{day}"}</code></div>
+                        <div style={{ marginTop: "0.35rem", color: "var(--theme-muted-text)" }}>可在 filename 和 content 中使用，如 {"{title:40}"}。</div>
+                      </div>
+                    </div>
                     <small style={{ display: "block", marginTop: "0.25rem", color: "var(--theme-muted-text)" }}>fields 使用 start/end 或 keyword/end_keyword 提取首尾关键词；filename 可用 {"{title}"}、{"{extracted}"}、{"{message_id}"} 生成文件夹和文件名。</small>
                   </>
                 ) : <input

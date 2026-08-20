@@ -95,6 +95,19 @@ def _preprocess_message_text(message_text: str, config: str | dict | None) -> di
     return result
 
 
+def _render_text_variables(template: str, values: dict[str, Any]) -> str:
+    """Render {variable} and {variable:N} placeholders for text rules."""
+    pattern = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)(?::(\d+))?\}")
+
+    def replace(match: re.Match[str]) -> str:
+        value = str(values.get(match.group(1), ""))
+        if match.group(2):
+            value = value[: min(int(match.group(2)), 10000)]
+        return value
+
+    return pattern.sub(replace, str(template or ""))
+
+
 def _prefer_ipv4_resolution() -> None:
     """Force asyncio sockets to resolve dotted hosts as IPv4.
     
@@ -184,6 +197,7 @@ class TelegramWorker:
         self._client: Optional[TelegramClient] = None
         self._event_handler_added = False
         self._lock = asyncio.Lock()
+        self._text_merge_locks: dict[int, asyncio.Lock] = {}
         self._client_lock = asyncio.Lock()
         self._bot_username: Optional[str] = None
         self._login_context: Optional[LoginContext] = None
@@ -1016,6 +1030,8 @@ class TelegramWorker:
                         download_id, message, rule, chat,
                         str(download.get("file_name") or f"{message.id}.json"),
                         _preprocess_message_text(getattr(message, "message", "") or "", rule.get("text_preprocess")),
+                        text_format=str(rule.get("text_format") or "txt"),
+                        text_merge=bool(rule.get("text_merge", False)),
                     )
                 else:
                     await self._continue_download_from_queue(download_id, message, rule, chat, sender)
@@ -2054,16 +2070,31 @@ class TelegramWorker:
                 config = json.loads(rule.get("text_preprocess") or "{}")
             except (TypeError, ValueError):
                 pass
-            filename_template = str(config.get("filename") or config.get("file_name") or rule.get("filename_template") or "{message_id}.json")
+            text_format = str(rule.get("text_format") or config.get("format") or "txt").lower()
+            if text_format not in {"txt", "json"}:
+                text_format = "txt"
+            text_merge = bool(rule.get("text_merge", False))
+            filename_template = str((config.get("merge_filename") if text_merge else None) or config.get("filename") or config.get("file_name") or rule.get("filename_template") or ("messages" if text_merge else "{message_id}"))
             chat_title = str(getattr(chat, "title", "Unknown") or "Unknown")
-            values = {"message_id": str(message.id), "chat_title": chat_title, **processed}
-            file_name = filename_template
-            for key, value in values.items():
-                file_name = file_name.replace("{" + key + "}", str(value))
+            sender = await message.get_sender() if hasattr(message, "get_sender") else None
+            sender_name = str(getattr(sender, "username", None) or getattr(sender, "first_name", None) or "")
+            message_date = getattr(message, "date", None)
+            variables: dict[str, Any] = {
+                "message_id": message.id, "chat_id": chat.id, "chat_title": chat_title,
+                "sender_id": getattr(sender, "id", ""), "sender_name": sender_name,
+                "timestamp": int(message_date.timestamp()) if message_date else int(time.time()),
+                "date": message_date.isoformat() if message_date else "",
+                "year": message_date.year if message_date else "",
+                "month": f"{message_date.month:02d}" if message_date else "",
+                "day": f"{message_date.day:02d}" if message_date else "",
+                **processed,
+            }
+            file_name = _render_text_variables(filename_template, variables)
             file_name = "/".join(_INVALID_FILENAME_TEXT.sub("_", part).strip(" .") for part in file_name.split("/") if part.strip())
             file_name = file_name.strip("/") or f"{message.id}.json"
-            if not file_name.lower().endswith(".json"):
-                file_name += ".json"
+            extension = ".json" if text_format == "json" else ".txt"
+            if not file_name.lower().endswith(extension):
+                file_name += extension
             download_id = self.database.add_download(
                 message_id=message.id, chat_id=chat.id, bot_username=self._bot_username or "unknown",
                 file_name=file_name, origin_file_name=file_name, status="pending", source="rule",
@@ -2074,7 +2105,7 @@ class TelegramWorker:
                 return
             if not self.queue_manager:
                 self.database.update_download(download_id, status="downloading")
-            await self._write_message_text_download(download_id, message, rule, chat, file_name, processed)
+            await self._write_message_text_download(download_id, message, rule, chat, file_name, processed, variables, text_format, text_merge, config)
         except Exception as exc:
             logger.exception("消息文本保存失败: %s", exc)
             if "download_id" in locals():
@@ -2082,25 +2113,50 @@ class TelegramWorker:
                 if self.queue_manager:
                     await self.queue_manager.on_download_finished(download_id)
 
-    async def _write_message_text_download(self, download_id: int, message: Any, rule: dict, chat: Any, file_name: str, processed: dict[str, str]) -> None:
-        from datetime import datetime
+    async def _write_message_text_download(self, download_id: int, message: Any, rule: dict, chat: Any, file_name: str, processed: dict[str, str], variables: dict[str, Any] | None = None, text_format: str | None = None, text_merge: bool | None = None, config: dict[str, Any] | None = None) -> None:
+        text_format = text_format or str(rule.get("text_format") or "txt")
+        text_merge = bool(rule.get("text_merge", False) if text_merge is None else text_merge)
+        config = config or {}
+        variables = variables or {"message_id": message.id, "chat_id": chat.id, **processed}
         save_dir = rule.get("save_dir") or self.database.get_config("default_download_path") or str(self.settings.download_dir)
         save_path = Path(save_dir)
         if not save_path.is_absolute():
             save_path = self.settings.download_dir / save_path
         target_path = save_path / file_name
         target_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = self._build_internal_tmp_path(file_name) if rule.get("move_after_complete") else target_path
-        tmp_path.parent.mkdir(parents=True, exist_ok=True)
-        in_progress = tmp_path.with_name(tmp_path.name + ".download")
-        self.database.update_download(download_id, status="downloading", file_path=str(target_path), file_name=file_name, save_dir=str(save_path))
-        payload = {"message_id": message.id, "chat_id": chat.id, "published_at": getattr(message, "date", None).isoformat() if getattr(message, "date", None) else None, **processed}
-        in_progress.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        complete_path = tmp_path
-        in_progress.replace(complete_path)
-        if complete_path != target_path:
-            target_path.parent.mkdir(parents=True, exist_ok=True)
-            complete_path.replace(target_path)
+        lock = self._text_merge_locks.setdefault(int(rule.get("id") or 0), asyncio.Lock()) if text_merge else asyncio.Lock()
+        async with lock:
+            tmp_path = target_path if text_merge else (self._build_internal_tmp_path(file_name) if rule.get("move_after_complete") else target_path)
+            tmp_path.parent.mkdir(parents=True, exist_ok=True)
+            in_progress = tmp_path.with_name(tmp_path.name + ".download")
+            self.database.update_download(download_id, status="downloading", file_path=str(target_path), file_name=file_name, save_dir=str(save_path))
+            if text_format == "json":
+                payload: Any = {"message_id": message.id, "chat_id": chat.id, "variables": variables, **processed}
+                if text_merge:
+                    existing: list[Any] = []
+                    if tmp_path.exists():
+                        try:
+                            existing = json.loads(tmp_path.read_text(encoding="utf-8"))
+                        except (OSError, ValueError):
+                            existing = []
+                    if not isinstance(existing, list):
+                        existing = [existing]
+                    existing.append(payload)
+                    content = json.dumps(existing, ensure_ascii=False, indent=2)
+                else:
+                    content = json.dumps(payload, ensure_ascii=False, indent=2)
+            else:
+                template = str(config.get("content") or "{text}")
+                content = _render_text_variables(template, variables)
+                if text_merge and tmp_path.exists():
+                    previous = tmp_path.read_text(encoding="utf-8")
+                    content = previous + ("\n" if previous else "") + content
+            in_progress.write_text(content, encoding="utf-8")
+            complete_path = tmp_path
+            in_progress.replace(complete_path)
+            if complete_path != target_path:
+                target_path.parent.mkdir(parents=True, exist_ok=True)
+                complete_path.replace(target_path)
         self.database.update_download(download_id, status="completed", file_path=str(target_path), progress=100.0, download_speed=0.0)
         if self.queue_manager:
             await self.queue_manager.on_download_finished(download_id)
