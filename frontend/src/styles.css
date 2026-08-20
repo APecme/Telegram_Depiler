@@ -1364,3 +1364,26 @@ button {
   background: #2b3d56;
   box-shadow: inset 0 0 0 1px var(--theme-border);
 }
+.text-variable-panel > button {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  margin-top: 0.35rem;
+  padding: 0.35rem 0.45rem;
+  border: 1px solid var(--theme-border);
+  border-radius: 4px;
+  background: var(--theme-surface-muted);
+  cursor: pointer;
+  text-align: left;
+}
+
+.text-variable-panel > button > span {
+  font-family: monospace;
+  color: var(--theme-primary);
+}
+
+.text-variable-panel > button > small {
+  color: var(--theme-muted-text);
+  font-size: 0.7rem;
+}

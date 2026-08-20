@@ -2838,7 +2838,7 @@ export default function Dashboard() {
                   <label style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
                     <input
                       type="radio"
-                      checked={formMode === "monitor"}
+                      checked={formMode === "monitor" && formContentType === "media"}
                       onChange={() => { setFormMode("monitor"); setFormContentType("media"); }}
                     />
                     监控下载（新消息）
@@ -2852,14 +2852,14 @@ export default function Dashboard() {
                     下载历史文件
                   </label>
                   <label style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                    <input type="radio" checked={formMode === "monitor" && formContentType === "message_text"} onChange={() => { setFormMode("monitor"); setFormContentType("message_text"); setFormAddDownloadSuffix(true); }} />
+                    <input type="radio" checked={formContentType === "message_text"} onChange={() => { setFormMode("monitor"); setFormContentType("message_text"); setFormAddDownloadSuffix(true); }} />
                     消息文本
                   </label>
                 </div>
               </div>
 
               <div>
-                <label style={{ display: "block", marginBottom: "0.5rem", fontWeight: "500" }}>
+                <label style={{ display: formContentType === "message_text" ? "none" : "block", marginBottom: "0.5rem", fontWeight: "500" }}>
                   {formContentType === "message_text" ? "消息文本预处理" : "文件类型（可选）"}
                 </label>
                 {formMode === "history" && (
@@ -2889,7 +2889,6 @@ export default function Dashboard() {
                 )}
                 {formContentType === "message_text" ? (
                   <>
-                    <label style={{ display: "block", marginBottom: "0.5rem", fontWeight: "500" }}>消息文本预处理 JSON</label>
                     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0.75rem", marginBottom: "0.75rem" }}>
                       <label>保存格式
                         <select value={formTextFormat} onChange={(e) => setFormTextFormat(e.target.value as "txt" | "json")} style={{ display: "block", width: "100%", padding: "0.5rem", marginTop: "0.25rem" }}>
@@ -2902,20 +2901,28 @@ export default function Dashboard() {
                       </label>
                     </div>
                     <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 220px", gap: "0.75rem", alignItems: "start" }}>
-                      <textarea value={formTextPreprocess} onChange={(e) => setFormTextPreprocess(e.target.value)} rows={9} style={{ width: "100%", padding: "0.5rem", border: "1px solid var(--theme-border)", borderRadius: "4px", fontFamily: "monospace", boxSizing: "border-box" }} />
-                      <div style={{ border: "1px solid var(--theme-border)", borderRadius: "4px", padding: "0.6rem", fontSize: "0.78rem", lineHeight: 1.6 }}>
-                        <strong>可用变量</strong>
-                        <div><code>{"{text}"}</code> 原始文本</div>
-                        <div><code>{"{extracted}"}</code> 默认提取值</div>
-                        <div><code>{"{字段名}"}</code> fields 提取值</div>
-                        <div><code>{"{message_id}"}</code> 消息 ID</div>
-                        <div><code>{"{chat_id}"}</code> 群聊 ID</div>
-                        <div><code>{"{chat_title}"}</code> 群聊名称</div>
-                        <div><code>{"{sender_id}"}</code> 发送者 ID</div>
-                        <div><code>{"{sender_name}"}</code> 发送者名称</div>
-                        <div><code>{"{date}"}</code> ISO 时间</div>
-                        <div><code>{"{timestamp}"}</code> Unix 时间</div>
-                        <div><code>{"{year}"}</code> / <code>{"{month}"}</code> / <code>{"{day}"}</code></div>
+                    <textarea value={formTextPreprocess} onChange={(e) => setFormTextPreprocess(e.target.value)} rows={14} style={{ width: "100%", minHeight: "320px", padding: "0.75rem", border: "1px solid var(--theme-border)", borderRadius: "4px", fontFamily: "monospace", boxSizing: "border-box", resize: "vertical" }} />
+                      <div className="text-variable-panel" style={{ border: "1px solid var(--theme-border)", borderRadius: "4px", padding: "0.6rem", fontSize: "0.78rem", lineHeight: 1.6 }}>
+                        <strong>可用变量（点击复制）</strong>
+                        {[
+                          { key: "{text}", desc: "原始文本" },
+                          { key: "{extracted}", desc: "默认提取值" },
+                          { key: "{field_name}", desc: "fields 提取值" },
+                          { key: "{message_id}", desc: "消息 ID" },
+                          { key: "{chat_id}", desc: "群聊 ID" },
+                          { key: "{chat_title}", desc: "群聊名称" },
+                          { key: "{sender_id}", desc: "发送者 ID" },
+                          { key: "{sender_name}", desc: "发送者名称" },
+                          { key: "{date}", desc: "ISO 时间" },
+                          { key: "{timestamp}", desc: "Unix 时间" },
+                          { key: "{year}", desc: "年份" },
+                          { key: "{month}", desc: "月份" },
+                          { key: "{day}", desc: "日期" },
+                        ].map((item) => (
+                          <button key={item.key} type="button" onClick={() => navigator.clipboard?.writeText(item.key)} title="点击复制变量">
+                            <span>{item.key}</span><small>{item.desc}</small>
+                          </button>
+                        ))}
                         <div style={{ marginTop: "0.35rem", color: "var(--theme-muted-text)" }}>可在 filename 和 content 中使用，如 {"{title:40}"}。</div>
                       </div>
                     </div>
@@ -3089,7 +3096,7 @@ export default function Dashboard() {
                 </p>
               </div>
 
-              <div>
+              <div hidden={formContentType === "message_text"}>
                 <label style={{ display: "block", marginBottom: "0.5rem", fontWeight: "500" }}>
                   体积范围（MB）
                   <span
@@ -3142,6 +3149,7 @@ export default function Dashboard() {
                   type="text"
                   value={formSizeRange}
                   disabled={formContentType === "message_text"}
+                  hidden={formContentType === "message_text"}
                   onChange={(e) => setFormSizeRange(e.target.value)}
                   placeholder="例如: 0 或 10 或 10-100"
                   style={{ width: "100%", padding: "0.5rem", borderRadius: "4px", border: "1px solid var(--theme-border)" }}
@@ -3398,7 +3406,7 @@ export default function Dashboard() {
                 )}
               </div>
 
-              <div>
+              <div hidden={formContentType === "message_text"}>
                 <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontWeight: "500" }}>
                   <input
                     type="checkbox"
@@ -3412,7 +3420,7 @@ export default function Dashboard() {
                 </small>
               </div>
 
-              <div>
+              <div hidden={formContentType === "message_text"}>
                 <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontWeight: "500" }}>
                   <input
                     type="checkbox"
