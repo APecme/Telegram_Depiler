@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 import socket
@@ -52,6 +53,46 @@ def _render_filename_template(
         return value
 
     return _FILENAME_TEMPLATE_PATTERN.sub(replace, template)
+
+
+def _preprocess_message_text(message_text: str, config: str | dict | None) -> dict[str, str]:
+    """Extract a bounded value from message text using a small JSON rule."""
+    text = str(message_text or "")
+    try:
+        options = json.loads(config) if isinstance(config, str) and config.strip() else (config or {})
+    except (TypeError, ValueError):
+        options = {}
+    if not isinstance(options, dict):
+        options = {}
+    def extract_one(start: str, end: str) -> str:
+        value = text
+        if start:
+            pos = text.find(start)
+            if pos < 0:
+                return ""
+            value = text[pos + len(start):]
+        if value and end:
+            pos = value.find(end)
+            if pos >= 0:
+                value = value[:pos]
+        return " ".join(value.split()).strip()
+
+    result: dict[str, str] = {"text": text}
+    fields = options.get("fields")
+    if isinstance(fields, list):
+        for field in fields:
+            if not isinstance(field, dict) or not field.get("name"):
+                continue
+            result[str(field["name"])] = extract_one(
+                str(field.get("start") or field.get("start_keyword") or field.get("keyword") or ""),
+                str(field.get("end") or field.get("end_keyword") or ""),
+            )
+    extract = options.get("extract") if isinstance(options.get("extract"), dict) else options
+    result["extracted"] = extract_one(
+        str(extract.get("start") or extract.get("start_keyword") or extract.get("keyword") or ""),
+        str(extract.get("end") or extract.get("end_keyword") or ""),
+    )
+    return result
 
 
 def _prefer_ipv4_resolution() -> None:
@@ -970,7 +1011,14 @@ class TelegramWorker:
                 sender = await message.get_sender()
                 
                 # 直接执行下载逻辑，不创建新记录
-                await self._continue_download_from_queue(download_id, message, rule, chat, sender)
+                if rule.get("content_type", "media") == "message_text":
+                    await self._write_message_text_download(
+                        download_id, message, rule, chat,
+                        str(download.get("file_name") or f"{message.id}.json"),
+                        _preprocess_message_text(getattr(message, "message", "") or "", rule.get("text_preprocess")),
+                    )
+                else:
+                    await self._continue_download_from_queue(download_id, message, rule, chat, sender)
                 
             except Exception as e:
                 logger.exception(f"恢复下载任务失败: {e}")
@@ -1412,14 +1460,17 @@ class TelegramWorker:
 
         added_tasks = 0
         for m in messages_to_process:
-            if not (getattr(m, "video", None) or getattr(m, "document", None) or getattr(m, "photo", None) or getattr(m, "audio", None)):
-                continue
+            has_media = bool(getattr(m, "video", None) or getattr(m, "document", None) or getattr(m, "photo", None) or getattr(m, "audio", None))
 
             for rule in rules:
+                is_text_rule = rule.get("content_type", "media") == "message_text"
+                if (is_text_rule and not getattr(m, "message", None)) or (not is_text_rule and not has_media):
+                    continue
                 if not self._message_matches_comment_rule(m, rule):
                     continue
                 if self._should_download_by_rule(m, rule):
-                    task = asyncio.create_task(self._download_file_by_rule(m, rule, chat, sender, media_group_size=len(messages_to_process)))
+                    handler = self._download_message_text_by_rule if is_text_rule else self._download_file_by_rule
+                    task = asyncio.create_task(handler(m, rule, chat, sender, media_group_size=len(messages_to_process)))
                     task.add_done_callback(lambda t: self._cleanup_download_task(t))
                     added_tasks += 1
                     break
@@ -1842,12 +1893,15 @@ class TelegramWorker:
             # 针对待处理的每个媒体消息进行匹配
             any_matched = False
             for msg in messages_to_process:
-                if not (msg.video or msg.document or msg.photo or msg.audio):
-                    continue
+                has_media = bool(msg.video or msg.document or msg.photo or msg.audio)
 
                 logger.debug("  📎 消息包含媒体文件，开始逐条检查规则...")
 
                 for idx, rule in enumerate(rules, 1):
+                    if rule.get("content_type", "media") == "message_text" and not getattr(msg, "message", None):
+                        continue
+                    if rule.get("content_type", "media") != "message_text" and not has_media:
+                        continue
                     logger.debug("\n检查第 %d/%d 条规则...", idx, len(rules))
                     if not self._message_matches_comment_rule(msg, rule):
                         logger.debug("  - 评论/回复检查: 跳过（规则未启用评论下载）")
@@ -1855,7 +1909,8 @@ class TelegramWorker:
                     if self._should_download_by_rule(msg, rule):
                         logger.info("✅ 消息匹配规则 ID:%d，开始下载 (message_id=%s)", rule['id'], getattr(msg, 'id', None))
                         # 创建下载任务并跟踪
-                        task = asyncio.create_task(self._download_file_by_rule(msg, rule, chat, sender, media_group_size=len(messages_to_process)))
+                        handler = self._download_message_text_by_rule if rule.get("content_type", "media") == "message_text" else self._download_file_by_rule
+                        task = asyncio.create_task(handler(msg, rule, chat, sender, media_group_size=len(messages_to_process)))
                         # 任务完成后清理
                         task.add_done_callback(lambda t: self._cleanup_download_task(t))
                         any_matched = True
@@ -1870,6 +1925,20 @@ class TelegramWorker:
     def _should_download_by_rule(self, message: Any, rule: dict) -> bool:
         """检查消息是否符合下载规则"""
         try:
+            if rule.get("content_type", "media") == "message_text":
+                message_text = str(getattr(message, "message", "") or "")
+                if not message_text.strip():
+                    return False
+                match_mode = rule.get("match_mode", "all")
+                if match_mode == "include":
+                    keywords = [k.strip().lower() for k in str(rule.get("include_keywords") or "").split(",") if k.strip()]
+                    if keywords and not any(k in message_text.lower() for k in keywords):
+                        return False
+                elif match_mode == "exclude":
+                    keywords = [k.strip().lower() for k in str(rule.get("exclude_keywords") or "").split(",") if k.strip()]
+                    if any(k in message_text.lower() for k in keywords):
+                        return False
+                return True
             rule_id = rule.get('id', 'Unknown')
             logger.info("=" * 60)
             logger.info("开始检查规则 ID:%s", rule_id)
@@ -1974,6 +2043,68 @@ class TelegramWorker:
             logger.exception("检查规则时出错: %s", e)
             return False
     
+    async def _download_message_text_by_rule(self, message: Any, rule: dict, chat: Any, sender: Any, media_group_size: int = 1) -> None:
+        """Persist a monitored message as JSON, using the same queue lifecycle as media."""
+        try:
+            from datetime import datetime
+            import time
+            processed = _preprocess_message_text(getattr(message, "message", "") or "", rule.get("text_preprocess"))
+            config = {}
+            try:
+                config = json.loads(rule.get("text_preprocess") or "{}")
+            except (TypeError, ValueError):
+                pass
+            filename_template = str(config.get("filename") or config.get("file_name") or rule.get("filename_template") or "{message_id}.json")
+            chat_title = str(getattr(chat, "title", "Unknown") or "Unknown")
+            values = {"message_id": str(message.id), "chat_title": chat_title, **processed}
+            file_name = filename_template
+            for key, value in values.items():
+                file_name = file_name.replace("{" + key + "}", str(value))
+            file_name = "/".join(_INVALID_FILENAME_TEXT.sub("_", part).strip(" .") for part in file_name.split("/") if part.strip())
+            file_name = file_name.strip("/") or f"{message.id}.json"
+            if not file_name.lower().endswith(".json"):
+                file_name += ".json"
+            download_id = self.database.add_download(
+                message_id=message.id, chat_id=chat.id, bot_username=self._bot_username or "unknown",
+                file_name=file_name, origin_file_name=file_name, status="pending", source="rule",
+                file_size=0, save_dir=rule.get("save_dir") or "", rule_id=rule.get("id"),
+                rule_name=rule.get("rule_name") or rule.get("chat_title"),
+            )
+            if self.queue_manager and not await self.queue_manager.try_start_download(download_id):
+                return
+            if not self.queue_manager:
+                self.database.update_download(download_id, status="downloading")
+            await self._write_message_text_download(download_id, message, rule, chat, file_name, processed)
+        except Exception as exc:
+            logger.exception("消息文本保存失败: %s", exc)
+            if "download_id" in locals():
+                self.database.update_download(download_id, status="failed", error=str(exc))
+                if self.queue_manager:
+                    await self.queue_manager.on_download_finished(download_id)
+
+    async def _write_message_text_download(self, download_id: int, message: Any, rule: dict, chat: Any, file_name: str, processed: dict[str, str]) -> None:
+        from datetime import datetime
+        save_dir = rule.get("save_dir") or self.database.get_config("default_download_path") or str(self.settings.download_dir)
+        save_path = Path(save_dir)
+        if not save_path.is_absolute():
+            save_path = self.settings.download_dir / save_path
+        target_path = save_path / file_name
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = self._build_internal_tmp_path(file_name) if rule.get("move_after_complete") else target_path
+        tmp_path.parent.mkdir(parents=True, exist_ok=True)
+        in_progress = tmp_path.with_name(tmp_path.name + ".download")
+        self.database.update_download(download_id, status="downloading", file_path=str(target_path), file_name=file_name, save_dir=str(save_path))
+        payload = {"message_id": message.id, "chat_id": chat.id, "published_at": getattr(message, "date", None).isoformat() if getattr(message, "date", None) else None, **processed}
+        in_progress.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        complete_path = tmp_path
+        in_progress.replace(complete_path)
+        if complete_path != target_path:
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            complete_path.replace(target_path)
+        self.database.update_download(download_id, status="completed", file_path=str(target_path), progress=100.0, download_speed=0.0)
+        if self.queue_manager:
+            await self.queue_manager.on_download_finished(download_id)
+
     async def _download_file_by_rule(self, message: Any, rule: dict, chat: Any, sender: Any, media_group_size: int = 1) -> None:
         """按规则下载文件"""
         try:

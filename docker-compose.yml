@@ -1,13 +1,8 @@
 services:
-  app:
-    image: apecme/telegram-depiler:latest
+  telegram-depiler:
     container_name: telegram-depiler
-    volumes:
-      - ./downloads:/app/downloads  # 下载文件存储
-      - ./data:/app/data            # 配置和数据库
     ports:
-      - "8000:8000"                 # 宿主机端口:容器端口
-    network_mode: bridge
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    restart: unless-stopped
+      - '8000:8000'
+    volumes:
+      - ~/DPanel-data:/app/data
+    image: apecme/telegram-depiler:bata

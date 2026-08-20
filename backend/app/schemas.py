@@ -80,7 +80,9 @@ class GroupRuleCreate(BaseModel):
     chat_title: Optional[str] = None
     rule_name: Optional[str] = Field(default=None, description="规则名称（可自定义）")
     mode: Literal["monitor", "history"] = "monitor"
+    content_type: Literal["media", "message_text"] = "media"
     enabled: bool = True
+    text_preprocess: Optional[str] = None
     include_extensions: Optional[str] = None  # 逗号分隔的扩展名，如 mp4,mp3,jpg
     size_range: Optional[str] = "0"  # 体积范围，格式: "0" / "10" / "10-100"
     save_dir: Optional[str] = None  # 保存目录
@@ -102,8 +104,10 @@ class GroupRuleUpdate(BaseModel):
     chat_title: Optional[str] = None
     rule_name: Optional[str] = None
     mode: Optional[Literal["monitor", "history"]] = None
+    content_type: Optional[Literal["media", "message_text"]] = None
     enabled: Optional[bool] = None
     include_extensions: Optional[str] = None
+    text_preprocess: Optional[str] = None
     size_range: Optional[str] = None  # 体积范围，格式: "0" / "10" / "10-100"
     save_dir: Optional[str] = None
     filename_template: Optional[str] = None

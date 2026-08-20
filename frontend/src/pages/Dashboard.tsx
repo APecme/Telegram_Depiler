@@ -75,7 +75,9 @@ type GroupRule = {
   chat_title?: string;
   rule_name?: string;
   mode: string;
+  content_type?: "media" | "message_text";
   include_extensions?: string;
+  text_preprocess?: string;
   min_size_bytes?: number;
   max_size_bytes?: number;
   size_range?: string;
@@ -195,11 +197,13 @@ export default function Dashboard() {
   const [formChatId, setFormChatId] = useState<number | "">("");
   const [formRuleName, setFormRuleName] = useState("");
   const [formMode, setFormMode] = useState<"monitor" | "history">("monitor");
+  const [formContentType, setFormContentType] = useState<"media" | "message_text">("media");
   const [formMinMessageId, setFormMinMessageId] = useState("");
   const [formMaxMessageId, setFormMaxMessageId] = useState("");
   const [messageRange, setMessageRange] = useState<{ oldest_message_id: number | null; latest_message_id: number | null } | null>(null);
   const [messageRangeLoading, setMessageRangeLoading] = useState(false);
   const [formExtensions, setFormExtensions] = useState("mp4,mp3,jpg");
+  const [formTextPreprocess, setFormTextPreprocess] = useState('{"fields":[{"name":"title","start":"标题:","end":"\\n"}],"filename":"{title}/{message_id}.json"}');
   const [formSizeRange, setFormSizeRange] = useState("0");
   const [formSaveDir, setFormSaveDir] = useState("");
   const [currentBrowsePath, setCurrentBrowsePath] = useState(""); // 当前浏览的路径（用于导航）
@@ -704,10 +708,12 @@ export default function Dashboard() {
     setFormChatId("");
     setFormRuleName("");
     setFormMode("monitor");
+    setFormContentType("media");
     setFormMinMessageId("");
     setFormMaxMessageId("");
     setMessageRange(null);
     setFormExtensions("mp4,mp3,jpg");
+    setFormTextPreprocess('{"fields":[{"name":"title","start":"标题:","end":"\\n"}],"filename":"{title}/{message_id}.json"}');
     setFormSizeRange("0");
     setFormSaveDir("");
     setCurrentBrowsePath("");
@@ -715,6 +721,7 @@ export default function Dashboard() {
     setFormMatchMode("all");
     setFormIncludeKeywords("");
     setFormExcludeKeywords("");
+    setFormAddDownloadSuffix(false);
     setFormMoveAfterComplete(false);
     setFormAutoCatchUp(false);
     setFormIncludeComments(false);
@@ -726,10 +733,12 @@ export default function Dashboard() {
     setFormChatId(rule.chat_id);
     setFormRuleName(rule.rule_name || rule.chat_title || "");
     setFormMode(rule.mode as "monitor" | "history");
+    setFormContentType(rule.content_type || "media");
     setFormMinMessageId(rule.min_message_id ? String(rule.min_message_id) : "");
     setFormMaxMessageId(rule.max_message_id ? String(rule.max_message_id) : "");
     setMessageRange(null);
     setFormExtensions(rule.include_extensions || "");
+    setFormTextPreprocess(rule.text_preprocess || "{}");
     setFormSizeRange(rule.size_range || "0");
     setFormSaveDir(rule.save_dir || "");
     const parentPath = rule.save_dir ? rule.save_dir.split("/").slice(0, -1).join("/") : "";
@@ -796,17 +805,19 @@ export default function Dashboard() {
       chat_title: chatTitle,
       rule_name: normalizedRuleName,
       mode: formMode,
+      content_type: formContentType,
       min_message_id: formMode === "history" && formMinMessageId ? Number(formMinMessageId) : null,
       max_message_id: formMode === "history" && formMaxMessageId ? Number(formMaxMessageId) : null,
       include_extensions: formExtensions || null,
-      size_range: formSizeRange || "0",
+      text_preprocess: formContentType === "message_text" ? formTextPreprocess : null,
+      size_range: formContentType === "message_text" ? "0" : (formSizeRange || "0"),
       save_dir: formSaveDir || null,
       filename_template: formFilenameTemplate || null,
       match_mode: formMatchMode,
       include_keywords: formMatchMode === "include" ? formIncludeKeywords : null,
       exclude_keywords: formMatchMode === "exclude" ? formExcludeKeywords : null,
       enabled: true,
-      add_download_suffix: formAddDownloadSuffix,
+      add_download_suffix: formContentType === "message_text" ? true : formAddDownloadSuffix,
       move_after_complete: formMoveAfterComplete,
       auto_catch_up: formAutoCatchUp,
       include_comments: formIncludeComments,
@@ -1914,6 +1925,10 @@ export default function Dashboard() {
                   </div>
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "0.5rem", fontSize: "0.85rem" }}>
+                  <div>
+                    <span style={{ color: "var(--theme-muted-text)" }}>监控内容：</span>
+                    <span style={{ fontWeight: "500" }}>{rule.content_type === "message_text" ? "消息文本" : "媒体文件"}</span>
+                  </div>
                   {rule.include_extensions && (
                     <div>
                       <span style={{ color: "var(--theme-muted-text)" }}>文件类型：</span>
@@ -2845,7 +2860,20 @@ export default function Dashboard() {
                     </div>
                   </div>
                 )}
-                <input
+                {formMode === "monitor" && (
+                  <div style={{ marginBottom: "0.75rem", padding: "0.75rem", border: "1px solid var(--theme-border)", borderRadius: "6px" }}>
+                    <label style={{ display: "block", marginBottom: "0.5rem", fontWeight: "500" }}>监控内容</label>
+                    <label style={{ marginRight: "1rem" }}><input type="radio" checked={formContentType === "media"} onChange={() => setFormContentType("media")} /> 媒体文件</label>
+                    <label><input type="radio" checked={formContentType === "message_text"} onChange={() => { setFormContentType("message_text"); setFormAddDownloadSuffix(true); }} /> 消息文本</label>
+                  </div>
+                )}
+                {formContentType === "message_text" ? (
+                  <>
+                    <label style={{ display: "block", marginBottom: "0.5rem", fontWeight: "500" }}>消息文本预处理 JSON</label>
+                    <textarea value={formTextPreprocess} onChange={(e) => setFormTextPreprocess(e.target.value)} rows={6} style={{ width: "100%", padding: "0.5rem", border: "1px solid var(--theme-border)", borderRadius: "4px", fontFamily: "monospace" }} />
+                    <small style={{ display: "block", marginTop: "0.25rem", color: "var(--theme-muted-text)" }}>fields 使用 start/end 或 keyword/end_keyword 提取首尾关键词；filename 可用 {"{title}"}、{"{extracted}"}、{"{message_id}"} 生成文件夹和文件名。</small>
+                  </>
+                ) : <input
                   type="text"
                   value={formExtensions}
                   onChange={(e) => setFormExtensions(e.target.value)}
@@ -2857,8 +2885,8 @@ export default function Dashboard() {
                     borderRadius: "4px",
                     fontSize: "0.9rem"
                   }}
-                />
-                <div style={{ marginTop: "0.5rem", display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+                />}
+                <div style={{ marginTop: "0.5rem", display: formContentType === "media" ? "flex" : "none", gap: "0.5rem", flexWrap: "wrap" }}>
                   <button
                     type="button"
                     onClick={() => {
@@ -3008,7 +3036,7 @@ export default function Dashboard() {
                     清空
                   </button>
                 </div>
-                <p style={{ fontSize: "0.8rem", color: "var(--theme-muted-text)", marginTop: "0.5rem" }}>
+                <p style={{ display: formContentType === "media" ? "block" : "none", fontSize: "0.8rem", color: "var(--theme-muted-text)", marginTop: "0.5rem" }}>
                   输入文件扩展名，多个用逗号分隔（例如：mp4,mp3,jpg）。留空则下载所有类型文件。点击上方按钮可快速添加常用扩展名。
                 </p>
               </div>
@@ -3065,6 +3093,7 @@ export default function Dashboard() {
                 <input
                   type="text"
                   value={formSizeRange}
+                  disabled={formContentType === "message_text"}
                   onChange={(e) => setFormSizeRange(e.target.value)}
                   placeholder="例如: 0 或 10 或 10-100"
                   style={{ width: "100%", padding: "0.5rem", borderRadius: "4px", border: "1px solid var(--theme-border)" }}

@@ -93,8 +93,10 @@ class Database:
                     chat_title TEXT,
                     rule_name TEXT,
                     mode TEXT NOT NULL DEFAULT 'monitor', -- 'monitor' 或 'history'
+                    content_type TEXT NOT NULL DEFAULT 'media',
                     enabled BOOLEAN NOT NULL DEFAULT 1,
                     include_extensions TEXT,
+                    text_preprocess TEXT,
                     min_size_bytes INTEGER DEFAULT 0,
                     max_size_bytes INTEGER DEFAULT 0,
                     size_range TEXT DEFAULT '0',
@@ -229,6 +231,10 @@ class Database:
                 conn.execute("ALTER TABLE group_download_rules ADD COLUMN include_comments BOOLEAN DEFAULT 0")
             if not has_column("group_download_rules", "last_seen_message_id"):
                 conn.execute("ALTER TABLE group_download_rules ADD COLUMN last_seen_message_id INTEGER DEFAULT 0")
+            if not has_column("group_download_rules", "content_type"):
+                conn.execute("ALTER TABLE group_download_rules ADD COLUMN content_type TEXT NOT NULL DEFAULT 'media'")
+            if not has_column("group_download_rules", "text_preprocess"):
+                conn.execute("ALTER TABLE group_download_rules ADD COLUMN text_preprocess TEXT")
 
         conn.commit()
 
@@ -724,8 +730,10 @@ class Database:
         chat_title: str | None = None,
         rule_name: str | None = None,
         mode: str = "monitor",
+        content_type: str = "media",
         enabled: bool = True,
         include_extensions: str | None = None,
+        text_preprocess: str | None = None,
         min_size_bytes: int = 0,
         max_size_bytes: int = 0,
         size_range: str = "0",
@@ -749,22 +757,24 @@ class Database:
             cur = conn.execute(
                 """
                 INSERT INTO group_download_rules (
-                    chat_id, chat_title, rule_name, mode, enabled,
-                    include_extensions, min_size_bytes, max_size_bytes, size_range, save_dir,
+                    chat_id, chat_title, rule_name, mode, content_type, enabled,
+                    include_extensions, text_preprocess, min_size_bytes, max_size_bytes, size_range, save_dir,
                     filename_template, include_keywords, exclude_keywords,
                     match_mode, start_time, end_time,
                     min_message_id, max_message_id, add_download_suffix, move_after_complete,
                     auto_catch_up, include_comments, last_seen_message_id
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     chat_id,
                     chat_title,
                     rule_name,
                     mode,
+                    content_type,
                     1 if enabled else 0,
                     (include_extensions or ""),
+                    (text_preprocess or ""),
                     int(min_size_bytes or 0),
                     int(max_size_bytes or 0),
                     (size_range or "0"),
@@ -794,8 +804,10 @@ class Database:
         chat_title: str | None = None,
         rule_name: str | None = None,
         mode: str | None = None,
+        content_type: str | None = None,
         enabled: bool | None = None,
         include_extensions: str | None = None,
+        text_preprocess: str | None = None,
         min_size_bytes: int | None = None,
         max_size_bytes: int | None = None,
         size_range: str | None = None,
@@ -827,12 +839,18 @@ class Database:
         if mode is not None:
             updates.append("mode = ?")
             params.append(mode)
+        if content_type is not None:
+            updates.append("content_type = ?")
+            params.append(content_type)
         if enabled is not None:
             updates.append("enabled = ?")
             params.append(1 if enabled else 0)
         if include_extensions is not None:
             updates.append("include_extensions = ?")
             params.append(include_extensions)
+        if text_preprocess is not None:
+            updates.append("text_preprocess = ?")
+            params.append(text_preprocess)
         if min_size_bytes is not None:
             updates.append("min_size_bytes = ?")
             params.append(int(min_size_bytes))

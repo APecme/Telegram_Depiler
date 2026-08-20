@@ -19,11 +19,8 @@
 docker run -d \
   --name telegram-depiler \
   -p 8000:8000 \
-  -v ./data:/app/data \
-  -v ./downloads:/app/downloads \
-  --add-host=host.docker.internal:host-gateway \
-  --restart unless-stopped \
-  apecme/telegram-depiler:latest
+  -v ~/DPanel-data:/app/data \
+  apecme/telegram-depiler:bata
 ```
 
 访问 http://localhost:8000 开始使用
@@ -77,24 +74,17 @@ docker compose up -d --build
 
 ```yaml
 services:
-  app:
-    image: apecme/telegram-depiler:latest
+  telegram-depiler:
     container_name: telegram-depiler
-    volumes:
-      - ./downloads:/app/downloads  # 下载文件存储
-      - ./data:/app/data            # 配置和数据库
     ports:
-      - "8000:8000"                 # 宿主机端口:容器端口
-    network_mode: bridge
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    restart: unless-stopped
+      - '8000:8000'
+    volumes:
+      - ~/DPanel-data:/app/data
+    image: apecme/telegram-depiler:bata
 ```
 
-上述配置对应 Docker Hub 镜像部署，Web 地址为 http://localhost:8000。仓库中的
-`docker-compose.yml` 用于从源码构建，默认端口映射为 `8001:8000`，Web 地址为
-http://localhost:8001。两个配置均将宿主机的 `./downloads` 挂载到容器内的
-`/app/downloads`，请勿改为 `/downloads`，否则设置页面中的默认下载路径与挂载目录不一致。
+上述配置使用 Docker Hub 的 `bata` 镜像，Web 地址为 http://localhost:8000。应用数据
+保存在宿主机的 `~/DPanel-data` 目录中；上方的 `docker run` 示例使用相同的镜像、端口和数据卷配置。
 
 ## 📖 使用指南
 
