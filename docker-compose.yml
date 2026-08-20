@@ -6,4 +6,4 @@ services:
       - '8000:8000'
     volumes:
       - ~/DPanel-data:/app/data
-    image: apecme/telegram-depiler:bata
+    image: apecme/telegram-depiler:latest

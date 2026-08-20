@@ -21,7 +21,7 @@ docker run -d \
   --restart unless-stopped \
   -p 8000:8000 \
   -v ~/DPanel-data:/app/data \
-  apecme/telegram-depiler:bata
+  apecme/telegram-depiler:latest
 ```
 
 访问 http://localhost:8000 开始使用
@@ -82,10 +82,10 @@ services:
       - '8000:8000'
     volumes:
       - ~/DPanel-data:/app/data
-    image: apecme/telegram-depiler:bata
+    image: apecme/telegram-depiler:latest
 ```
 
-上述配置使用 Docker Hub 的 `bata` 镜像，Web 地址为 http://localhost:8000。应用数据
+上述配置使用 Docker Hub 的 `latest` 镜像，Web 地址为 http://localhost:8000。应用数据
 保存在宿主机的 `~/DPanel-data` 目录中；`restart: unless-stopped` 表示 Docker 服务启动后会自动恢复容器，
 除非用户明确停止该容器。上方的 `docker run` 示例使用相同的镜像、端口、数据卷和自动重启配置。
 
