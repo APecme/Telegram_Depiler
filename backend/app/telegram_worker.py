@@ -174,6 +174,7 @@ from telethon.errors import (
     PhoneNumberInvalidError,
     PasswordHashInvalidError,
     SendCodeUnavailableError,
+    RPCError,
 )
 from telethon.tl.types import User
 
@@ -244,6 +245,21 @@ class TelegramWorker:
         self._linked_channel_cache[chat_id] = (now, linked_channel_id)
         return linked_channel_id
 
+    async def _get_linked_discussion_id_for_channel(self, chat: Any) -> Optional[int]:
+        """Return the linked discussion megagroup for a broadcast channel."""
+        if getattr(chat, "megagroup", False):
+            return None
+        chat_id = int(getattr(chat, "id", 0) or 0)
+        if chat_id <= 0 or self._client is None:
+            return None
+        try:
+            full_chat = await self._client(functions.channels.GetFullChannelRequest(channel=chat))
+            linked_chat_id = getattr(full_chat.full_chat, "linked_chat_id", None)
+            return int(linked_chat_id) if linked_chat_id else None
+        except Exception as exc:
+            logger.debug("获取频道关联讨论组失败 (chat_id=%s): %s", chat_id, exc)
+            return None
+
     async def _get_monitor_rules_for_chat(
         self,
         chat: Any,
@@ -288,7 +304,9 @@ class TelegramWorker:
     def _message_matches_comment_rule(self, message: Any, rule: dict[str, Any]) -> bool:
         include_comments = bool(rule.get("include_comments", False))
         reply_to = getattr(message, "reply_to", None)
-        is_comment_like = reply_to is not None
+        # Telethon normally exposes MessageReplyHeader as ``reply_to``;
+        # support raw update/message shims that expose only the top-level ID.
+        is_comment_like = reply_to is not None or getattr(message, "reply_to_top_id", None) is not None
         return include_comments or not is_comment_like
 
     def _build_internal_tmp_path(self, file_name: str) -> Path:
@@ -545,7 +563,7 @@ class TelegramWorker:
         *,
         file: Path,
         progress_callback: Optional[Callable[[int, int], None]] = None,
-        max_attempts: int = 3,
+        max_attempts: int = 5,
     ) -> Any:
         last_error: Optional[Exception] = None
 
@@ -566,7 +584,14 @@ class TelegramWorker:
                 return result
             except asyncio.CancelledError:
                 raise
-            except (ConnectionError, OSError, asyncio.TimeoutError, RuntimeError) as exc:
+            except FloodWaitError as exc:
+                last_error = exc
+                if attempt >= max_attempts:
+                    break
+                wait_seconds = max(int(getattr(exc, "seconds", 0) or 0), 1) + 1
+                logger.warning("Telegram download hit FloodWait for %ss, retrying %d/%d", wait_seconds, attempt, max_attempts)
+                await asyncio.sleep(wait_seconds)
+            except (ConnectionError, OSError, asyncio.TimeoutError, RuntimeError, RPCError) as exc:
                 last_error = exc
                 if attempt >= max_attempts:
                     logger.error(
@@ -1006,6 +1031,8 @@ class TelegramWorker:
             if not rule or not rule.get("enabled"):
                 logger.warning(f"恢复下载任务失败：找不到群聊规则 {chat_id}")
                 self.database.update_download(download_id, status="failed", error="找不到群聊规则")
+                if self.queue_manager:
+                    await self.queue_manager.on_download_finished(download_id)
                 return
             
             # 获取客户端
@@ -1019,6 +1046,8 @@ class TelegramWorker:
                 if not message:
                     logger.warning(f"恢复下载任务失败：找不到消息 {message_id}")
                     self.database.update_download(download_id, status="failed", error="找不到消息")
+                    if self.queue_manager:
+                        await self.queue_manager.on_download_finished(download_id)
                     return
                 
                 # 获取发送者信息
@@ -1039,6 +1068,8 @@ class TelegramWorker:
             except Exception as e:
                 logger.exception(f"恢复下载任务失败: {e}")
                 self.database.update_download(download_id, status="failed", error=str(e))
+                if self.queue_manager:
+                    await self.queue_manager.on_download_finished(download_id)
                 
         except Exception as e:
             logger.exception(f"恢复队列下载任务失败: {e}")
@@ -1265,6 +1296,62 @@ class TelegramWorker:
                 continue
             by_chat[int(chat_id)].append(r)
 
+        async def scan_messages(
+            chat: Any,
+            scan_rules: list[dict[str, Any]],
+            last_seen: int,
+            rule_ids: list[int],
+            *,
+            comment_cursor: bool = False,
+        ) -> None:
+            if not rule_ids:
+                return
+            if last_seen <= 0:
+                try:
+                    latest = await client.get_messages(chat, limit=1)
+                    latest_id = int(latest[0].id) if latest else 0
+                    if latest_id > 0:
+                        if comment_cursor:
+                            self.database.update_group_rules_last_seen_comment_message_id(rule_ids, latest_id)
+                        else:
+                            self.database.update_group_rules_last_seen_message_id(rule_ids, latest_id)
+                except Exception as exc:
+                    logger.debug("初始化遗漏回补游标失败 (chat_id=%s): %s", getattr(chat, "id", None), exc)
+                return
+
+            scanned = 0
+            seen_grouped_ids: set[int] = set()
+            async for msg in client.iter_messages(chat, min_id=last_seen, reverse=True):
+                if not msg:
+                    continue
+                if comment_cursor and getattr(msg, "reply_to", None) is None:
+                    # Linked discussion groups also contain root/forwarded posts;
+                    # only replies belong to an include_comments rule.
+                    if getattr(msg, "id", None):
+                        self.database.update_group_rules_last_seen_comment_message_id(rule_ids, int(msg.id))
+                    continue
+
+                try:
+                    sender = await msg.get_sender()
+                except Exception:
+                    sender = None
+                last_id = await self._apply_monitor_rules_to_message(
+                    msg=msg,
+                    chat=chat,
+                    sender=sender,
+                    rules=scan_rules,
+                    seen_grouped_ids=seen_grouped_ids,
+                )
+                if last_id > 0:
+                    if comment_cursor:
+                        self.database.update_group_rules_last_seen_comment_message_id(rule_ids, last_id)
+                    else:
+                        self.database.update_group_rules_last_seen_message_id(rule_ids, last_id)
+                scanned += 1
+                if scanned >= 5000:
+                    logger.warning("遗漏回补已达上限，后续消息将留到下次启动处理 (chat_id=%s)", getattr(chat, "id", None))
+                    break
+
         for chat_id, chat_rules in by_chat.items():
             try:
                 chat = await client.get_entity(chat_id)
@@ -1277,48 +1364,25 @@ class TelegramWorker:
                 continue
 
             last_seen = min(int(r.get("last_seen_message_id") or 0) for r in chat_rules)
-            if last_seen <= 0:
-                try:
-                    latest = await client.get_messages(chat, limit=1)
-                    latest_id = int(latest[0].id) if latest else 0
-                    if latest_id > 0:
-                        self.database.update_group_rules_last_seen_message_id(rule_ids, latest_id)
-                except Exception:
-                    pass
+            await scan_messages(chat, chat_rules, last_seen, rule_ids)
+
+            # A channel's comments live in its linked megagroup and have a
+            # separate message-ID sequence. Keep a separate cursor so scanning
+            # comments never advances the channel cursor (or skips future posts).
+            comment_rules = [r for r in chat_rules if r.get("include_comments")]
+            if not comment_rules or getattr(chat, "megagroup", False):
                 continue
-
-            scanned = 0
-            max_scan = 5000
-            seen_grouped_ids: set[int] = set()
-            async for msg in client.iter_messages(chat, min_id=last_seen, reverse=True):
-                if not msg:
-                    continue
-
-                grouped_id = getattr(msg, "grouped_id", None)
-                if grouped_id and grouped_id in seen_grouped_ids:
-                    if getattr(msg, "id", None):
-                        self.database.update_group_rules_last_seen_message_id(rule_ids, int(msg.id))
-                    continue
-
-                try:
-                    sender = await msg.get_sender()
-                except Exception:
-                    sender = None
-
-                last_id = await self._apply_monitor_rules_to_message(
-                    msg=msg,
-                    chat=chat,
-                    sender=sender,
-                    rules=chat_rules,
-                    seen_grouped_ids=seen_grouped_ids,
-                )
-                if last_id > 0:
-                    self.database.update_group_rules_last_seen_message_id(rule_ids, last_id)
-
-                scanned += 1
-                if scanned >= max_scan:
-                    logger.warning("遗漏回补已达上限，后续消息将留到下次启动处理 (chat_id=%s)", chat_id)
-                    break
+            linked_chat_id = await self._get_linked_discussion_id_for_channel(chat)
+            if not linked_chat_id:
+                continue
+            try:
+                discussion = await client.get_entity(int(linked_chat_id))
+            except Exception as exc:
+                logger.warning("遗漏回补获取讨论组实体失败 (chat_id=%s, linked=%s): %s", chat_id, linked_chat_id, exc)
+                continue
+            comment_ids = [int(r["id"]) for r in comment_rules if r.get("id") is not None]
+            comment_last_seen = min(int(r.get("last_seen_comment_message_id") or 0) for r in comment_rules)
+            await scan_messages(discussion, comment_rules, comment_last_seen, comment_ids, comment_cursor=True)
 
     async def get_dialog_message_range(self, chat_id: int) -> dict[str, Any]:
         """Return the oldest and newest message IDs in a selected dialog."""
@@ -1552,11 +1616,10 @@ class TelegramWorker:
             if not event.message:
                 return
             
-            # 获取发送者信息
+            # 获取发送者信息。频道匿名消息可能没有 sender，但仍应交给规则匹配。
             sender = await event.get_sender()
             if not sender:
-                logger.debug("无法获取发送者信息，忽略消息")
-                return
+                logger.debug("消息没有可解析的发送者，继续按规则处理")
             
             sender_id = getattr(sender, "id", None)
             sender_username = getattr(sender, "username", None)

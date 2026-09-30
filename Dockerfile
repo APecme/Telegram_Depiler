@@ -13,8 +13,13 @@ COPY VERSION ./VERSION
 RUN npm run build
 
 FROM python:3.11-slim AS backend
+ARG TELEGRAM_DEPILER_RELEASE_LABEL=""
+ARG TELEGRAM_DEPILER_RELEASE_COMMIT=""
 ENV PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    TELEGRAM_DEPILER_APP_SUPERVISOR=1 \
+    TELEGRAM_DEPILER_RELEASE_LABEL=${TELEGRAM_DEPILER_RELEASE_LABEL} \
+    TELEGRAM_DEPILER_RELEASE_COMMIT=${TELEGRAM_DEPILER_RELEASE_COMMIT}
 WORKDIR /app
 COPY backend/requirements.txt ./requirements.txt
 RUN apt-get update \
@@ -24,7 +29,8 @@ RUN apt-get update \
     && pip install --no-cache-dir -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 COPY VERSION ./VERSION
 COPY backend/app ./app
+COPY docker-entrypoint.sh ./docker-entrypoint.sh
 COPY --from=frontend-builder /frontend/dist ./app/static
-RUN mkdir -p downloads data
+RUN chmod 755 /app/docker-entrypoint.sh && mkdir -p downloads data
 EXPOSE 8000
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["/app/docker-entrypoint.sh"]

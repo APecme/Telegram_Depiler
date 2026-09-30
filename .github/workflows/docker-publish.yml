@@ -2,8 +2,7 @@ name: Docker Build and Push
 
 on:
   push:
-    branches: [ "main" ]
-    tags: [ 'v*.*.*', 'bata' ]
+    tags: [ 'v*.*.*' ]
   pull_request:
     branches: [ "main", "master" ]
 
@@ -59,8 +58,17 @@ jobs:
           images: ${{ env.IMAGE_NAME }}
           tags: |
             type=semver,pattern={{version}}
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=raw,value=bata,enable=${{ github.ref == 'refs/tags/bata' }}
+            type=raw,value=latest
+      - name: Set release metadata
+        id: release
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            label="${GITHUB_REF_NAME#v}"
+          else
+            label="$(tr -d '[:space:]' < VERSION)"
+          fi
+          echo "label=${label}" >> "$GITHUB_OUTPUT"
 
       - name: Build and push Docker image
         id: build-and-push
@@ -70,6 +78,9 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            TELEGRAM_DEPILER_RELEASE_LABEL=${{ steps.release.outputs.label }}
+            TELEGRAM_DEPILER_RELEASE_COMMIT=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           platforms: linux/amd64,linux/arm64

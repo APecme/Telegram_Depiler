@@ -38,6 +38,26 @@ type VersionCheck = {
   status: "ok" | "error";
 };
 
+type UpdateState = {
+  settings: {
+    check_enabled: boolean;
+    auto_update: boolean;
+    experience_program: boolean;
+    check_interval_hours: number;
+  };
+  result: {
+    current?: string;
+    target?: string;
+    available?: boolean;
+    error?: string;
+    switching_channel?: boolean;
+  };
+  job: { id?: string; status?: string; message?: string; target?: string };
+  current: string;
+  channel: "stable" | "bata";
+  capability: { supported: boolean; mode?: string; reason?: string };
+};
+
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL ?? "/api",
 });
@@ -77,6 +97,9 @@ export default function Settings() {
   const [panelPassword, setPanelPassword] = useState("");
   const [versionCheck, setVersionCheck] = useState<VersionCheck | null>(null);
   const [versionRefreshing, setVersionRefreshing] = useState(false);
+  const [updateState, setUpdateState] = useState<UpdateState | null>(null);
+  const [updateLoading, setUpdateLoading] = useState(false);
+  const [updateMessage, setUpdateMessage] = useState<string | null>(null);
 
   const proxy = useMemo(
     () =>
@@ -175,10 +198,90 @@ export default function Settings() {
     }
   };
 
+  const fetchUpdateState = async () => {
+    try {
+      const { data } = await api.get("/update");
+      setUpdateState(data);
+    } catch (error) {
+      console.error("获取应用更新状态失败:", error);
+    }
+  };
+
+  const checkApplicationUpdate = async () => {
+    setUpdateLoading(true);
+    setUpdateMessage(null);
+    try {
+      await api.post("/update/check");
+      await fetchUpdateState();
+      setUpdateMessage("检查完成");
+    } catch (error) {
+      setUpdateMessage(`检查失败：${formatError(error)}`);
+    } finally {
+      setUpdateLoading(false);
+    }
+  };
+
+  const saveUpdateSettings = async (next: Partial<UpdateState["settings"]>) => {
+    if (!updateState) return;
+    setUpdateLoading(true);
+    setUpdateMessage(null);
+    try {
+      const { data } = await api.put("/update/settings", { ...updateState.settings, ...next });
+      setUpdateState(data);
+      setUpdateMessage(data.activation?.status === "scheduled" ? "已开始下载应用包，服务将短暂重启" : "更新设置已保存");
+    } catch (error) {
+      setUpdateMessage(`保存失败：${formatError(error)}`);
+    } finally {
+      setUpdateLoading(false);
+    }
+  };
+
+  const applyApplicationUpdate = async () => {
+    setUpdateLoading(true);
+    setUpdateMessage("正在提交更新请求…");
+    try {
+      const { data } = await api.post("/update/apply");
+      if (data.status === "scheduled") {
+        setUpdateMessage("正在下载并校验应用包，服务将自动重启");
+        const started = Date.now();
+        const poll = async () => {
+          try {
+            const { data: latest } = await api.get("/update");
+            setUpdateState(latest);
+            if (["updated", "failed", "rolled_back"].includes(latest.job?.status || "")) {
+              setUpdateLoading(false);
+              setUpdateMessage(latest.job.message || "更新完成");
+              return;
+            }
+          } catch {
+            if (Date.now() - started < 15 * 60 * 1000) {
+              window.setTimeout(poll, 2500);
+              return;
+            }
+          }
+          if (Date.now() - started < 15 * 60 * 1000) window.setTimeout(poll, 2500);
+          else {
+            setUpdateLoading(false);
+            setUpdateMessage("长时间未能确认更新结果，请刷新页面查看状态");
+          }
+        };
+        window.setTimeout(poll, 2500);
+      } else {
+        setUpdateLoading(false);
+        setUpdateMessage(data.message || "当前已是最新版本");
+        await fetchUpdateState();
+      }
+    } catch (error) {
+      setUpdateLoading(false);
+      setUpdateMessage(`更新失败：${formatError(error)}`);
+    }
+  };
+
   useEffect(() => {
     fetchConfig();
     fetchLoginState();
     fetchVersionCheck();
+    fetchUpdateState();
   }, []);
 
   const formatError = (error: unknown) => {
@@ -763,6 +866,38 @@ export default function Settings() {
             {message.text}
           </p>
         )}
+      </div>
+
+      <div style={{ marginTop: "2rem", padding: "1.25rem", border: "1px solid var(--theme-border)", borderRadius: "8px", background: "var(--theme-surface)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", alignItems: "center", flexWrap: "wrap" }}>
+          <div>
+            <h3 style={{ margin: 0 }}>版本与更新</h3>
+            <p style={{ margin: "0.35rem 0 0", color: "var(--theme-muted-text)" }}>
+              当前 {updateState?.channel === "bata" ? "体验版 bata" : "正式版 latest"} · v{updateState?.current || __APP_VERSION__}
+            </p>
+          </div>
+          <span style={{ color: updateState?.result?.available ? "var(--color-warning-strong)" : "var(--color-success-strong)" }}>
+            {updateState?.result?.error
+              ? "检查失败"
+              : updateState?.result?.available
+              ? `发现 ${updateState.result.target}`
+              : updateState?.result?.current
+              ? "已是最新版本"
+              : "尚未检查"}
+          </span>
+        </div>
+        <div style={{ display: "grid", gap: "0.65rem", marginTop: "1rem" }}>
+          <label><input type="checkbox" checked={updateState?.settings.check_enabled ?? true} disabled={!updateState || updateLoading} onChange={(e) => saveUpdateSettings({ check_enabled: e.target.checked })} /> 自动检查更新</label>
+          <label><input type="checkbox" checked={updateState?.settings.auto_update ?? false} disabled={!updateState || updateLoading} onChange={(e) => saveUpdateSettings({ auto_update: e.target.checked })} /> 发现新版本后自动更新</label>
+          <label><input type="checkbox" checked={updateState?.settings.experience_program ?? false} disabled={!updateState || updateLoading || updateState.current.startsWith("bata.")} onChange={(e) => saveUpdateSettings({ experience_program: e.target.checked })} /> 加入体验计划（使用 bata 应用包）</label>
+          <label style={{ maxWidth: "220px" }}>检查间隔（小时）<input type="number" min={1} max={168} value={updateState?.settings.check_interval_hours ?? 24} disabled={!updateState || updateLoading} onChange={(e) => saveUpdateSettings({ check_interval_hours: Number(e.target.value || 24) })} /></label>
+        </div>
+        <div style={{ display: "flex", gap: "0.6rem", flexWrap: "wrap", marginTop: "1rem" }}>
+          <button type="button" onClick={checkApplicationUpdate} disabled={updateLoading}>立即检查</button>
+          <button type="button" onClick={applyApplicationUpdate} disabled={updateLoading || !updateState?.capability.supported || !updateState?.result?.available}>立即更新</button>
+          {updateState?.capability.reason && <span style={{ color: "var(--theme-muted-text)", alignSelf: "center" }}>{updateState.capability.reason}</span>}
+        </div>
+        {(updateMessage || updateState?.job?.message) && <p className="info" style={{ marginBottom: 0 }}>{updateMessage || updateState?.job?.message}</p>}
       </div>
 
       <div style={{ marginTop: "2rem", paddingTop: "1rem", borderTop: "1px solid var(--theme-border)", textAlign: "center", color: "var(--theme-muted-text)", fontSize: "0.9rem" }}>

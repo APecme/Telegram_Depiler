@@ -116,6 +116,7 @@ class Database:
                     auto_catch_up BOOLEAN DEFAULT 0, -- 启动时自动回补遗漏消息
                     include_comments BOOLEAN DEFAULT 0, -- 是否包含评论/讨论组/留言板回复内容
                     last_seen_message_id INTEGER DEFAULT 0,
+                     last_seen_comment_message_id INTEGER DEFAULT 0,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 );
@@ -233,6 +234,8 @@ class Database:
                 conn.execute("ALTER TABLE group_download_rules ADD COLUMN include_comments BOOLEAN DEFAULT 0")
             if not has_column("group_download_rules", "last_seen_message_id"):
                 conn.execute("ALTER TABLE group_download_rules ADD COLUMN last_seen_message_id INTEGER DEFAULT 0")
+            if not has_column("group_download_rules", "last_seen_comment_message_id"):
+                conn.execute("ALTER TABLE group_download_rules ADD COLUMN last_seen_comment_message_id INTEGER DEFAULT 0")
             if not has_column("group_download_rules", "content_type"):
                 conn.execute("ALTER TABLE group_download_rules ADD COLUMN content_type TEXT NOT NULL DEFAULT 'media'")
             if not has_column("group_download_rules", "text_preprocess"):
@@ -1015,6 +1018,26 @@ class Database:
         WHERE id IN ({placeholders})
         """
         params: list[Any] = [last_seen_message_id, last_seen_message_id] + [int(x) for x in rule_ids]
+        with self._connect() as conn:
+            conn.execute(sql, params)
+            conn.commit()
+
+    def update_group_rules_last_seen_comment_message_id(self, rule_ids: List[int], message_id: int) -> None:
+        """Advance the independent cursor used for linked discussion-group comments."""
+        if not rule_ids:
+            return
+        message_id = int(message_id or 0)
+        placeholders = ",".join(["?"] * len(rule_ids))
+        sql = f"""
+        UPDATE group_download_rules
+        SET last_seen_comment_message_id = CASE
+            WHEN COALESCE(last_seen_comment_message_id, 0) < ? THEN ?
+            ELSE COALESCE(last_seen_comment_message_id, 0)
+        END,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id IN ({placeholders})
+        """
+        params: list[Any] = [message_id, message_id] + [int(x) for x in rule_ids]
         with self._connect() as conn:
             conn.execute(sql, params)
             conn.commit()

@@ -40,9 +40,18 @@ from .schemas import (
 from .telegram_worker import TelegramWorker
 from .bot_handler import BotCommandHandler
 from .media_cache import generate_cover_cache, remove_cover_cache
+from . import app_update as updater, update_state
+from pydantic import BaseModel, Field
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+class UpdateSettingsRequest(BaseModel):
+    check_enabled: bool = True
+    auto_update: bool = False
+    experience_program: bool = False
+    check_interval_hours: int = Field(default=24, ge=1, le=168)
 
 settings = get_settings()
 database = Database(settings.data_dir / "state.db")
@@ -265,6 +274,7 @@ async def _resume_incomplete_downloads() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用启动和关闭时的生命周期管理"""
+    updater.start_scheduler()
     global bot_handler
     
     # 记录当前配置
@@ -372,7 +382,7 @@ api.add_middleware(
 
 @api.get("/health")
 async def health_check() -> dict:
-    return {"status": "ok", "version": settings.version}
+    return {"status": "ok", "version": os.environ.get("TELEGRAM_DEPILER_RELEASE_LABEL") or settings.version}
 
 
 def _parse_version_parts(version: str) -> tuple[int, ...]:
@@ -535,6 +545,45 @@ async def version_check() -> dict:
         "has_update": has_update,
         "status": "ok",
     }
+
+
+@api.get("/update")
+async def update_status(x_admin_token: str | None = Header(default=None, alias="X-Admin-Token")) -> dict:
+    _require_admin(x_admin_token)
+    return updater.status()
+
+
+@api.put("/update/settings")
+async def update_settings(
+    body: UpdateSettingsRequest,
+    x_admin_token: str | None = Header(default=None, alias="X-Admin-Token"),
+) -> dict:
+    _require_admin(x_admin_token)
+    joining = body.experience_program and updater._channel() != "bata"
+    update_state.save_settings(body.model_dump())
+    response = updater.status()
+    if joining:
+        try:
+            response["activation"] = updater.start_apply()
+        except updater.UpdateError as exc:
+            response["activation_error"] = str(exc)
+        response.update(updater.status())
+    return response
+
+
+@api.post("/update/check")
+async def check_update(x_admin_token: str | None = Header(default=None, alias="X-Admin-Token")) -> dict:
+    _require_admin(x_admin_token)
+    return updater.check(force=True)
+
+
+@api.post("/update/apply")
+async def apply_update(x_admin_token: str | None = Header(default=None, alias="X-Admin-Token")) -> dict:
+    _require_admin(x_admin_token)
+    try:
+        return updater.start_apply()
+    except updater.UpdateError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @api.get("/config")
