@@ -58,7 +58,7 @@ def set_job(status: str, message: str) -> None:
 
 
 def _health_ready(child: subprocess.Popen, expected: str) -> bool:
-    url = "http://127.0.0.1:8000/health"
+    url = "http://127.0.0.1:8000/api/health"
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     for _ in range(45):
         if child.poll() is not None:
@@ -113,7 +113,7 @@ def run() -> int:
             environment["TELEGRAM_DEPILER_RELEASE_LABEL"] = label
             environment["TELEGRAM_DEPILER_RELEASE_COMMIT"] = str(state.get("commit", ""))
         _child = subprocess.Popen(
-            [sys.executable, "-m", "uvicorn", "app.main:api", "--host", "0.0.0.0", "--port", "8000"],
+            [sys.executable, "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"],
             cwd=str(BASE_ROOT),
             env=environment,
         )
