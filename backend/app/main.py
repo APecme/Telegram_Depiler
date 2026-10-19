@@ -199,6 +199,7 @@ class DownloadQueueManager:
 download_queue_manager = DownloadQueueManager(database)
 worker = TelegramWorker(settings, database, queue_manager=download_queue_manager)
 bot_handler: Optional[BotCommandHandler] = None
+_bot_start_lock = asyncio.Lock()
 
 
 async def _resume_incomplete_downloads() -> None:
@@ -303,17 +304,19 @@ async def lifespan(app: FastAPI):
 
 
 async def _ensure_bot_handler_running() -> None:
+    async with _bot_start_lock:
+        await _ensure_bot_handler_running_locked()
+
+
+async def _ensure_bot_handler_running_locked() -> None:
     """在满足条件时自动启动 BotCommandHandler。
 
     条件：
     - 已配置 bot_token 和 bot_username
     - 用户账户已登录（is_user_authorized 为 True 或数据库中有登录状态）
-    - 当前没有正在运行的 bot_handler
+    - 已有 Bot 处理器时，仍检查并恢复用户账户的频道监听
     """
     global bot_handler
-
-    if bot_handler is not None:
-        return
 
     if not settings.bot_token or not settings.bot_username:
         logger.info("Bot Token 或 Bot Username 未配置，跳过自动启动 Bot 命令处理器")
@@ -355,18 +358,29 @@ async def _ensure_bot_handler_running() -> None:
         user_info = await client.get_me()
         logger.info("用户账户已登录: @%s (ID: %s)", user_info.username, user_info.id)
 
-        bot_handler = BotCommandHandler(settings, database, client, worker, queue_manager=download_queue_manager)
-        await bot_handler.start()
-        logger.info("Bot 命令处理器已自动启动")
+        if bot_handler is None:
+            handler = BotCommandHandler(settings, database, client, worker, queue_manager=download_queue_manager)
+            try:
+                await handler.start()
+            except Exception:
+                await handler.stop()
+                raise
+            bot_handler = handler
+            logger.info("Bot 命令处理器已自动启动")
+        else:
+            # restart_client replaces the user session without replacing the Bot.
+            bot_handler.user_client = client
 
         # 设置Bot客户端到worker，用于发送群聊下载通知
         worker.set_bot_client(bot_handler._bot_client)
 
         # 同时启动用户账户的事件监听器，用于监控群聊消息
+        listener_was_started = worker._event_handler_added
         await worker.start_bot_listener(settings.bot_username)
         logger.info("用户账户事件监听器已自动启动，开始监控群聊消息")
 
-        asyncio.create_task(worker.catch_up_missed_group_messages())
+        if not listener_was_started:
+            asyncio.create_task(worker.catch_up_missed_group_messages())
     except Exception as exc:  # pragma: no cover - 防御性
         logger.warning("自动启动 Bot 命令处理器失败: %s", exc)
 
@@ -1891,20 +1905,23 @@ async def status() -> dict:
 
 @api.get("/auth/status")
 async def auth_status() -> dict:
-    """获取登录状态"""
-    login_state = database.get_login_state()
-    if not login_state:
+    """获取当前 Telegram 授权状态，不将历史登录记录视为有效会话。"""
+    try:
+        user = await worker.get_authorized_user()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="暂时无法连接 Telegram 验证登录状态，请检查网络或代理后重试。") from exc
+    if user is None:
         return {"is_authorized": False, "account_type": None}
-    
+    login_state = database.get_login_state() or {}
     return {
-        "is_authorized": bool(login_state.get("is_authorized")),
-        "account_type": login_state.get("account_type"),
-        "user_id": login_state.get("user_id"),
-        "username": login_state.get("username"),
-        "first_name": login_state.get("first_name"),
-        "last_name": login_state.get("last_name"),
-        "phone_number": login_state.get("phone_number"),
-        "last_login": login_state.get("last_login"),
+        "is_authorized": True,
+        "account_type": "bot" if user.bot else "user",
+        "user_id": user.id,
+        "username": user.username,
+        "first_name": user.first_name,
+        "last_name": user.last_name,
+        "phone_number": user.phone,
+        "last_login": login_state.get("last_login") if login_state.get("user_id") == user.id else None,
     }
 
 

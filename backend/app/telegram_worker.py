@@ -22,6 +22,18 @@ _FILENAME_TEMPLATE_PATTERN = re.compile(
 _INVALID_FILENAME_TEXT = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
 
+def _media_filename(message: Any) -> str:
+    """Keep Telegram's filename, or infer a usable suffix for unnamed media."""
+    file = getattr(message, "file", None)
+    media = getattr(message, "video", None) or getattr(message, "document", None) or getattr(message, "audio", None)
+    name = getattr(media, "file_name", None) or getattr(file, "name", None)
+    if name:
+        return name
+    is_photo = bool(getattr(message, "photo", None))
+    extension = getattr(file, "ext", None) or (".jpg" if is_photo else "")
+    return f"{'photo' if is_photo else 'file'}_{message.id}{extension}"
+
+
 def _render_filename_template(
     template: str,
     *,
@@ -1089,7 +1101,7 @@ class TelegramWorker:
             original_file_name = (
                 download.get("origin_file_name")
                 or download.get("file_name")
-                or f"file_{message.id}"
+                or _media_filename(message)
             )
             
             # 应用文件名模板
@@ -1561,10 +1573,21 @@ class TelegramWorker:
             return last_seen_id
         return last_seen_id
 
+    async def get_authorized_user(self) -> Any:
+        """Check Telegram directly; the saved login record and client cache can be stale."""
+        if not self.settings.api_id or not self.settings.api_hash:
+            return None
+
+        async def check():
+            client = await self._get_client()
+            return await client.get_me()
+
+        return await asyncio.wait_for(check(), timeout=15)
+
     async def list_dialogs(self) -> list[dict[str, Any]]:
         client = await self._get_client()
-        if not await client.is_user_authorized():
-            raise PermissionError("Client not authorized. Complete login first.")
+        if not await self.get_authorized_user():
+            raise PermissionError("Telegram 未登录或登录已失效，请前往设置重新登录。")
 
         from telethon.tl.types import Channel, Chat
 
@@ -2023,18 +2046,14 @@ class TelegramWorker:
             logger.info("开始检查规则 ID:%s", rule_id)
             
             # 获取文件名
-            file_name = None
+            file_name = _media_filename(message)
             if message.video:
-                file_name = getattr(message.video, "file_name", None) or getattr(message.file, "name", None)
                 logger.info("  ✓ 文件类型: 视频")
             elif message.document:
-                file_name = getattr(message.document, "file_name", None) or getattr(message.file, "name", None)
                 logger.info("  ✓ 文件类型: 文档")
             elif message.audio:
-                file_name = getattr(message.audio, "file_name", None) or getattr(message.file, "name", None)
                 logger.info("  ✓ 文件类型: 音频")
             elif message.photo:
-                file_name = f"photo_{message.id}.jpg"
                 logger.info("  ✓ 文件类型: 图片")
             
             logger.info("  ✓ 文件名: %s", file_name or "无")
@@ -2233,22 +2252,16 @@ class TelegramWorker:
             from telethon.tl.custom.button import Button
             
             # 获取原始文件名
-            original_file_name = None
+            original_file_name = _media_filename(message)
             media_type = None
             if message.video:
-                original_file_name = getattr(message.video, "file_name", None) or getattr(message.file, "name", None)
                 media_type = "视频"
             elif message.document:
-                original_file_name = getattr(message.document, "file_name", None) or getattr(message.file, "name", None)
                 media_type = "文档"
             elif message.audio:
-                original_file_name = getattr(message.audio, "file_name", None) or getattr(message.file, "name", None)
                 media_type = "音频"
             elif message.photo:
-                original_file_name = f"photo_{message.id}.jpg"
                 media_type = "图片"
-
-            original_file_name = original_file_name or f"file_{message.id}"
 
             # 从 Telegram 媒体对象中提取文件 ID，用于去重
             tg_file_id = None

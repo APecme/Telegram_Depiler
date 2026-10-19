@@ -1,10 +1,11 @@
 {
   "name": "telegram-manager-frontend",
-  "version": "1.0.59",
+  "version": "1.0.60",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "test": "node --test tests/*.test.mjs",
     "build": "vite build",
     "type-check": "tsc --noEmit",
     "preview": "vite preview"

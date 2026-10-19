@@ -93,6 +93,8 @@ export default function Settings() {
   const [proxyTesting, setProxyTesting] = useState(false);
   const [proxyTestResult, setProxyTestResult] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [loginState, setLoginState] = useState<LoginState | null>(null);
+  const [loginStatusLoading, setLoginStatusLoading] = useState(true);
+  const [loginStatusError, setLoginStatusError] = useState("");
   const [panelUsername, setPanelUsername] = useState("");
   const [panelPassword, setPanelPassword] = useState("");
   const [versionCheck, setVersionCheck] = useState<VersionCheck | null>(null);
@@ -174,14 +176,17 @@ export default function Settings() {
   };
 
   const fetchLoginState = async () => {
+    setLoginStatusLoading(true);
+    setLoginStatusError("");
     try {
-      const { data } = await api.get("/auth/status");
+      const { data } = await api.get("/auth/status", { timeout: 20000 });
       setLoginState(data);
-      if (data.is_authorized) {
-        setLoginStep("connected");
-      }
+      setLoginStep((current) => data.is_authorized ? "connected" : current === "connected" ? "idle" : current);
     } catch (error) {
-      console.error("获取登录状态失败:", error);
+      setLoginState(null);
+      setLoginStatusError(`无法确认登录状态：${formatError(error)}`);
+    } finally {
+      setLoginStatusLoading(false);
     }
   };
 
@@ -770,7 +775,9 @@ export default function Settings() {
 
       <div className="card">
         <h2>登录状态</h2>
-        {loginState?.is_authorized ? (
+        {loginStatusLoading ? <p role="status">正在检查 Telegram 登录状态…</p> : loginStatusError ? (
+          <p role="alert">{loginStatusError}</p>
+        ) : loginState?.is_authorized ? (
           <div className="auth-status auth-status-connected" style={{
             padding: "1rem", 
             backgroundColor: "var(--color-success-surface)",
@@ -826,6 +833,9 @@ export default function Settings() {
           </div>
         )}
         <div style={{ display: "flex", gap: "1rem", flexWrap: "wrap" }}>
+          <button onClick={() => void fetchLoginState()} className="btn-secondary" disabled={loginStatusLoading}>
+            刷新登录状态
+          </button>
           <button onClick={sendCode} className="btn-secondary" disabled={loading || loginStep === "connected"}>
             发送验证码
           </button>

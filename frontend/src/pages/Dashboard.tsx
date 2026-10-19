@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import axios from "axios";
 import ThemeToggle from "../components/ThemeToggle";
 import ThemeLogo from "../components/ThemeLogo";
+import { applyPreviewPage, PREVIEW_PAGE_SIZE, type PreviewHistory } from "../utils/downloadPreview";
 
 const api = axios.create({
   // 默认使用相对路径，始终请求当前站点下的 /api，避免端口写死为 8000
@@ -165,6 +166,9 @@ export default function Dashboard() {
   const [downloads, setDownloads] = useState<DownloadRecord[]>([]);
   const [groupRules, setGroupRules] = useState<GroupRule[]>([]);
   const [dialogs, setDialogs] = useState<Dialog[]>([]);
+  const [dialogsLoading, setDialogsLoading] = useState(false);
+  const [dialogsError, setDialogsError] = useState("");
+  const dialogsRequest = useRef(false);
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [showRuleModal, setShowRuleModal] = useState(false);
   const [editingRuleId, setEditingRuleId] = useState<number | null>(null);
@@ -184,9 +188,8 @@ export default function Dashboard() {
   const [downloadRuntimeSummary, setDownloadRuntimeSummary] = useState<DownloadRuntimeSummary>({ total_speed: 0, downloading_count: 0, queued_count: 0, remaining_bytes: 0 });
   const [lightboxRecord, setLightboxRecord] = useState<DownloadRecord | null>(null);
   const [failedAvatarChatIds, setFailedAvatarChatIds] = useState<number[]>([]);
-  const [previewDownloads, setPreviewDownloads] = useState<DownloadRecord[]>([]);
-  const [previewPage, setPreviewPage] = useState<number>(1);
-  const [previewHasMore, setPreviewHasMore] = useState<boolean>(true);
+  const [previewHistory, setPreviewHistory] = useState<PreviewHistory<DownloadRecord>>({ items: [], page: 1, hasMore: true });
+  const { items: previewDownloads, page: previewPage, hasMore: previewHasMore } = previewHistory;
   const [previewLoadingMore, setPreviewLoadingMore] = useState<boolean>(false);
   const [previewMessageTexts, setPreviewMessageTexts] = useState<Record<string, string>>({});
   const previewWindowRef = useRef<HTMLDivElement | null>(null);
@@ -259,11 +262,11 @@ export default function Dashboard() {
   }, [downloadPage, downloadPageSize, downloadStatusFilter, downloadRuleFilter, downloadPathFilter, downloadMinSize, downloadMaxSize, downloadStartTime, downloadEndTime]);
 
   useEffect(() => {
-    fetchPreviewDownloads(1, false);
+    fetchPreviewDownloads(1);
     const interval = setInterval(() => {
       const container = previewWindowRef.current;
       if (container && container.scrollHeight - container.clientHeight - container.scrollTop > 120) return;
-      fetchPreviewDownloads(1, false);
+      fetchPreviewDownloads(1);
     }, 5000);
     return () => clearInterval(interval);
   }, []);
@@ -389,16 +392,16 @@ export default function Dashboard() {
     }
   };
 
-  const fetchPreviewDownloads = async (page: number, append: boolean) => {
+  const fetchPreviewDownloads = async (page: number) => {
     if (previewLoadingRef.current) return;
     previewLoadingRef.current = true;
     try {
       setPreviewLoadingMore(true);
-      console.log("[Preview] fetchPreviewDownloads:start", { page, append });
+      console.log("[Preview] fetchPreviewDownloads:start", { page });
       const { data } = await api.get("/downloads", {
         params: {
           page,
-          page_size: page === 1 ? 30 : 20,
+          page_size: PREVIEW_PAGE_SIZE,
           status: "completed",
         },
       });
@@ -426,24 +429,7 @@ export default function Dashboard() {
         });
       }
 
-      setPreviewDownloads((current) => {
-        if (!append) return items;
-        const seen = new Set(current.map((record) => record.id));
-        const merged = [...current];
-        items.forEach((record) => {
-          if (!seen.has(record.id)) {
-            merged.push(record);
-          }
-        });
-        return merged;
-      });
-      setPreviewPage(page);
-      setPreviewHasMore((data.page || page) * (data.page_size || (page === 1 ? 30 : 20)) < (data.total || 0));
-      console.log("[Preview] fetchPreviewDownloads:done", {
-        page,
-        append,
-        nextHasMore: (data.page || page) * (data.page_size || (page === 1 ? 30 : 20)) < (data.total || 0),
-      });
+      setPreviewHistory(current => applyPreviewPage(current, items, data.page || page, data.total || 0, data.items || []));
     } catch (error) {
       console.error("Failed to fetch preview downloads:", error);
     } finally {
@@ -481,11 +467,18 @@ export default function Dashboard() {
   };
 
   const fetchDialogs = async () => {
+    if (dialogsRequest.current) return;
+    dialogsRequest.current = true;
+    setDialogsLoading(true);
+    setDialogsError("");
     try {
-      const { data } = await api.get("/dialogs");
+      const { data } = await api.get("/dialogs", { timeout: 30000 });
       setDialogs(data.items || []);
     } catch (error) {
-      console.error("Failed to fetch dialogs:", error);
+      setDialogsError(`群聊列表加载失败：${formatError(error)}`);
+    } finally {
+      dialogsRequest.current = false;
+      setDialogsLoading(false);
     }
   };
 
@@ -680,7 +673,8 @@ export default function Dashboard() {
     }
     try {
       await api.delete(`/downloads/${downloadId}?delete_file=${deleteFile ? "true" : "false"}`);
-      await Promise.all([fetchDownloads(), fetchPreviewDownloads(1, false)]);
+      setPreviewHistory(current => ({ ...current, items: current.items.filter(item => item.id !== downloadId) }));
+      await Promise.all([fetchDownloads(), fetchPreviewDownloads(1)]);
       if (lightboxRecord?.id === downloadId) {
         setLightboxRecord(null);
       }
@@ -703,8 +697,9 @@ export default function Dashboard() {
     try {
       for (const id of selectedIds) {
         await api.delete(`/downloads/${id}?delete_file=${deleteFile ? "true" : "false"}`);
+        setPreviewHistory(current => ({ ...current, items: current.items.filter(item => item.id !== id) }));
       }
-      await Promise.all([fetchDownloads(), fetchPreviewDownloads(1, false)]);
+      await Promise.all([fetchDownloads(), fetchPreviewDownloads(1)]);
       setSelectedIds([]);
       showNotification(deleteFile ? "已删除记录并删除文件" : "已删除记录", "success");
     } catch (error) {
@@ -714,6 +709,7 @@ export default function Dashboard() {
   };
 
   const handleCreateRule = () => {
+    void fetchDialogs();
     setEditingRuleId(null);
     setFormChatId("");
     setFormRuleName("");
@@ -744,6 +740,7 @@ export default function Dashboard() {
   };
 
   const handleEditRule = (rule: GroupRule) => {
+    void fetchDialogs();
     setEditingRuleId(rule.id);
     setFormChatId(rule.chat_id);
     setFormRuleName(rule.rule_name || rule.chat_title || "");
@@ -855,7 +852,7 @@ export default function Dashboard() {
     }
 
     const selectedDialog = dialogs.find((d) => d.id === formChatId);
-    const chatTitle = selectedDialog?.title || selectedDialog?.username || null;
+    const chatTitle = selectedDialog?.title || selectedDialog?.username || groupRules.find((rule) => rule.id === editingRuleId && rule.chat_id === formChatId)?.chat_title || null;
     const normalizedRuleName = formRuleName.trim() || chatTitle || null;
 
     const ruleData = {
@@ -1080,7 +1077,7 @@ export default function Dashboard() {
         previewPage,
       });
       const previousHeight = container.scrollHeight;
-      fetchPreviewDownloads(previewPage + 1, true).then(() => {
+      fetchPreviewDownloads(previewPage + 1).then(() => {
         requestAnimationFrame(() => {
           if (!previewWindowRef.current) return;
           const nextHeight = previewWindowRef.current.scrollHeight;
@@ -2844,6 +2841,11 @@ export default function Dashboard() {
                   }}
                 >
                   <option value="">请选择群聊</option>
+                  {editingRuleId && formChatId !== "" && !dialogs.some((d) => d.is_group && d.id === formChatId) && (
+                    <option value={formChatId}>
+                      {groupRules.find((rule) => rule.id === editingRuleId)?.chat_title || "当前规则群聊"} (ID: {formChatId})（已保存）
+                    </option>
+                  )}
                   {dialogs
                     .filter((d) => d.is_group)
                     .map((d) => (
@@ -2854,8 +2856,13 @@ export default function Dashboard() {
                     ))}
                 </select>
                 <small style={{ display: "block", marginTop: "0.25rem", color: "var(--theme-muted-text)", fontSize: "0.8rem" }}>
-                  下拉选择要应用规则的群聊或频道
+                  {dialogsLoading ? "正在加载群聊列表…" : "下拉选择要应用规则的群聊或频道"}
                 </small>
+                <button type="button" className="btn-secondary" disabled={dialogsLoading} onClick={() => void fetchDialogs()} style={{ marginTop: "0.5rem" }}>
+                  {dialogsLoading ? "加载中…" : "刷新群聊列表"}
+                </button>
+                {dialogsError && <div role="alert" style={{ marginTop: "0.5rem", color: "var(--color-warning-strong)" }}>{dialogsError} <Link to="/settings">前往设置</Link></div>}
+                {!dialogsLoading && !dialogsError && !dialogs.some((d) => d.is_group) && <div style={{ marginTop: "0.5rem" }}>当前账号没有可用的群聊或频道，请先在 Telegram 加入群聊后刷新。</div>}
               </div>
 
               <div>
