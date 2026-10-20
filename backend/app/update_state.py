@@ -44,12 +44,9 @@ def settings() -> dict[str, Any]:
     current = {
         "check_enabled": bool(saved.get("check_enabled", True)),
         "auto_update": bool(saved.get("auto_update", False)),
-        "experience_program": bool(saved.get("experience_program", False)),
+        "experience_program": bool(saved.get("experience_program", current_version_label().startswith("bata."))),
         "check_interval_hours": max(1, min(168, interval)),
     }
-    label = current_version_label()
-    if label.startswith("bata."):
-        current["experience_program"] = True
     return current
 
 
@@ -62,8 +59,6 @@ def save_settings(values: dict[str, Any]) -> dict[str, Any]:
         current["check_interval_hours"] = max(1, min(168, int(values["check_interval_hours"])))
     if current["auto_update"]:
         current["check_enabled"] = True
-    if current_version_label().startswith("bata."):
-        current["experience_program"] = True
     write("settings", current)
     return current
 

@@ -1,4 +1,6 @@
 FROM node:20-alpine AS frontend-builder
+ARG TELEGRAM_DEPILER_RELEASE_LABEL=""
+ENV TELEGRAM_DEPILER_RELEASE_LABEL=${TELEGRAM_DEPILER_RELEASE_LABEL}
 WORKDIR /frontend
 COPY frontend/package*.json ./
 RUN --mount=type=cache,target=/root/.npm \

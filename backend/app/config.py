@@ -1,7 +1,10 @@
 from dataclasses import dataclass, field
 from functools import lru_cache
+import os
 from pathlib import Path
 from typing import Any, Dict, Optional
+
+from .download_control import DownloadOptions
 
 
 def _read_version() -> str:
@@ -32,11 +35,12 @@ class Settings:
     proxy_port: Optional[int] = None
     proxy_user: Optional[str] = None
     proxy_password: Optional[str] = None
-    download_dir: Path = field(default_factory=lambda: Path("./downloads"))
-    data_dir: Path = field(default_factory=lambda: Path("./data"))
-    static_dir: Path = field(default_factory=lambda: Path("./app/static"))
+    download_dir: Path = field(default_factory=lambda: Path(os.environ.get("TELEGRAM_DEPILER_DOWNLOAD_DIR", "./downloads")))
+    data_dir: Path = field(default_factory=lambda: Path(os.environ.get("TELEGRAM_DEPILER_DATA_DIR", "./data")))
+    static_dir: Path = field(default_factory=lambda: Path(os.environ.get("TELEGRAM_DEPILER_STATIC_DIR", "./app/static")))
     database_url: str = "sqlite:///./data/state.db"
     version: str = field(default_factory=_read_version)
+    download_options: DownloadOptions = field(default_factory=DownloadOptions)
 
     def ensure_directories(self) -> None:
         self.data_dir.mkdir(parents=True, exist_ok=True)
@@ -46,6 +50,11 @@ class Settings:
     def load_from_mapping(self, config: Dict[str, Any]) -> None:
         if not config:
             return
+        if config.get("download_options"):
+            try:
+                self.download_options = DownloadOptions.model_validate_json(config["download_options"])
+            except (ValueError, TypeError):
+                self.download_options = DownloadOptions()
         if "api_id" in config and config["api_id"]:
             try:
                 self.api_id = int(config["api_id"])

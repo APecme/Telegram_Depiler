@@ -1378,6 +1378,58 @@ button {
   text-align: left;
 }
 
+.settings-redesign { max-width: 1120px; padding-top: 2.5rem; }
+.settings-header { display: flex; align-items: center; justify-content: space-between; gap: 1.5rem; margin-bottom: 2rem; }
+.settings-eyebrow { font-size: .69rem; letter-spacing: .16em; font-weight: 750; color: var(--theme-primary); }
+.settings-header h1 { font-size: 2rem; letter-spacing: -.04em; margin: .25rem 0; }
+.settings-header p, .settings-section-heading p { margin: .25rem 0 0; color: var(--theme-muted-text); }
+.settings-header-actions, .settings-actions { display: flex; align-items: center; gap: .75rem; flex-wrap: wrap; }
+.settings-back { color: var(--theme-text); text-decoration: none; padding: .55rem .8rem; border: 1px solid var(--theme-border); border-radius: 8px; font-size: .85rem; }
+.settings-tabs { display: grid; grid-template-columns: repeat(5, 1fr); gap: .35rem; padding: .4rem; background: var(--theme-surface-muted); border: 1px solid var(--theme-border); border-radius: 14px; margin-bottom: 1.5rem; }
+.settings-tabs button { background: transparent; color: var(--theme-muted-text); text-align: left; padding: .85rem 1rem; border: 1px solid transparent; font-size: .92rem; }
+.settings-tabs button small { display: block; font-size: .72rem; font-weight: 400; margin-top: .2rem; }
+.settings-tabs button[aria-selected="true"] { color: var(--theme-primary); background: var(--theme-surface); border-color: var(--theme-border); box-shadow: 0 2px 5px var(--theme-shadow); }
+.settings-redesign [hidden] { display: none !important; }
+.settings-redesign .card { background: var(--theme-surface); border: 1px solid var(--theme-border); box-shadow: none; border-radius: 16px; padding: 2rem; }
+.settings-section-heading { margin-bottom: 1.75rem; }
+.settings-section-heading h2 { font-size: 1.35rem; letter-spacing: -.025em; margin: .35rem 0; }
+.settings-field-grid, .settings-connection-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.5rem; }
+.settings-redesign label { color: var(--theme-text); font-weight: 600; min-width: 0; }
+.settings-redesign input, .settings-redesign select { box-sizing: border-box; width: 100%; background: var(--theme-page-background); color: var(--theme-text); border-color: var(--theme-border); }
+.settings-redesign input:focus, .settings-redesign select:focus { outline: 2px solid var(--theme-primary); outline-offset: 2px; }
+.settings-redesign small { color: var(--theme-muted-text); font-size: .78rem; font-weight: 400; line-height: 1.6; }
+.settings-unit { float: right; color: var(--theme-muted-text); font-weight: 400; font-size: .75rem; }
+.settings-form-divider { grid-column: 1 / -1; display: flex; gap: .75rem; align-items: baseline; border-top: 1px solid var(--theme-border); padding-top: 1.5rem; margin-top: .25rem; }
+.settings-connection-form > button, .settings-connection-form > div:last-of-type { grid-column: 1 / -1; justify-self: start; }
+.settings-actions { margin-top: 1rem; }
+.settings-actions button { font-size: .87rem; }
+.settings-redesign button:disabled { opacity: .5; cursor: not-allowed; }
+.settings-note, .settings-error, .settings-success { border-radius: 10px; padding: .9rem 1rem; line-height: 1.7; font-size: .86rem; overflow-wrap: anywhere; }
+.settings-note { background: var(--theme-surface-muted); color: var(--theme-muted-text); border: 1px solid var(--theme-border); }
+.settings-error { color: var(--color-danger-strong); background: var(--color-danger-surface); }
+.settings-success { color: var(--color-success-strong); background: var(--color-success-surface); }
+.settings-muted { color: var(--theme-muted-text); font-size: .8rem; }
+.settings-switch { flex-direction: row; align-items: flex-start; gap: .75rem; padding: 1rem 0; border-bottom: 1px solid var(--theme-border); }
+.settings-switch input { width: 18px; height: 18px; margin: .2rem 0 0; accent-color: var(--theme-primary); }
+.settings-switch small { display: block; margin-top: .2rem; }
+.settings-version-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1rem; }
+.settings-version-grid > div { background: var(--theme-page-background); border: 1px solid var(--theme-border); padding: 1.25rem; border-radius: 12px; display: grid; gap: .4rem; }
+.settings-version-grid strong { font-size: 1.5rem; overflow-wrap: anywhere; letter-spacing: -.03em; }
+.settings-version-grid span { font-size: .75rem; color: var(--theme-muted-text); }
+.settings-footer { display: flex; justify-content: space-between; padding: .75rem .25rem; color: var(--theme-muted-text); font-size: .8rem; }
+.settings-footer a { color: var(--theme-primary); text-decoration: none; }
+@media (max-width: 700px) {
+  .settings-redesign { padding: 1.2rem; }
+  .settings-header { align-items: flex-start; flex-direction: column; gap: 1rem; }
+  .settings-header h1 { font-size: 1.7rem; }
+  .settings-tabs { display: flex; overflow-x: auto; }
+  .settings-tabs button { flex: 0 0 auto; padding: .6rem .8rem; }
+  .settings-tabs button small { display: none; }
+  .settings-redesign .card { padding: 1.25rem; }
+  .settings-field-grid, .settings-connection-form, .settings-version-grid { grid-template-columns: 1fr; }
+  .settings-form-divider { flex-direction: column; gap: .25rem; }
+}
+
 .text-variable-panel > button > span {
   font-family: monospace;
   color: var(--theme-primary);

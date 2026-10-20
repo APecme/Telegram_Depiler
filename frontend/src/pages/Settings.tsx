@@ -1,6 +1,8 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import axios from "axios";
+import ThemeToggle from "../components/ThemeToggle";
+import { DownloadSettingsPanel, UpdateSettingsPanel } from "../components/SettingsPanels";
 
 type ProxySettings = {
   type?: string;
@@ -31,35 +33,8 @@ type LoginState = {
   last_login?: string;
 };
 
-type VersionCheck = {
-  current_version: string;
-  latest_version?: string | null;
-  has_update?: boolean | null;
-  status: "ok" | "error";
-};
-
-type UpdateState = {
-  settings: {
-    check_enabled: boolean;
-    auto_update: boolean;
-    experience_program: boolean;
-    check_interval_hours: number;
-  };
-  result: {
-    current?: string;
-    target?: string;
-    available?: boolean;
-    error?: string;
-    switching_channel?: boolean;
-  };
-  job: { id?: string; status?: string; message?: string; target?: string };
-  current: string;
-  channel: "stable" | "bata";
-  capability: { supported: boolean; mode?: string; reason?: string };
-};
-
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL ?? "/api",
+  baseURL: import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || "/api",
 });
 
 api.interceptors.request.use((config: any) => {
@@ -97,11 +72,14 @@ export default function Settings() {
   const [loginStatusError, setLoginStatusError] = useState("");
   const [panelUsername, setPanelUsername] = useState("");
   const [panelPassword, setPanelPassword] = useState("");
-  const [versionCheck, setVersionCheck] = useState<VersionCheck | null>(null);
-  const [versionRefreshing, setVersionRefreshing] = useState(false);
-  const [updateState, setUpdateState] = useState<UpdateState | null>(null);
-  const [updateLoading, setUpdateLoading] = useState(false);
-  const [updateMessage, setUpdateMessage] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState("connection");
+  const tabs = [
+    { id: "connection", title: "基础连接", detail: "API 与代理" },
+    { id: "login", title: "Telegram 登录", detail: "会话与验证" },
+    { id: "downloads", title: "下载设置", detail: "并发与恢复" },
+    { id: "updates", title: "版本更新", detail: "通道与安装" },
+    { id: "account", title: "面板账号", detail: "登录与安全" },
+  ];
 
   const proxy = useMemo(
     () =>
@@ -190,103 +168,9 @@ export default function Settings() {
     }
   };
 
-  const fetchVersionCheck = async () => {
-    try {
-      setVersionRefreshing(true);
-      const { data } = await api.get("/version-check");
-      setVersionCheck(data);
-    } catch (error) {
-      console.error("获取版本状态失败:", error);
-      setVersionCheck({ current_version: __APP_VERSION__, latest_version: null, has_update: null, status: "error" });
-    } finally {
-      setVersionRefreshing(false);
-    }
-  };
-
-  const fetchUpdateState = async () => {
-    try {
-      const { data } = await api.get("/update");
-      setUpdateState(data);
-    } catch (error) {
-      console.error("获取应用更新状态失败:", error);
-    }
-  };
-
-  const checkApplicationUpdate = async () => {
-    setUpdateLoading(true);
-    setUpdateMessage(null);
-    try {
-      await api.post("/update/check");
-      await fetchUpdateState();
-      setUpdateMessage("检查完成");
-    } catch (error) {
-      setUpdateMessage(`检查失败：${formatError(error)}`);
-    } finally {
-      setUpdateLoading(false);
-    }
-  };
-
-  const saveUpdateSettings = async (next: Partial<UpdateState["settings"]>) => {
-    if (!updateState) return;
-    setUpdateLoading(true);
-    setUpdateMessage(null);
-    try {
-      const { data } = await api.put("/update/settings", { ...updateState.settings, ...next });
-      setUpdateState(data);
-      setUpdateMessage(data.activation?.status === "scheduled" ? "已开始下载应用包，服务将短暂重启" : "更新设置已保存");
-    } catch (error) {
-      setUpdateMessage(`保存失败：${formatError(error)}`);
-    } finally {
-      setUpdateLoading(false);
-    }
-  };
-
-  const applyApplicationUpdate = async () => {
-    setUpdateLoading(true);
-    setUpdateMessage("正在提交更新请求…");
-    try {
-      const { data } = await api.post("/update/apply");
-      if (data.status === "scheduled") {
-        setUpdateMessage("正在下载并校验应用包，服务将自动重启");
-        const started = Date.now();
-        const poll = async () => {
-          try {
-            const { data: latest } = await api.get("/update");
-            setUpdateState(latest);
-            if (["updated", "failed", "rolled_back"].includes(latest.job?.status || "")) {
-              setUpdateLoading(false);
-              setUpdateMessage(latest.job.message || "更新完成");
-              return;
-            }
-          } catch {
-            if (Date.now() - started < 15 * 60 * 1000) {
-              window.setTimeout(poll, 2500);
-              return;
-            }
-          }
-          if (Date.now() - started < 15 * 60 * 1000) window.setTimeout(poll, 2500);
-          else {
-            setUpdateLoading(false);
-            setUpdateMessage("长时间未能确认更新结果，请刷新页面查看状态");
-          }
-        };
-        window.setTimeout(poll, 2500);
-      } else {
-        setUpdateLoading(false);
-        setUpdateMessage(data.message || "当前已是最新版本");
-        await fetchUpdateState();
-      }
-    } catch (error) {
-      setUpdateLoading(false);
-      setUpdateMessage(`更新失败：${formatError(error)}`);
-    }
-  };
-
   useEffect(() => {
-    fetchConfig();
-    fetchLoginState();
-    fetchVersionCheck();
-    fetchUpdateState();
+    fetchConfig().catch(error => setMessage({ type: "error", text: `配置加载失败：${formatError(error)}` }));
+    void fetchLoginState();
   }, []);
 
   const formatError = (error: unknown) => {
@@ -447,23 +331,30 @@ export default function Settings() {
   };
 
   return (
-    <div className="app settings-page" style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "2rem" }}>
-        <h1>系统设置</h1>
-        <Link to="/" style={{ 
-          padding: "0.5rem 1rem", 
-          backgroundColor: "var(--theme-primary)",
-          color: "var(--theme-on-primary)",
-          textDecoration: "none", 
-          borderRadius: "4px" 
-        }}>
-          ← 返回主页
-        </Link>
-      </div>
-
+    <div className="app settings-page settings-redesign">
+      <header className="settings-header">
+        <div><span className="settings-eyebrow">TELEGRAM DEPILER</span><h1>系统设置</h1><p>管理连接、下载策略与应用更新。</p></div>
+        <div className="settings-header-actions"><ThemeToggle /><Link className="settings-back" to="/">← 返回主页</Link></div>
+      </header>
+      <nav className="settings-tabs" role="tablist" aria-label="设置分类">
+        {tabs.map((tab, index) => <button key={tab.id} id={`tab-${tab.id}`} role="tab" type="button" aria-selected={activeTab === tab.id} aria-controls={`panel-${tab.id}`} tabIndex={activeTab === tab.id ? 0 : -1}
+          onClick={() => { setActiveTab(tab.id); setMessage(null); }}
+          onKeyDown={event => {
+            let next = index;
+            if (event.key === "ArrowRight") next = (index + 1) % tabs.length;
+            else if (event.key === "ArrowLeft") next = (index + tabs.length - 1) % tabs.length;
+            else if (event.key === "Home") next = 0;
+            else if (event.key === "End") next = tabs.length - 1;
+            else return;
+            event.preventDefault(); setActiveTab(tabs[next].id);
+            document.getElementById(`tab-${tabs[next].id}`)?.focus();
+          }}><span>{tab.title}</span><small>{tab.detail}</small></button>)}
+      </nav>
+      {message && <p className={`settings-${message.type === "error" ? "error" : "success"}`} role={message.type === "error" ? "alert" : "status"}>{message.text}</p>}
+      <section role="tabpanel" id="panel-connection" aria-labelledby="tab-connection" hidden={activeTab !== "connection"}>
       <div className="card">
-        <h2>基础配置</h2>
-        <form onSubmit={saveConfig}>
+        <div className="settings-section-heading"><span className="settings-eyebrow">CONNECTION</span><h2>基础连接</h2><p>配置 Telegram API、机器人和网络代理。</p></div>
+        <form className="settings-connection-form" onSubmit={saveConfig}>
           <label>
             API ID *
             <input
@@ -581,9 +472,7 @@ export default function Settings() {
             </small>
           </label>
 
-          <div>
-            <strong>代理设置（可选）</strong>
-          </div>
+          <div className="settings-form-divider"><strong>网络代理</strong><small>版本检查和应用包下载也使用这里保存的代理。</small></div>
 
           <label>
             代理类型
@@ -704,8 +593,10 @@ export default function Settings() {
         </form>
       </div>
 
+      </section>
+      <section role="tabpanel" id="panel-account" aria-labelledby="tab-account" hidden={activeTab !== "account"}>
       <div className="card">
-        <h2>面板账号</h2>
+        <div className="settings-section-heading"><span className="settings-eyebrow">PANEL ACCOUNT</span><h2>面板账号</h2><p>设置控制台登录凭据。</p></div>
         <p style={{ color: "var(--theme-muted-text)", fontSize: "0.9rem", marginTop: 0 }}>
           默认账号密码为 <code>admin / admin</code>，建议登录后尽快修改。
         </p>
@@ -773,8 +664,10 @@ export default function Settings() {
         </div>
       </div>
 
+      </section>
+      <section role="tabpanel" id="panel-login" aria-labelledby="tab-login" hidden={activeTab !== "login"}>
       <div className="card">
-        <h2>登录状态</h2>
+        <div className="settings-section-heading"><span className="settings-eyebrow">TELEGRAM SESSION</span><h2>Telegram 登录</h2><p>保存基础连接配置后，再发送验证码完成登录。</p></div>
         {loginStatusLoading ? <p role="status">正在检查 Telegram 登录状态…</p> : loginStatusError ? (
           <p role="alert">{loginStatusError}</p>
         ) : loginState?.is_authorized ? (
@@ -871,88 +764,12 @@ export default function Settings() {
             已检测到二步验证，请输入 Telegram 账户的二步密码。该密码仅用于完成登录，不会被保存。
           </p>
         )}
-        {message && (
-          <p className={`feedback ${message.type}`} style={{ marginTop: "1rem" }}>
-            {message.text}
-          </p>
-        )}
       </div>
 
-      <div style={{ marginTop: "2rem", padding: "1.25rem", border: "1px solid var(--theme-border)", borderRadius: "8px", background: "var(--theme-surface)" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", alignItems: "center", flexWrap: "wrap" }}>
-          <div>
-            <h3 style={{ margin: 0 }}>版本与更新</h3>
-            <p style={{ margin: "0.35rem 0 0", color: "var(--theme-muted-text)" }}>
-              当前 {updateState?.channel === "bata" ? "体验版 bata" : "正式版 latest"} · v{updateState?.current || __APP_VERSION__}
-            </p>
-          </div>
-          <span style={{ color: updateState?.result?.available ? "var(--color-warning-strong)" : "var(--color-success-strong)" }}>
-            {updateState?.result?.error
-              ? "检查失败"
-              : updateState?.result?.available
-              ? `发现 ${updateState.result.target}`
-              : updateState?.result?.current
-              ? "已是最新版本"
-              : "尚未检查"}
-          </span>
-        </div>
-        <div style={{ display: "grid", gap: "0.65rem", marginTop: "1rem" }}>
-          <label><input type="checkbox" checked={updateState?.settings.check_enabled ?? true} disabled={!updateState || updateLoading} onChange={(e) => saveUpdateSettings({ check_enabled: e.target.checked })} /> 自动检查更新</label>
-          <label><input type="checkbox" checked={updateState?.settings.auto_update ?? false} disabled={!updateState || updateLoading} onChange={(e) => saveUpdateSettings({ auto_update: e.target.checked })} /> 发现新版本后自动更新</label>
-          <label><input type="checkbox" checked={updateState?.settings.experience_program ?? false} disabled={!updateState || updateLoading || updateState.current.startsWith("bata.")} onChange={(e) => saveUpdateSettings({ experience_program: e.target.checked })} /> 加入体验计划（使用 bata 应用包）</label>
-          <label style={{ maxWidth: "220px" }}>检查间隔（小时）<input type="number" min={1} max={168} value={updateState?.settings.check_interval_hours ?? 24} disabled={!updateState || updateLoading} onChange={(e) => saveUpdateSettings({ check_interval_hours: Number(e.target.value || 24) })} /></label>
-        </div>
-        <div style={{ display: "flex", gap: "0.6rem", flexWrap: "wrap", marginTop: "1rem" }}>
-          <button type="button" onClick={checkApplicationUpdate} disabled={updateLoading}>立即检查</button>
-          <button type="button" onClick={applyApplicationUpdate} disabled={updateLoading || !updateState?.capability.supported || !updateState?.result?.available}>立即更新</button>
-          {updateState?.capability.reason && <span style={{ color: "var(--theme-muted-text)", alignSelf: "center" }}>{updateState.capability.reason}</span>}
-        </div>
-        {(updateMessage || updateState?.job?.message) && <p className="info" style={{ marginBottom: 0 }}>{updateMessage || updateState?.job?.message}</p>}
-      </div>
-
-      <div style={{ marginTop: "2rem", paddingTop: "1rem", borderTop: "1px solid var(--theme-border)", textAlign: "center", color: "var(--theme-muted-text)", fontSize: "0.9rem" }}>
-        <div style={{ marginBottom: "0.75rem", display: "flex", justifyContent: "center", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
-          <span>当前版本：v{__APP_VERSION__}</span>
-          <button
-            type="button"
-            onClick={fetchVersionCheck}
-            style={{
-              color:
-                versionCheck?.has_update === true
-                  ? "var(--color-warning-strong)"
-                  : versionCheck?.has_update === false
-                  ? "var(--color-success-strong)"
-                  : "var(--theme-muted-text)",
-              backgroundColor:
-                versionCheck?.has_update === true
-                  ? "var(--color-warning-surface)"
-                  : versionCheck?.has_update === false
-                  ? "var(--color-success-surface)"
-                  : "var(--theme-surface-muted)",
-              borderRadius: "999px",
-              padding: "0.2rem 0.6rem",
-              border: "none",
-              cursor: versionRefreshing ? "wait" : "pointer",
-            }}
-          >
-            {versionRefreshing
-              ? "检查中…"
-              : versionCheck?.has_update === true
-              ? `发现新版本 v${versionCheck.latest_version}`
-              : versionCheck?.has_update === false
-              ? "已是最新版本"
-              : "暂时无法检查更新"}
-          </button>
-        </div>
-        <a
-          href="https://github.com/APecme/Telegram_Depiler"
-          target="_blank"
-          rel="noreferrer"
-          style={{ color: "var(--theme-primary)", textDecoration: "none" }}
-        >
-          GitHub: https://github.com/APecme/Telegram_Depiler
-        </a>
-      </div>
+      </section>
+      <section role="tabpanel" id="panel-downloads" aria-labelledby="tab-downloads" hidden={activeTab !== "downloads"}><DownloadSettingsPanel /></section>
+      <section role="tabpanel" id="panel-updates" aria-labelledby="tab-updates" hidden={activeTab !== "updates"}><UpdateSettingsPanel /></section>
+      <footer className="settings-footer"><span>Telegram Depiler</span><a href="https://github.com/APecme/Telegram_Depiler" target="_blank" rel="noreferrer">GitHub ↗</a></footer>
     </div>
   );
 }

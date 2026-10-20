@@ -13,6 +13,7 @@ import sqlite3
 from typing import Any, Awaitable, Callable, Literal, Optional
 
 from .media_cache import generate_cover_cache
+from .download_control import download_with_control
 
 logger = logging.getLogger(__name__)
 
@@ -569,64 +570,38 @@ class TelegramWorker:
             self._client = client
             return client
 
+    async def _request(self, operation):
+        return await asyncio.wait_for(operation, timeout=self.settings.download_options.idle_timeout_seconds)
+
     async def _download_media_with_retry(
         self,
         message: Any,
         *,
         file: Path,
         progress_callback: Optional[Callable[[int, int], None]] = None,
-        max_attempts: int = 5,
+        max_attempts: int | None = None,
+        download_id: int | None = None,
     ) -> Any:
-        last_error: Optional[Exception] = None
+        options = self.settings.download_options
+        if max_attempts is not None:
+            options = options.model_copy(update={"max_retries": max_attempts - 1})
 
-        for attempt in range(1, max_attempts + 1):
-            try:
-                await self._ensure_client_connected(force_reconnect=(attempt > 1))
-                result = await message.download_media(
-                    file=file,
-                    progress_callback=progress_callback,
-                )
-                if attempt > 1:
-                    logger.info(
-                        "Telegram download recovered after retry %d/%d: %s",
-                        attempt,
-                        max_attempts,
-                        file,
-                    )
-                return result
-            except asyncio.CancelledError:
-                raise
-            except FloodWaitError as exc:
-                last_error = exc
-                if attempt >= max_attempts:
-                    break
-                wait_seconds = max(int(getattr(exc, "seconds", 0) or 0), 1) + 1
-                logger.warning("Telegram download hit FloodWait for %ss, retrying %d/%d", wait_seconds, attempt, max_attempts)
-                await asyncio.sleep(wait_seconds)
-            except (ConnectionError, OSError, asyncio.TimeoutError, RuntimeError, RPCError) as exc:
-                last_error = exc
-                if attempt >= max_attempts:
-                    logger.error(
-                        "Telegram download failed after %d/%d attempts: %s",
-                        attempt,
-                        max_attempts,
-                        file,
-                    )
-                    break
+        async def prepare(attempt):
+            # Reconnecting a healthy shared session interrupts other downloads.
+            await self._ensure_client_connected()
+            if download_id is not None:
+                self.database.update_download(download_id, download_speed=0, progress=0, error="")
 
-                backoff = min(2 ** (attempt - 1), 5)
-                logger.warning(
-                    "Telegram download attempt %d/%d failed for %s, reconnecting in %ss: %s",
-                    attempt,
-                    max_attempts,
-                    file,
-                    backoff,
-                    exc,
-                )
-                await asyncio.sleep(backoff)
+        def stalled(exc, attempt):
+            if download_id is not None:
+                self.database.update_download(download_id, download_speed=0, error=f"第 {attempt + 1} 次下载失败：{exc}")
+            logger.warning("Download attempt %s stopped for %s: %s", attempt + 1, file, exc)
 
-        assert last_error is not None
-        raise last_error
+        return await download_with_control(
+            lambda callback: message.download_media(file=file, progress_callback=callback),
+            options, progress_callback, before_attempt=prepare, on_stalled=stalled,
+            on_waiting=lambda: self.database.update_download(download_id, download_speed=0) if download_id is not None else None,
+        )
 
     async def _create_client(self, proxy: Optional[tuple]) -> TelegramClient:
         """创建 Telegram 客户端，参考 telegram-message-bot-main 的实现方式
@@ -1047,13 +1022,13 @@ class TelegramWorker:
                     await self.queue_manager.on_download_finished(download_id)
                 return
             
-            # 获取客户端
-            client = await self._get_client()
+            # 获取客户端也需要超时，避免等待连接或锁时永久占用队列槽。
+            client = await self._request(self._get_client())
             
             # 获取消息
             try:
-                chat = await client.get_entity(chat_id)
-                message = await client.get_messages(chat, ids=message_id)
+                chat = await self._request(client.get_entity(chat_id))
+                message = await self._request(client.get_messages(chat, ids=message_id))
                 
                 if not message:
                     logger.warning(f"恢复下载任务失败：找不到消息 {message_id}")
@@ -1063,7 +1038,7 @@ class TelegramWorker:
                     return
                 
                 # 获取发送者信息
-                sender = await message.get_sender()
+                sender = await self._request(message.get_sender())
                 
                 # 直接执行下载逻辑，不创建新记录
                 if rule.get("content_type", "media") == "message_text":
@@ -1085,6 +1060,11 @@ class TelegramWorker:
                 
         except Exception as e:
             logger.exception(f"恢复队列下载任务失败: {e}")
+            record = self.database.get_download(download_id)
+            if record and record.get("status") == "downloading":
+                self.database.update_download(download_id, status="failed", download_speed=0, error=str(e) or "请求超时")
+                if self.queue_manager:
+                    await self.queue_manager.on_download_finished(download_id)
     
     async def _continue_download_from_queue(self, download_id: int, message: Any, rule: dict, chat: Any, sender: Any) -> None:
         """从队列继续下载（使用已有的下载记录）"""
@@ -1220,7 +1200,8 @@ class TelegramWorker:
             await self._download_media_with_retry(
                 message,
                 file=download_base_path,
-                progress_callback=progress_callback if file_size > 0 else None,
+                progress_callback=progress_callback,
+                download_id=download_id,
             )
 
             downloaded_path = download_base_path
@@ -1868,7 +1849,8 @@ class TelegramWorker:
                     await self._download_media_with_retry(
                         event.message,
                         file=target_path,
-                        progress_callback=progress_callback if file_size > 0 else None,
+                        progress_callback=progress_callback,
+                        download_id=download_id,
                     )
                     cover_path = await generate_cover_cache(self.settings.data_dir, download_id, target_path)
                     self.database.update_download(
@@ -2344,7 +2326,7 @@ class TelegramWorker:
                             f"**任务ID：** `{download_id}`\n"
                             f"**规则ID：** {rule.get('id', 'Unknown')}\n\n"
                             f"**状态：** 队列中\n"
-                            f"当前有5个任务正在下载，本任务将在队列中等待..."
+                            f"已达到并发上限（{self.settings.download_options.concurrent_downloads} 个任务），等待空闲位置..."
                         )
 
                         buttons = [
@@ -2356,14 +2338,14 @@ class TelegramWorker:
 
                         for admin_id in self.settings.admin_user_ids:
                             try:
-                                entity = await self._bot_client.get_entity(admin_id)
+                                entity = await self._request(self._bot_client.get_entity(admin_id))
                                 if isinstance(entity, TgUser):
-                                    await self._bot_client.send_message(
+                                    await self._request(self._bot_client.send_message(
                                         entity.id,
                                         notification_text,
                                         parse_mode="markdown",
                                         buttons=buttons,
-                                    )
+                                    ))
                                     logger.info("已向管理员用户 %s 发送队列通知", entity.id)
                                     break
                             except Exception as inner_e:
@@ -2482,14 +2464,14 @@ class TelegramWorker:
                     # 只向“管理员用户”（User 类型）发送私聊通知，避免误填频道/群ID导致发消息到频道
                     for admin_id in self.settings.admin_user_ids:
                         try:
-                            entity = await self._bot_client.get_entity(admin_id)
+                            entity = await self._request(self._bot_client.get_entity(admin_id))
                             if isinstance(entity, TgUser):
-                                bot_message = await self._bot_client.send_message(
+                                bot_message = await self._request(self._bot_client.send_message(
                                     entity.id,
                                     notification_text,
                                     parse_mode="markdown",
                                     buttons=buttons,
-                                )
+                                ))
                                 logger.info("已向管理员用户 %s 发送下载通知", entity.id)
                                 break
                         except Exception as inner_e:  # pragma: no cover - 防御性
@@ -2562,7 +2544,8 @@ class TelegramWorker:
             await self._download_media_with_retry(
                 message,
                 file=actual_target_path,
-                progress_callback=progress_callback if file_size > 0 else None,
+                progress_callback=progress_callback,
+                download_id=download_id,
             )
 
             downloaded_path = actual_target_path

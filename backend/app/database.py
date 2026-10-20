@@ -410,6 +410,12 @@ class Database:
             ).fetchall()
             return [dict(row) for row in rows]
 
+    def queued_downloads(self) -> List[Dict[str, Any]]:
+        with self._connect() as conn:
+            return [dict(row) for row in conn.execute(
+                "SELECT * FROM downloads WHERE status = 'queued' ORDER BY priority DESC, created_at ASC, id ASC"
+            ).fetchall()]
+
     def get_download(self, download_id: int) -> Optional[Dict[str, Any]]:
         """Return one download record without applying a history-list limit."""
         with self._connect() as conn:

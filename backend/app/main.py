@@ -9,9 +9,6 @@ import os
 import socket
 import subprocess
 from contextlib import asynccontextmanager
-from urllib.parse import quote
-from urllib.request import Request, urlopen, ProxyHandler, build_opener
-from urllib.error import URLError, HTTPError
 from pathlib import Path
 from typing import Optional
 from fastapi import FastAPI, HTTPException, Body, Header, Query
@@ -22,6 +19,7 @@ import mimetypes
 from telethon import events
 
 from .config import get_settings
+from .download_control import DownloadOptions
 from .database import Database
 from .schemas import (
     ConfigPayload,
@@ -128,9 +126,11 @@ ADMIN_TOKENS: set[str] = set()
 
 
 class DownloadQueueManager:
-    """全局下载队列管理器，限制最多同时5个下载任务"""
+    """Bot 与规则下载共享的可配置队列。"""
     
-    MAX_CONCURRENT = 5
+    @property
+    def MAX_CONCURRENT(self):
+        return settings.download_options.concurrent_downloads
     
     def __init__(self, database: Database):
         self.database = database
@@ -140,8 +140,7 @@ class DownloadQueueManager:
         """尝试开始一个下载任务。如果当前并发数已满，返回False并将任务标记为queued"""
         async with self._lock:
             # 统计当前正在下载的任务数
-            downloads = self.database.list_downloads(limit=1000)
-            downloading_count = sum(1 for d in downloads if d.get('status') == 'downloading')
+            downloading_count = self.database.get_download_stats()["downloading"]
             
             if downloading_count >= self.MAX_CONCURRENT:
                 # 超过并发限制，标记为队列中
@@ -155,45 +154,28 @@ class DownloadQueueManager:
                 return True
     
     async def on_download_finished(self, download_id: int):
-        """下载完成/失败/取消时调用，尝试启动队列中的下一个任务"""
+        """Fill available slots without exceeding the current configured limit."""
         async with self._lock:
-            # 查找最早的queued任务（按优先级和创建时间排序）
-            downloads = self.database.list_downloads(limit=1000)
-            queued_tasks = [
-                d for d in downloads 
-                if d.get('status') == 'queued'
-            ]
-            
-            if not queued_tasks:
-                logger.info(f"下载任务 {download_id} 完成，队列为空")
-                return
-            
-            # 按优先级（降序）和创建时间（升序）排序
-            queued_tasks.sort(key=lambda d: (-(d.get('priority') or 0), d.get('created_at') or ''))
-            next_task = queued_tasks[0]
-            next_id = next_task.get('id')
-            
-            if next_id is None:
-                return
-            
-            # 将队列中的任务标记为downloading
-            self.database.update_download(next_id, status='downloading')
-            logger.info(f"下载任务 {download_id} 完成，启动队列任务 {next_id}")
-            
-            # 根据来源触发下载恢复
-            source = next_task.get('source', 'bot')
-            if source == 'rule' and worker:
-                # 规则下载：通过message_id和chat_id恢复
-                message_id = next_task.get('message_id')
-                chat_id = next_task.get('chat_id')
-                if message_id and chat_id:
-                    # 在后台任务中恢复下载
+            available = max(0, self.MAX_CONCURRENT - self.database.get_download_stats()["downloading"])
+            queued = self.database.queued_downloads()
+            for next_task in queued:
+                if available <= 0:
+                    break
+                next_id = next_task["id"]
+                source = next_task.get("source", "bot")
+                if source == "rule" and worker:
+                    message_id, chat_id = next_task.get("message_id"), next_task.get("chat_id")
+                    if not message_id or not chat_id:
+                        self.database.update_download(next_id, status="failed", error="缺少原始消息信息", download_speed=0)
+                        continue
+                    self.database.update_download(next_id, status="downloading", error="", download_speed=0)
                     asyncio.create_task(worker.restore_queued_download(next_id, message_id, chat_id))
+                elif source == "bot" and bot_handler:
+                    self.database.update_download(next_id, status="downloading", error="", download_speed=0)
+                    asyncio.create_task(bot_handler.restore_queued_download(next_task))
                 else:
-                    logger.warning(f"规则下载任务 {next_id} 缺少message_id或chat_id，无法恢复")
-            elif source == 'bot' and bot_handler:
-                # Bot 下载：通过数据库记录恢复
-                asyncio.create_task(bot_handler.restore_queued_download(next_task))
+                    continue
+                available -= 1
 
 
 download_queue_manager = DownloadQueueManager(database)
@@ -284,18 +266,20 @@ async def lifespan(app: FastAPI):
     logger.info("  - Bot Username: %s", settings.bot_username or "未配置")
     logger.info("  - 管理员用户ID列表: %s", settings.admin_user_ids if settings.admin_user_ids else "未配置")
     
-    # 启动时：尝试自动启动 Bot 命令处理器（如果满足条件）
+    async def initialize_telegram():
+        try:
+            await _ensure_bot_handler_running()
+            await _resume_incomplete_downloads()
+        except Exception as exc:
+            logger.warning("初始化 Telegram 或恢复下载失败: %s", exc)
+
+    # Telegram being unreachable must not hide settings or fail update health checks.
+    initialization = asyncio.create_task(initialize_telegram())
     try:
-        await _ensure_bot_handler_running()
-    except Exception as e:
-        logger.warning(f"初始化 Bot 命令处理器失败: {e}")
-    # 启动时：自动尝试恢复未完成的下载任务
-    try:
-        await _resume_incomplete_downloads()
-    except Exception as e:  # pragma: no cover - 防御性
-        logger.warning("自动恢复未完成下载任务失败: %s", e)
-    
-    yield
+        yield
+    finally:
+        initialization.cancel()
+        await asyncio.gather(initialization, return_exceptions=True)
     
     # 关闭时：断开连接
     if bot_handler:
@@ -399,15 +383,6 @@ async def health_check() -> dict:
     return {"status": "ok", "version": os.environ.get("TELEGRAM_DEPILER_RELEASE_LABEL") or settings.version}
 
 
-def _parse_version_parts(version: str) -> tuple[int, ...]:
-    cleaned = (version or "").strip().lower().lstrip("v")
-    parts: list[int] = []
-    for raw in cleaned.split("."):
-        digits = "".join(ch for ch in raw if ch.isdigit())
-        parts.append(int(digits) if digits else 0)
-    return tuple(parts or [0])
-
-
 def _normalize_proxy_values(
     proxy_type: str | None,
     host: str | None,
@@ -457,107 +432,15 @@ def _normalize_proxy_values(
     )
 
 
-def _normalize_proxy_settings() -> tuple[str, str, int, str | None, str | None] | None:
-    return _normalize_proxy_values(
-        settings.proxy_type,
-        settings.proxy_host,
-        settings.proxy_port,
-        settings.proxy_user,
-        settings.proxy_password,
-    )
-
-
-class _TemporarySocksProxy:
-    def __init__(self, proxy_type: str, host: str, port: int, user: str | None, password: str | None):
-        self.proxy_type = proxy_type
-        self.host = host
-        self.port = port
-        self.user = user
-        self.password = password
-        self._original_socket = None
-        self._original_create_connection = None
-
-    def __enter__(self):
-        import socks
-
-        proxy_kind = socks.SOCKS5 if self.proxy_type == "socks5" else socks.SOCKS4
-        self._original_socket = socket.socket
-        self._original_create_connection = socket.create_connection
-        socks.setdefaultproxy(
-            proxy_kind,
-            self.host,
-            self.port,
-            True,
-            self.user or None,
-            self.password or None,
-        )
-        socket.socket = socks.socksocket
-        socket.create_connection = socks.create_connection
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        import socks
-
-        if self._original_socket is not None:
-            socket.socket = self._original_socket
-        if self._original_create_connection is not None:
-            socket.create_connection = self._original_create_connection
-        socks.setdefaultproxy()
-        return False
-
-
 @api.get("/version-check")
 async def version_check() -> dict:
-    current_version = settings.version
-    remote_url = "https://raw.githubusercontent.com/APecme/Telegram_Depiler/main/VERSION"
-    proxy_settings = _normalize_proxy_settings()
-
-    def _read_latest_version() -> str:
-        request = Request(
-            remote_url,
-            headers={"User-Agent": "Telegram-Depiler-Version-Check"},
-        )
-
-        if not proxy_settings:
-            with urlopen(request, timeout=15) as response:
-                return response.read().decode("utf-8").strip() or current_version
-
-        proxy_type, proxy_host, proxy_port, proxy_user, proxy_password = proxy_settings
-        logger.info("Version check using proxy: %s://%s:%s", proxy_type, proxy_host, proxy_port)
-
-        if proxy_type == "http":
-            auth = ""
-            if proxy_user:
-                auth = quote(proxy_user, safe="")
-                if proxy_password:
-                    auth += f":{quote(proxy_password, safe='')}"
-                auth += "@"
-            proxy_url = f"http://{auth}{proxy_host}:{proxy_port}"
-            opener = build_opener(ProxyHandler({"http": proxy_url, "https": proxy_url}))
-            with opener.open(request, timeout=15) as response:
-                return response.read().decode("utf-8").strip() or current_version
-
-        with _TemporarySocksProxy(proxy_type, proxy_host, proxy_port, proxy_user, proxy_password):
-            with urlopen(request, timeout=15) as response:
-                return response.read().decode("utf-8").strip() or current_version
-
-    try:
-        latest_version = _read_latest_version()
-    except (HTTPError, URLError, TimeoutError, OSError) as exc:
-        logger.warning("检查版本更新失败: %s", exc)
-        return {
-            "current_version": current_version,
-            "latest_version": None,
-            "has_update": None,
-            "status": "error",
-        }
-
-    has_update = _parse_version_parts(latest_version) > _parse_version_parts(current_version)
+    result = await asyncio.to_thread(updater.check)
     return {
-        "current_version": current_version,
-        "latest_version": latest_version,
-        "has_update": has_update,
-        "status": "ok",
+        "current_version": result["current"],
+        "latest_version": result.get("target"),
+        "has_update": None if result.get("error") else result.get("available", False),
+        "status": "error" if result.get("error") else "ok",
+        "error": result.get("error", ""),
     }
 
 
@@ -573,29 +456,21 @@ async def update_settings(
     x_admin_token: str | None = Header(default=None, alias="X-Admin-Token"),
 ) -> dict:
     _require_admin(x_admin_token)
-    joining = body.experience_program and updater._channel() != "bata"
     update_state.save_settings(body.model_dump())
-    response = updater.status()
-    if joining:
-        try:
-            response["activation"] = updater.start_apply()
-        except updater.UpdateError as exc:
-            response["activation_error"] = str(exc)
-        response.update(updater.status())
-    return response
+    return updater.status()
 
 
 @api.post("/update/check")
 async def check_update(x_admin_token: str | None = Header(default=None, alias="X-Admin-Token")) -> dict:
     _require_admin(x_admin_token)
-    return updater.check(force=True)
+    return await asyncio.to_thread(updater.check, force=True)
 
 
 @api.post("/update/apply")
 async def apply_update(x_admin_token: str | None = Header(default=None, alias="X-Admin-Token")) -> dict:
     _require_admin(x_admin_token)
     try:
-        return updater.start_apply()
+        return await asyncio.to_thread(updater.start_apply)
     except updater.UpdateError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -618,6 +493,24 @@ async def read_config() -> dict:
             "password": stored.get("proxy_password"),
         },
     }
+
+
+@api.get("/download-settings")
+async def download_settings(x_admin_token: str | None = Header(default=None, alias="X-Admin-Token")) -> dict:
+    _require_admin(x_admin_token)
+    return settings.download_options.model_dump()
+
+
+@api.put("/download-settings")
+async def save_download_settings(
+    body: DownloadOptions,
+    x_admin_token: str | None = Header(default=None, alias="X-Admin-Token"),
+) -> dict:
+    _require_admin(x_admin_token)
+    database.set_config({"download_options": body.model_dump_json()})
+    settings.download_options = body
+    await download_queue_manager.on_download_finished(0)
+    return body.model_dump()
 
 
 @api.post("/config/test-proxy")

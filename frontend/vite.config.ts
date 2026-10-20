@@ -24,7 +24,7 @@ function readVersionFromRoot(): string {
   return "dev";
 }
 
-const appVersion = readVersionFromRoot();
+const appVersion = process.env.TELEGRAM_DEPILER_RELEASE_LABEL || readVersionFromRoot();
 
 export default defineConfig({
   plugins: [react()],

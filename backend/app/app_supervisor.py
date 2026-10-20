@@ -45,7 +45,7 @@ def save_state(value: dict) -> None:
 def root_for(label: str | None) -> Path:
     if not label:
         return BASE_ROOT
-    if not (APP_DIR / label / "backend" / "app" / "main.py").is_file():
+    if not (APP_DIR / label / "backend" / "app" / "main.py").is_file() or not (APP_DIR / label / "backend" / "app" / "static" / "index.html").is_file():
         raise ValueError("更新目录不完整")
     return APP_DIR / label
 
@@ -85,6 +85,20 @@ def _terminate(signum, frame) -> None:
     raise SystemExit(0)
 
 
+def child_configuration(root: Path, label: str | None, commit: str):
+    environment = os.environ.copy()
+    code_root = root / "backend" if label else root
+    environment["PYTHONPATH"] = str(code_root)
+    environment["TELEGRAM_DEPILER_APP_SUPERVISOR"] = "1"
+    environment["TELEGRAM_DEPILER_DATA_DIR"] = str(DATA_DIR.resolve())
+    environment["TELEGRAM_DEPILER_DOWNLOAD_DIR"] = str(BASE_ROOT / "downloads")
+    environment["TELEGRAM_DEPILER_STATIC_DIR"] = str(code_root / "app" / "static")
+    if label:
+        environment["TELEGRAM_DEPILER_RELEASE_LABEL"] = label
+        environment["TELEGRAM_DEPILER_RELEASE_COMMIT"] = commit
+    return [sys.executable, "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"], str(code_root), environment
+
+
 def run() -> int:
     global _child
     signal.signal(signal.SIGTERM, _terminate)
@@ -100,9 +114,7 @@ def run() -> int:
             set_job("rolled_back", f"应用包不可用，已恢复镜像内版本：{exc}")
             label, root = None, BASE_ROOT
 
-        environment = os.environ.copy()
-        environment["PYTHONPATH"] = str(root / "backend") + os.pathsep + environment.get("PYTHONPATH", "")
-        environment["TELEGRAM_DEPILER_APP_SUPERVISOR"] = "1"
+        command, child_cwd, environment = child_configuration(root, label, str(state.get("commit", "")))
         expected = (label or environment.get("TELEGRAM_DEPILER_RELEASE_LABEL", "")).lstrip("vV")
         if not expected:
             try:
@@ -113,8 +125,8 @@ def run() -> int:
             environment["TELEGRAM_DEPILER_RELEASE_LABEL"] = label
             environment["TELEGRAM_DEPILER_RELEASE_COMMIT"] = str(state.get("commit", ""))
         _child = subprocess.Popen(
-            [sys.executable, "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"],
-            cwd=str(BASE_ROOT),
+            command,
+            cwd=child_cwd,
             env=environment,
         )
         if not _health_ready(_child, expected):

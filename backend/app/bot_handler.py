@@ -12,6 +12,7 @@ from telethon.tl.types import User, KeyboardButtonCallback
 from .config import Settings
 from .database import Database
 from .media_cache import generate_cover_cache
+from .download_control import download_with_control
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +31,7 @@ class BotCommandHandler:
         self._bot_id: Optional[int] = None
         self._bot_first_name: Optional[str] = None
         self._bot_last_name: Optional[str] = None
-        self._download_semaphore = asyncio.Semaphore(5)
+        self._download_semaphore = asyncio.Semaphore(32)
         self._active_downloads: dict[int, bool] = {}
         self._download_tasks: dict[int, asyncio.Task] = {}
         self._cancelled_downloads: set[int] = set()
@@ -152,6 +153,33 @@ class BotCommandHandler:
             logger.exception(f"启动Bot命令处理器失败: {e}")
             raise
             
+    async def _request(self, operation):
+        return await asyncio.wait_for(operation, timeout=self.settings.download_options.idle_timeout_seconds)
+
+    async def _fail_download(self, download_id, error):
+        record = self.database.get_download(download_id) if download_id else None
+        if record and record.get("status") in {"downloading", "pending"}:
+            self.database.update_download(download_id, status="failed", download_speed=0, error=str(error) or "请求超时")
+            self._active_downloads.pop(download_id, None)
+            self._download_tasks.pop(download_id, None)
+            if self.queue_manager:
+                await self.queue_manager.on_download_finished(download_id)
+
+    async def _download_with_control(self, client, message, download_id, *, file, progress_callback):
+        async def prepare(attempt):
+            if not client.is_connected():
+                await client.connect()
+            self.database.update_download(download_id, download_speed=0, progress=0, error="")
+
+        def stalled(exc, attempt):
+            self.database.update_download(download_id, download_speed=0, error=f"第 {attempt + 1} 次下载失败：{exc}")
+
+        return await download_with_control(
+            lambda callback: client.download_media(message, file=file, progress_callback=callback),
+            self.settings.download_options, progress_callback, before_attempt=prepare, on_stalled=stalled,
+            on_waiting=lambda: self.database.update_download(download_id, download_speed=0),
+        )
+
     async def _set_bot_commands(self) -> None:
         """设置Bot命令菜单"""
         try:
@@ -517,12 +545,12 @@ class BotCommandHandler:
                         f"保存路径：`{existing_path}`\n\n"
                         "如需再次下载此文件，可先使用 /dedupe_off 关闭重复检测，再重新发送。"
                     )
-                    await event.reply(text, parse_mode='markdown')
+                    await self._request(event.reply(text, parse_mode='markdown'))
                     return
 
             # 记录管理员发送给 Bot 的消息
             try:
-                sender = await event.get_sender()
+                sender = await self._request(event.get_sender())
                 sender_id = getattr(sender, "id", 0) if sender else 0
                 sender_username = getattr(sender, "username", None) if sender else None
                 sender_first_name = getattr(sender, "first_name", None) if sender else None
@@ -596,7 +624,7 @@ class BotCommandHandler:
                     f"**文件名：** {file_name}\n"
                     f"**大小：** {self._format_size(file_size)}\n"
                     f"**类型：** {media_type}\n\n"
-                    f"当前有5个任务正在下载，本任务将在队列中等待...\n\n"
+                    f"已达到并发上限（{self.settings.download_options.concurrent_downloads} 个任务），等待空闲位置...\n\n"
                     f"**下载统计：**\n"
                     f"总计：{total + 1} | 成功：{completed} | 失败：{failed}"
                 )
@@ -611,7 +639,7 @@ class BotCommandHandler:
                 ],
             ]
 
-            reply_msg = await event.reply(reply_text, parse_mode='markdown', buttons=buttons)
+            reply_msg = await self._request(event.reply(reply_text, parse_mode='markdown', buttons=buttons))
             
             # 如果任务进入队列，直接返回不执行下载
             if not can_start:
@@ -701,40 +729,13 @@ class BotCommandHandler:
                                 )
                             )
                     
-                    # 使用用户账户客户端下载文件
-                    # 首先需要通过用户账户客户端获取相同的消息
-                    # Bot收到的消息在用户账户中可以通过对话获取
-                    try:
-                        # 尝试通过用户账户客户端获取消息
-                        # 由于Bot收到的消息是私聊，我们需要通过对话获取
-                        chat = await self.user_client.get_entity(self._bot_username)
-                        user_message = await self.user_client.get_messages(chat, ids=event.message.id)
-                        
-                        if user_message:
-                            # 使用用户账户客户端下载
-                            await self.user_client.download_media(
-                                user_message,
-                                file=target_path,
-                                progress_callback=progress_callback
-                            )
-                        else:
-                            # 如果无法通过用户账户获取，使用Bot客户端下载
-                            logger.warning("无法通过用户账户获取消息，使用Bot客户端下载")
-                            await self._bot_client.download_media(
-                                event.message,
-                                file=target_path,
-                                progress_callback=progress_callback
-                            )
-                    except Exception as e:
-                        logger.warning(f"尝试使用用户账户下载失败，使用Bot客户端: {e}")
-                        # 如果无法通过用户账户下载，使用Bot客户端下载
-                        await self._bot_client.download_media(
-                            event.message,
-                            file=target_path,
-                            progress_callback=progress_callback
-                        )
-                    
-                    # 下载完成
+                    # Bot message IDs belong to the Bot session; use that client
+                    # directly so fallback cannot repeat an exhausted retry budget.
+                    await self._download_with_control(
+                        self._bot_client, event.message, download_id,
+                        file=target_path, progress_callback=progress_callback,
+                    )
+
                     elapsed_time = time.time() - start_time
                     avg_speed = (file_size / elapsed_time) if elapsed_time > 0 else 0
                     
@@ -779,13 +780,13 @@ class BotCommandHandler:
                     )
                     finished_buttons = self._build_completed_download_buttons(download_id)
 
-                    await self._bot_client.edit_message(
+                    await self._request(self._bot_client.edit_message(
                         event.chat_id,
                         reply_msg.id,
                         success_text,
                         parse_mode='markdown',
                         buttons=finished_buttons,
-                    )
+                    ))
                     self._active_downloads[download_id] = False
                     self._download_tasks.pop(download_id, None)
                     self._cancelled_downloads.discard(download_id)
@@ -800,6 +801,7 @@ class BotCommandHandler:
                     self.database.update_download(
                         download_id,
                         status="failed",
+                        download_speed=0,
                         error=str(e),
                     )
                     
@@ -830,19 +832,21 @@ class BotCommandHandler:
                         ]
                     ]
 
-                    await self._bot_client.edit_message(
+                    await self._request(self._bot_client.edit_message(
                         event.chat_id,
                         reply_msg.id,
                         error_text,
                         parse_mode='markdown',
                         buttons=failed_buttons,
-                    )
+                    ))
                     self._active_downloads[download_id] = False
                     self._download_tasks.pop(download_id, None)
                     self._cancelled_downloads.discard(download_id)
                 
         except Exception as e:
             logger.exception(f"处理媒体消息失败: {e}")
+            if "download_id" in locals():
+                await self._fail_download(download_id, e)
             
     async def restore_queued_download(self, download: dict) -> None:
         """从全局队列恢复 Bot 触发的下载任务。
@@ -855,6 +859,7 @@ class BotCommandHandler:
         try:
             if not self._bot_client:
                 logger.warning("Bot 客户端尚未就绪，无法恢复队列中的下载任务")
+                await self._fail_download(download.get("id"), "Bot 客户端尚未就绪")
                 return
 
             download_id = download.get("id")
@@ -862,6 +867,7 @@ class BotCommandHandler:
             chat_id = download.get("chat_id")
             if not download_id or not message_id or not chat_id:
                 logger.warning("恢复队列任务字段缺失: id=%s message_id=%s chat_id=%s", download_id, message_id, chat_id)
+                await self._fail_download(download_id, "原始消息信息缺失")
                 return
 
             file_name = download.get("file_name") or f"telegram_{message_id}"
@@ -869,11 +875,11 @@ class BotCommandHandler:
             media_type = "unknown"
 
             # 获取原始消息
-            chat = await self._bot_client.get_entity(chat_id)
-            msg = await self._bot_client.get_messages(chat, ids=message_id)
+            chat = await self._request(self._bot_client.get_entity(chat_id))
+            msg = await self._request(self._bot_client.get_messages(chat, ids=message_id))
             if not msg:
                 logger.warning("无法恢复队列任务 %s：找不到原始消息 %s", download_id, message_id)
-                self.database.update_download(download_id, status="failed", error="找不到原始消息")
+                await self._fail_download(download_id, "找不到原始消息")
                 return
 
             if msg.video:
@@ -907,7 +913,7 @@ class BotCommandHandler:
             reply_msg = None
             try:
                 if reply_message_id:
-                    reply_msg = await self._bot_client.get_messages(reply_chat_id, ids=reply_message_id)
+                    reply_msg = await self._request(self._bot_client.get_messages(reply_chat_id, ids=reply_message_id))
             except Exception:
                 reply_msg = None
 
@@ -937,24 +943,24 @@ class BotCommandHandler:
 
             if reply_msg:
                 try:
-                    await self._bot_client.edit_message(
+                    await self._request(self._bot_client.edit_message(
                         reply_chat_id,
                         reply_message_id,
                         start_text,
                         parse_mode="markdown",
                         buttons=buttons,
-                    )
+                    ))
                 except Exception as e:  # pragma: no cover - 防御性
                     logger.debug("编辑队列提示消息失败，将发送新消息: %s", e)
                     reply_msg = None
 
             if not reply_msg:
-                reply_msg = await self._bot_client.send_message(
+                reply_msg = await self._request(self._bot_client.send_message(
                     reply_chat_id,
                     start_text,
                     buttons=buttons,
                     parse_mode="markdown",
-                )
+                ))
                 # 回写回复消息ID到数据库，便于后续再次恢复
                 try:
                     self.database.update_download(
@@ -1005,10 +1011,10 @@ class BotCommandHandler:
                             download_speed=download_speed,
                         )
 
-                    await self._bot_client.download_media(
-                        msg,
+                    await self._download_with_control(
+                        self._bot_client, msg, download_id,
                         file=target_path,
-                        progress_callback=progress_callback if file_size > 0 else None,
+                        progress_callback=progress_callback,
                     )
 
                     elapsed = time.time() - start_time
@@ -1049,13 +1055,13 @@ class BotCommandHandler:
                     )
                     finished_buttons = self._build_completed_download_buttons(download_id)
 
-                    await self._bot_client.edit_message(
+                    await self._request(self._bot_client.edit_message(
                         reply_chat_id,
                         reply_msg.id,
                         success_text,
                         parse_mode="markdown",
                         buttons=finished_buttons,
-                    )
+                    ))
 
                     self._active_downloads[download_id] = False
                     self._download_tasks.pop(download_id, None)
@@ -1071,6 +1077,7 @@ class BotCommandHandler:
                     self.database.update_download(
                         download_id,
                         status="failed",
+                        download_speed=0,
                         error=str(e),
                     )
                     if self.queue_manager:
@@ -1088,13 +1095,13 @@ class BotCommandHandler:
                         [KeyboardButtonCallback("🗑️ 删除", f"delete_{download_id}".encode("utf-8"))]
                     ]
                     try:
-                        await self._bot_client.edit_message(
+                        await self._request(self._bot_client.edit_message(
                             reply_chat_id,
                             reply_msg.id,
                             error_text,
                             parse_mode="markdown",
                             buttons=failed_buttons,
-                        )
+                        ))
                     except Exception:
                         pass
                     self._active_downloads[download_id] = False
@@ -1103,6 +1110,7 @@ class BotCommandHandler:
 
         except Exception as e:
             logger.exception("restore_queued_download 执行出错: %s", e)
+            await self._fail_download(download.get("id"), e)
             
     def _format_size(self, size: int) -> str:
         """格式化文件大小"""
@@ -1479,7 +1487,7 @@ class BotCommandHandler:
                     f"📋 **任务已加入队列**\n\n"
                     f"文件: {download.get('file_name', '未知')}\n"
                     f"状态: 队列中\n\n"
-                    f"当前有5个任务正在下载，本任务将在队列中等待..."
+                    f"已达到并发上限（{self.settings.download_options.concurrent_downloads} 个任务），等待空闲位置..."
                 )
                 
         except Exception as e:

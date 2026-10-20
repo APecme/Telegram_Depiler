@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 env:
   REGISTRY: docker.io
@@ -34,3 +34,20 @@ jobs:
           build-args: |
             TELEGRAM_DEPILER_RELEASE_LABEL=${{ steps.release.outputs.label }}
             TELEGRAM_DEPILER_RELEASE_COMMIT=${{ github.sha }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Build application package
+        env:
+          TELEGRAM_DEPILER_RELEASE_LABEL: ${{ steps.release.outputs.label }}
+        run: |
+          cd frontend
+          npm ci --no-audit --no-fund
+          npm run build
+          cd ..
+          python scripts/build_app_package.py --label "${{ steps.release.outputs.label }}"
+      - name: Publish experience update
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ steps.release.outputs.label }}" release-assets/* --target "${GITHUB_SHA}" --prerelease --title "体验版 ${{ steps.release.outputs.label }}" --notes "来自 main 分支的体验版应用包。"

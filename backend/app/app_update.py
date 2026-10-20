@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import hashlib
 import os
-import platform
 from pathlib import Path, PurePosixPath
 import re
 import stat
@@ -16,6 +15,7 @@ import zipfile
 
 from . import app_supervisor, update_state
 from .config import get_settings
+from .update_transport import open_url
 
 API = "https://api.github.com/repos/APecme/Telegram_Depiler"
 ACTIVE = {"scheduled", "downloading", "restarting"}
@@ -31,43 +31,28 @@ class UpdateError(RuntimeError):
 
 def _json(url: str) -> dict:
     request = urllib.request.Request(url, headers={"Accept": "application/vnd.github+json", "User-Agent": "Telegram-Depiler-updater"})
-    with urllib.request.urlopen(request, timeout=20) as response:
+    with open_url(request, timeout=20) as response:
         return json.loads(response.read().decode("utf-8"))
 
 
-def _registry_json(url: str, headers: dict[str, str] | None = None) -> dict:
-    request = urllib.request.Request(url, headers=headers or {"Accept": "application/json"})
-    with urllib.request.urlopen(request, timeout=20) as response:
-        return json.loads(response.read().decode("utf-8"))
-
-
-def _registry_target(tag: str) -> dict:
-    repository = "apecme/telegram-depiler"
-    token = _registry_json("https://auth.docker.io/token?service=registry.docker.io&scope=repository:" + repository + ":pull")["token"]
-    headers = {"Authorization": "Bearer " + token, "Accept": ", ".join([
-        "application/vnd.oci.image.index.v1+json", "application/vnd.docker.distribution.manifest.list.v2+json",
-        "application/vnd.oci.image.manifest.v1+json", "application/vnd.docker.distribution.manifest.v2+json",
-    ])}
-    response = urllib.request.urlopen(urllib.request.Request(f"https://registry-1.docker.io/v2/{repository}/manifests/{tag}", headers=headers), timeout=20)
-    digest = response.headers.get("Docker-Content-Digest", "")
-    manifest = json.loads(response.read().decode("utf-8"))
-    if "manifests" in manifest:
-        machine = platform.machine().lower()
-        arch = "arm64" if machine in {"aarch64", "arm64"} else "amd64"
-        matches = [item for item in manifest["manifests"] if item.get("platform", {}).get("os") == "linux" and item.get("platform", {}).get("architecture") == arch]
-        if not matches:
-            raise UpdateError("该版本没有适合当前 CPU 架构的 Docker 镜像")
-        digest = matches[0]["digest"]
-        manifest = _registry_json(f"https://registry-1.docker.io/v2/{repository}/manifests/{digest}", headers=headers)
-    if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
-        raise UpdateError("更新源未返回有效镜像摘要")
-    config_id = manifest["config"]["digest"]
-    config = _registry_json(f"https://registry-1.docker.io/v2/{repository}/blobs/{config_id}", headers=headers)
-    env = dict(value.split("=", 1) for value in config.get("config", {}).get("Env", []) if "=" in value)
-    target = (env.get("TELEGRAM_DEPILER_RELEASE_LABEL") or "").lstrip("vV")
-    if not target:
-        raise UpdateError("更新镜像缺少版本标识")
-    return {"target": target, "image": repository + "@" + digest, "tag": tag, "commit": env.get("TELEGRAM_DEPILER_RELEASE_COMMIT", "")}
+def release_target(channel: str) -> dict:
+    if channel == "bata":
+        releases = _json(f"{API}/releases?per_page=100")
+        candidates = [item for item in releases if not item.get("draft") and re.fullmatch(r"bata\.\d{14}", item.get("tag_name", ""))]
+        if not candidates:
+            raise UpdateError("还没有可下载的体验版应用包")
+        release = max(candidates, key=lambda item: item["tag_name"])
+    else:
+        release = _json(f"{API}/releases/latest")
+    label = str(release.get("tag_name", "")).lstrip("vV")
+    if release.get("draft") or not re.fullmatch(r"(?:bata\.\d{14}|\d+\.\d+\.\d+)", label):
+        raise UpdateError("发布版本标识无效")
+    assets = {item["name"]: item for item in release.get("assets", [])}
+    package = assets.get("telegram-depiler-app.zip")
+    checksum = assets.get("telegram-depiler-app.zip.sha256")
+    if not package or not checksum:
+        raise UpdateError("该版本没有完整应用包，请先通过 Docker 更新镜像")
+    return {"target": label, "package_url": package["browser_download_url"], "checksum_url": checksum["browser_download_url"], "release_url": release.get("html_url", ""), "commit": ""}
 
 
 def _current() -> str:
@@ -84,7 +69,8 @@ def _version(value: str) -> tuple[int, ...] | None:
 
 
 def _job() -> dict:
-    return update_state.read("job", {})
+    value = update_state.read("job", {})
+    return value if isinstance(value, dict) else {}
 
 
 def _capability() -> dict:
@@ -95,9 +81,11 @@ def _capability() -> dict:
     return {"supported": False, "reason": "源码部署仅支持检查更新。"}
 
 
-def _download_archive(commit: str, destination: Path) -> None:
-    request = urllib.request.Request(f"{API}/zipball/{commit}", headers={"User-Agent": "Telegram-Depiler-updater"})
-    with urllib.request.urlopen(request, timeout=60) as response, destination.open("wb") as output:
+def _download_file(url: str, destination: Path) -> None:
+    if not url.startswith("https://"):
+        raise UpdateError("应用包必须通过 HTTPS 下载")
+    request = urllib.request.Request(url, headers={"User-Agent": "Telegram-Depiler-updater"})
+    with open_url(request, timeout=30) as response, destination.open("wb") as output:
         size = 0
         while chunk := response.read(1024 * 1024):
             size += len(chunk)
@@ -106,70 +94,65 @@ def _download_archive(commit: str, destination: Path) -> None:
             output.write(chunk)
 
 
-def _allowed(path: PurePosixPath) -> bool:
-    return path.as_posix() == "VERSION" or path.parts[:1] == ("backend",) and path.parts[:2] == ("backend", "app")
-
-
-def _blob_sha(content: bytes) -> str:
-    return hashlib.sha1(b"blob " + str(len(content)).encode() + b"\0" + content).hexdigest()
-
-
-def _extract_verified(archive: Path, destination: Path, expected: dict[str, str]) -> None:
-    seen: set[str] = set()
+def extract_package(archive: Path, destination: Path, label: str) -> None:
+    seen = set()
     total = 0
+    required = REQUIRED | {"backend/app/static/index.html", "requirements.txt"}
     with zipfile.ZipFile(archive) as package:
         for item in package.infolist():
-            parts = PurePosixPath(item.filename).parts
             if item.is_dir():
                 continue
-            if len(parts) < 2 or any(part in ("", ".", "..") for part in parts) or "\\" in item.filename or item.filename.startswith("/"):
+            path = PurePosixPath(item.filename)
+            if path.is_absolute() or any(part in ("", ".", "..") for part in path.parts) or "\\" in item.filename or ":" in item.filename:
                 raise UpdateError("应用包中存在不安全路径")
-            path = PurePosixPath(*parts[1:])
             name = path.as_posix()
-            if not _allowed(path):
-                continue
-            if name in seen or name not in expected or stat.S_ISLNK(item.external_attr >> 16):
-                raise UpdateError("应用包文件与 Git 提交不符")
+            if not (name in {"VERSION", "requirements.txt"} or path.parts[:2] == ("backend", "app")):
+                raise UpdateError("应用包包含非应用文件")
+            if name in seen or stat.S_ISLNK(item.external_attr >> 16):
+                raise UpdateError("应用包包含重复文件或符号链接")
             if item.file_size > MAX_EXTRACTED - total:
                 raise UpdateError("应用包解压大小超过限制")
             content = package.read(item)
             total += len(content)
-            if _blob_sha(content) != expected[name]:
-                raise UpdateError(f"应用包校验失败：{name}")
             target = destination.joinpath(*path.parts)
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(content)
             seen.add(name)
-    if not REQUIRED.issubset(seen):
-        raise UpdateError("应用包缺少必需文件")
+    if not required.issubset(seen):
+        raise UpdateError("应用包缺少前端或后端必需文件")
+    if (destination / "VERSION").read_text(encoding="utf-8").strip() != label:
+        raise UpdateError("应用包版本与目标版本不一致")
 
 
 def _stage(info: dict) -> None:
-    label, commit = info.get("target", ""), info.get("commit", "")
-    if not re.fullmatch(r"(?:bata\.\d{14}|\d+\.\d+\.\d+)", label) or not re.fullmatch(r"[a-f0-9]{40}", commit):
-        raise UpdateError("目标镜像未提供有效应用版本和提交标识")
+    label = info.get("target", "")
+    if not re.fullmatch(r"(?:bata\.\d{14}|\d+\.\d+\.\d+)", label):
+        raise UpdateError("目标版本无效")
     target = app_supervisor.APP_DIR / label
-    if target.is_dir():
+    if (target / ".verified.json").is_file():
         return
     app_supervisor.APP_DIR.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=app_supervisor.APP_DIR) as temporary:
-        temporary_path = Path(temporary)
-        archive = temporary_path / "source.zip"
-        extracted = temporary_path / "app"
-        extracted.mkdir()
-        commit_info = _json(f"{API}/git/commits/{commit}")
-        if commit_info.get("sha") != commit:
-            raise UpdateError("Git 提交标识不匹配")
-        tree = _json(f"{API}/git/trees/{commit_info['tree']['sha']}?recursive=1")
-        if tree.get("truncated"):
-            raise UpdateError("Git 文件清单不完整")
-        expected = {
-            item["path"]: item["sha"]
-            for item in tree.get("tree", [])
-            if item.get("type") == "blob" and _allowed(PurePosixPath(item["path"]))
-        }
-        _download_archive(commit, archive)
-        _extract_verified(archive, extracted, expected)
+        root = Path(temporary)
+        archive, checksum = root / "app.zip", root / "checksum"
+        _download_file(info["checksum_url"], checksum)
+        checksum_parts = checksum.read_text(encoding="utf-8").strip().split()
+        expected = checksum_parts[0] if checksum_parts else ""
+        if not re.fullmatch(r"[a-fA-F0-9]{64}", expected):
+            raise UpdateError("更新校验信息无效")
+        _download_file(info["package_url"], archive)
+        if hashlib.sha256(archive.read_bytes()).hexdigest() != expected.lower():
+            raise UpdateError("应用包 SHA256 校验失败")
+        extracted = root / "extracted"
+        extract_package(archive, extracted, label)
+        installed = app_supervisor.BASE_ROOT / "requirements.txt"
+        if not installed.is_file():
+            installed = app_supervisor.BASE_ROOT / "backend" / "requirements.txt"
+        if not installed.is_file() or installed.read_text().splitlines() != (extracted / "requirements.txt").read_text().splitlines():
+            raise UpdateError("此版本依赖已变化，请通过 Docker 更新镜像")
+        (extracted / ".verified.json").write_text(json.dumps({"sha256": expected.lower()}))
+        if target.exists():
+            target.rename(target.with_name(label + f".incomplete-{int(time.time())}"))
         extracted.rename(target)
 
 
@@ -181,7 +164,7 @@ def apply(info: dict, record: dict) -> None:
         _stage(info)
         app_supervisor.save_state({
             "current": info["target"],
-            "commit": info["commit"],
+            "commit": info.get("commit", ""),
             "previous": previous.get("current"),
             "previous_commit": previous.get("commit", ""),
             "pending": True,
@@ -203,7 +186,7 @@ def check(force: bool = False) -> dict:
         return cached
     result = {"channel": selected, "current": _current(), "checked_at": time.time(), "checked_epoch": time.time(), "available": False, "error": ""}
     try:
-        target = _registry_target("bata" if selected == "bata" else "latest")
+        target = release_target(selected)
         if selected == "bata" and not re.fullmatch(r"bata\.\d{14}", target["target"]):
             raise UpdateError("bata 镜像版本标识无效")
         if selected == "stable" and not _version(target["target"]):
@@ -211,8 +194,7 @@ def check(force: bool = False) -> dict:
         result.update(target)
         switching = result["current"].startswith("bata.") != (selected == "bata")
         if switching and selected == "stable":
-            base = _version(get_settings().version)
-            result["available"] = bool(base and _version(target["target"]) and _version(target["target"]) > base)
+            result["available"] = True
         elif switching:
             result["available"] = True
         elif selected == "bata":
@@ -222,7 +204,7 @@ def check(force: bool = False) -> dict:
             result["available"] = bool(current and _version(target["target"]) and _version(target["target"]) > current)
         result["switching_channel"] = switching
     except Exception as exc:
-        result["error"] = str(exc) if isinstance(exc, UpdateError) else "无法连接更新源，请检查服务器网络后重试"
+        result["error"] = str(exc) if isinstance(exc, UpdateError) else f"无法访问 GitHub 更新源：{exc}。请检查网络或代理配置。"
     update_state.write("check", result)
     return result
 
@@ -254,6 +236,12 @@ def start_apply() -> dict:
 
 
 def start_scheduler() -> None:
+    interrupted = _job()
+    if interrupted.get("status") in ACTIVE:
+        installed = interrupted.get("target") == _current()
+        update_state.write("job", dict(interrupted, status="updated" if installed else "failed",
+            message="应用更新完成" if installed else "上次更新被中断，可重新检查并重试"))
+
     def worker() -> None:
         while True:
             time.sleep(60)

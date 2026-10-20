@@ -53,7 +53,7 @@ class VideoRuleTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.worker._should_download_by_rule(message, self.rule))
 
     async def download_two_videos(self):
-        async def save(message, *, file, progress_callback=None):
+        async def save(message, *, file, progress_callback=None, download_id=None):
             file.write_bytes(b"video")
             return str(file)
 
