@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -120,6 +121,38 @@ class Database:
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 );
+
+                -- 群聊规则的下载容量限额（一条规则可有多条限额，全部满足才准入）
+                CREATE TABLE IF NOT EXISTS group_rule_quota_limits (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    rule_id INTEGER NOT NULL,
+                    period TEXT NOT NULL DEFAULT 'day', -- hour/day/week/month/custom
+                    custom_value INTEGER, -- custom 周期的 N
+                    custom_unit TEXT, -- custom 周期的单位：hours/days
+                    limit_bytes INTEGER NOT NULL DEFAULT 0, -- 限额（整数 bytes，1024 进制）
+                    anchor_at DATETIME, -- custom 周期锚点（UTC），启用时写入后不再重置
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS idx_quota_limits_rule
+                    ON group_rule_quota_limits(rule_id);
+
+                -- 用量账本：独立于 downloads 记录，删除下载记录/文件不返还成功用量
+                CREATE TABLE IF NOT EXISTS group_rule_quota_usage (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    rule_id INTEGER NOT NULL,
+                    limit_id INTEGER NOT NULL,
+                    download_id INTEGER,
+                    bytes INTEGER NOT NULL DEFAULT 0,
+                    state TEXT NOT NULL DEFAULT 'reserved', -- reserved/committed/released
+                    started_at DATETIME NOT NULL, -- 本笔用量"开始"的时间（决定归属周期）
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_quota_usage_download_limit
+                    ON group_rule_quota_usage(download_id, limit_id);
+                CREATE INDEX IF NOT EXISTS idx_quota_usage_limit_state
+                    ON group_rule_quota_usage(limit_id, state);
                 """
             )
             self._migrate_schema(conn)
@@ -180,6 +213,13 @@ class Database:
                 conn.execute("ALTER TABLE downloads ADD COLUMN grouped_id INTEGER DEFAULT 0")
             if not has_column("downloads", "media_group_size"):
                 conn.execute("ALTER TABLE downloads ADD COLUMN media_group_size INTEGER DEFAULT 1")
+            # 排队原因：concurrency（全局并发已满）或 quota（等待下载容量限额）
+            if not has_column("downloads", "queue_reason"):
+                conn.execute("ALTER TABLE downloads ADD COLUMN queue_reason TEXT")
+            if not has_column("downloads", "queue_reason_text"):
+                conn.execute("ALTER TABLE downloads ADD COLUMN queue_reason_text TEXT")
+            if not has_column("downloads", "next_retry_at"):
+                conn.execute("ALTER TABLE downloads ADD COLUMN next_retry_at DATETIME")
 
         # messages 表 - 确保媒体及转发相关字段和时间戳存在
         if has_column("messages", "id"):
@@ -244,8 +284,48 @@ class Database:
                 conn.execute("ALTER TABLE group_download_rules ADD COLUMN text_format TEXT NOT NULL DEFAULT 'txt'")
             if not has_column("group_download_rules", "text_merge"):
                 conn.execute("ALTER TABLE group_download_rules ADD COLUMN text_merge BOOLEAN NOT NULL DEFAULT 0")
+            # 下载容量限额总开关（默认关闭，兼容老配置）
+            if not has_column("group_download_rules", "quota_enabled"):
+                conn.execute("ALTER TABLE group_download_rules ADD COLUMN quota_enabled BOOLEAN NOT NULL DEFAULT 0")
 
+        self._ensure_quota_tables(conn)
         conn.commit()
+
+    def _ensure_quota_tables(self, conn: sqlite3.Connection) -> None:
+        """为老版本 state.db 补齐限额相关表与索引（幂等）。"""
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS group_rule_quota_limits (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                rule_id INTEGER NOT NULL,
+                period TEXT NOT NULL DEFAULT 'day',
+                custom_value INTEGER,
+                custom_unit TEXT,
+                limit_bytes INTEGER NOT NULL DEFAULT 0,
+                anchor_at DATETIME,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_quota_limits_rule
+                ON group_rule_quota_limits(rule_id);
+
+            CREATE TABLE IF NOT EXISTS group_rule_quota_usage (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                rule_id INTEGER NOT NULL,
+                limit_id INTEGER NOT NULL,
+                download_id INTEGER,
+                bytes INTEGER NOT NULL DEFAULT 0,
+                state TEXT NOT NULL DEFAULT 'reserved',
+                started_at DATETIME NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_quota_usage_download_limit
+                ON group_rule_quota_usage(download_id, limit_id);
+            CREATE INDEX IF NOT EXISTS idx_quota_usage_limit_state
+                ON group_rule_quota_usage(limit_id, state);
+            """
+        )
 
     # Config helpers -----------------------------------------------------
     def set_config(self, values: Dict[str, Any]) -> None:
@@ -286,6 +366,9 @@ class Database:
         reply_chat_id: int | None = None,
         grouped_id: int | None = None,
         media_group_size: int | None = None,
+        queue_reason: str | None = None,
+        queue_reason_text: str | None = None,
+        next_retry_at: str | None = None,
     ) -> int:
         with self._connect() as conn:
             cur = conn.execute(
@@ -295,9 +378,10 @@ class Database:
                     file_path, status, progress, download_speed,
                     source, tg_file_id, tg_access_hash,
                     file_size, save_dir, rule_id, rule_name,
-                    reply_message_id, reply_chat_id
+                    reply_message_id, reply_chat_id,
+                    queue_reason, queue_reason_text, next_retry_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     message_id,
@@ -317,6 +401,9 @@ class Database:
                     rule_name,
                     reply_message_id,
                     reply_chat_id,
+                    queue_reason,
+                    queue_reason_text,
+                    next_retry_at,
                 ),
             )
             conn.commit()
@@ -341,6 +428,9 @@ class Database:
         reply_message_id: int | None = None,
         reply_chat_id: int | None = None,
         origin_file_name: str | None = None,
+        queue_reason: str | None = None,
+        queue_reason_text: str | None = None,
+        next_retry_at: str | None = None,
     ) -> None:
         updates = []
         params: List[Any] = []
@@ -390,6 +480,15 @@ class Database:
         if origin_file_name is not None:
             updates.append("origin_file_name = ?")
             params.append(origin_file_name)
+        if queue_reason is not None:
+            updates.append("queue_reason = ?")
+            params.append(queue_reason or None)
+        if queue_reason_text is not None:
+            updates.append("queue_reason_text = ?")
+            params.append(queue_reason_text or None)
+        if next_retry_at is not None:
+            updates.append("next_retry_at = ?")
+            params.append(next_retry_at or None)
 
         if not updates:
             return
@@ -399,7 +498,13 @@ class Database:
         params.append(download_id)
 
         with self._connect() as conn:
-            conn.execute(sql, params)
+            cursor = conn.execute(sql, params)
+            if cursor.rowcount and status in ('completed', 'failed', 'cancelled', 'paused'):
+                settled = 'committed' if status == 'completed' else 'released'
+                conn.execute(
+                    "UPDATE group_rule_quota_usage SET state=?, updated_at=CURRENT_TIMESTAMP "
+                    "WHERE download_id=? AND state='reserved'", (settled, download_id),
+                )
             conn.commit()
 
     def list_downloads(self, limit: int = 50) -> List[Dict[str, Any]]:
@@ -415,6 +520,44 @@ class Database:
             return [dict(row) for row in conn.execute(
                 "SELECT * FROM downloads WHERE status = 'queued' ORDER BY priority DESC, created_at ASC, id ASC"
             ).fetchall()]
+
+    def prepare_download_recovery(self) -> None:
+        with self._connect() as conn:
+            conn.execute("UPDATE downloads SET status='queued', download_speed=0 "
+                         "WHERE status IN ('pending', 'downloading')")
+
+    def unfinished_downloads(self) -> List[Dict[str, Any]]:
+        """所有未完成下载（不限制条数，避免重启恢复时丢失任务）。"""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM downloads
+                WHERE status IN ('pending', 'queued', 'downloading')
+                ORDER BY priority DESC, created_at ASC, id ASC
+                """
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def quota_waiting_downloads(self, now: Optional[str] = None) -> List[Dict[str, Any]]:
+        """等待下载容量限额、且已到下次重试时间的任务。"""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM downloads
+                WHERE status = 'queued' AND queue_reason = 'quota'
+                  AND (next_retry_at IS NULL OR next_retry_at <= COALESCE(?, CURRENT_TIMESTAMP))
+                ORDER BY priority DESC, created_at ASC, id ASC
+                """,
+                (now,),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def has_quota_waiting_downloads(self) -> bool:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM downloads WHERE status = 'queued' AND queue_reason = 'quota' LIMIT 1"
+            ).fetchone()
+            return row is not None
 
     def get_download(self, download_id: int) -> Optional[Dict[str, Any]]:
         """Return one download record without applying a history-list limit."""
@@ -521,6 +664,8 @@ class Database:
     def delete_download(self, download_id: int) -> None:
         """删除指定的下载记录。"""
         with self._connect() as conn:
+            conn.execute("UPDATE group_rule_quota_usage SET state='released', updated_at=CURRENT_TIMESTAMP "
+                         "WHERE download_id=? AND state='reserved'", (download_id,))
             conn.execute("DELETE FROM downloads WHERE id = ?", (download_id,))
             conn.commit()
 
@@ -768,9 +913,11 @@ class Database:
         auto_catch_up: bool = False,
         include_comments: bool = False,
         last_seen_message_id: int = 0,
+        quota_enabled: bool = False,
+        _conn: sqlite3.Connection | None = None,
     ) -> int:
         """新增一条群聊下载规则，返回规则ID。"""
-        with self._connect() as conn:
+        with (self._connect() if _conn is None else nullcontext(_conn)) as conn:
             cur = conn.execute(
                 """
                 INSERT INTO group_download_rules (
@@ -779,9 +926,9 @@ class Database:
                     filename_template, include_keywords, exclude_keywords,
                     match_mode, start_time, end_time,
                     min_message_id, max_message_id, add_download_suffix, move_after_complete,
-                    auto_catch_up, include_comments, last_seen_message_id
+                    auto_catch_up, include_comments, last_seen_message_id, quota_enabled
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     chat_id,
@@ -811,9 +958,11 @@ class Database:
                     1 if auto_catch_up else 0,
                     1 if include_comments else 0,
                     int(last_seen_message_id or 0),
+                    1 if quota_enabled else 0,
                 ),
             )
-            conn.commit()
+            if _conn is None:
+                conn.commit()
             return int(cur.lastrowid)
 
     def update_group_rule(
@@ -846,6 +995,8 @@ class Database:
         auto_catch_up: bool | None = None,
         include_comments: bool | None = None,
         last_seen_message_id: int | None = None,
+        quota_enabled: bool | None = None,
+        _conn: sqlite3.Connection | None = None,
     ) -> None:
         """更新一条群聊下载规则。"""
         updates: list[str] = []
@@ -929,6 +1080,9 @@ class Database:
         if last_seen_message_id is not None:
             updates.append("last_seen_message_id = ?")
             params.append(int(last_seen_message_id))
+        if quota_enabled is not None:
+            updates.append("quota_enabled = ?")
+            params.append(1 if quota_enabled else 0)
 
         if not updates:
             return
@@ -937,9 +1091,10 @@ class Database:
         sql = f"UPDATE group_download_rules SET {', '.join(updates)} WHERE id = ?"
         params.append(rule_id)
 
-        with self._connect() as conn:
+        with (self._connect() if _conn is None else nullcontext(_conn)) as conn:
             conn.execute(sql, params)
-            conn.commit()
+            if _conn is None:
+                conn.commit()
 
     def delete_group_rule(self, rule_id: int) -> None:
         """删除一条群聊下载规则。"""

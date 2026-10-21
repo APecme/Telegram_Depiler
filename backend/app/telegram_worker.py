@@ -14,6 +14,7 @@ from typing import Any, Awaitable, Callable, Literal, Optional
 
 from .media_cache import generate_cover_cache
 from .download_control import download_with_control
+from .download_quota import QuotaService, record_block
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,23 @@ def _media_filename(message: Any) -> str:
     is_photo = bool(getattr(message, "photo", None))
     extension = getattr(file, "ext", None) or (".jpg" if is_photo else "")
     return f"{'photo' if is_photo else 'file'}_{message.id}{extension}"
+
+
+def _media_size(message: Any) -> int:
+    """Use Telegram metadata only; never start a transfer to discover its size."""
+    for obj in (getattr(message, 'file', None), getattr(message, 'document', None),
+                getattr(message, 'video', None), getattr(message, 'audio', None)):
+        size = getattr(obj, 'size', None)
+        if isinstance(size, int) and size > 0:
+            return size
+    photo = getattr(message, 'photo', None)
+    candidates = []
+    for item in getattr(photo, 'sizes', None) or []:
+        size = getattr(item, 'size', None)
+        if isinstance(size, int):
+            candidates.append(size)
+        candidates.extend(value for value in (getattr(item, 'sizes', None) or []) if isinstance(value, int))
+    return max(candidates, default=0)
 
 
 def _render_filename_template(
@@ -968,8 +986,10 @@ class TelegramWorker:
                 task = self._download_tasks[download_id]
                 if not task.done():
                     task.cancel()
+                    if task is not asyncio.current_task():
+                        await asyncio.gather(task, return_exceptions=True)
                     logger.info(f"已取消下载任务 {download_id}")
-                del self._download_tasks[download_id]
+                self._download_tasks.pop(download_id, None)
             
             # 更新数据库状态
             self.database.update_download(download_id, status="cancelled", error="用户取消")
@@ -996,6 +1016,26 @@ class TelegramWorker:
         except Exception as e:
             logger.debug(f"清理下载任务时出错: {e}")
     
+    async def resolve_download_size(self, download: dict) -> int:
+        client = await self._request(self._get_client())
+        message = await self._request(client.get_messages(int(download['chat_id']), ids=int(download['message_id'])))
+        return _media_size(message) if message else 0
+
+    async def _check_download_metadata(self, download_id: int, message: Any, rule: dict) -> bool:
+        if not rule.get('quota_enabled') or rule.get('content_type', 'media') != 'media':
+            return True
+        size = _media_size(message)
+        self.database.update_download(download_id, file_size=size)
+        quota = QuotaService(self.database)
+        admission = quota.reserve(download_id=download_id, rule_id=rule['id'], file_size=size)
+        if admission.admitted:
+            return True
+        quota.release(download_id)
+        record_block(self.database, download_id, admission)
+        if self.queue_manager:
+            await self.queue_manager.on_download_finished(download_id)
+        return False
+
     async def restore_queued_download(self, download_id: int, message_id: int, chat_id: int) -> None:
         """恢复队列中的下载任务（不创建新记录，直接继续下载）"""
         try:
@@ -1012,6 +1052,11 @@ class TelegramWorker:
                 logger.warning(f"恢复下载任务失败：任务状态不是downloading，当前状态: {current_status}")
                 return
             
+            self._cancelled_downloads.discard(download_id)
+            current_task = asyncio.current_task()
+            if current_task:
+                self._download_tasks[download_id] = current_task
+
             # A queued record must resume with the same rule that created it.
             rule_id = download.get("rule_id")
             rule = self.database.get_group_rule(int(rule_id)) if rule_id is not None else None
@@ -1050,7 +1095,8 @@ class TelegramWorker:
                         text_merge=bool(rule.get("text_merge", False)),
                     )
                 else:
-                    await self._continue_download_from_queue(download_id, message, rule, chat, sender)
+                    if await self._check_download_metadata(download_id, message, rule):
+                        await self._continue_download_from_queue(download_id, message, rule, chat, sender)
                 
             except Exception as e:
                 logger.exception(f"恢复下载任务失败: {e}")
@@ -1147,9 +1193,7 @@ class TelegramWorker:
             logger.info("从队列恢复下载文件: %s -> %s", original_file_name, download_base_path)
             
             # 获取文件大小
-            file_size = 0
-            if message.file:
-                file_size = getattr(message.file, "size", 0) or 0
+            file_size = _media_size(message)
             
             # 注册当前任务以便跟踪和取消
             current_task = asyncio.current_task()
@@ -1232,6 +1276,9 @@ class TelegramWorker:
             
         except asyncio.CancelledError:
             logger.info("从队列恢复的下载任务 %d 已被取消", download_id)
+            record = self.database.get_download(download_id)
+            if record and record.get('status') == 'downloading':
+                self.database.update_download(download_id, status='queued', download_speed=0)
             cleanup_target = locals().get('download_base_path') or locals().get('target_path')
             if cleanup_target and cleanup_target.exists():
                 try:
@@ -2269,9 +2316,7 @@ class TelegramWorker:
             timestamp = int(time.time())
             
             # 获取文件大小（用于记录和通知）
-            file_size = 0
-            if message.file:
-                file_size = getattr(message.file, "size", 0) or 0
+            file_size = _media_size(message)
 
             # 先创建下载记录（初始状态为pending），记录规则信息与保存路径
             download_id = self.database.add_download(
@@ -2297,13 +2342,24 @@ class TelegramWorker:
             if self.queue_manager:
                 can_start = await self.queue_manager.try_start_download(download_id)
             else:
-                # 没有队列管理器，直接标记为downloading
-                self.database.update_download(download_id, status="downloading")
+                if rule.get('quota_enabled'):
+                    if not file_size:
+                        try:
+                            file_size = await self.resolve_download_size(self.database.get_download(download_id))
+                            self.database.update_download(download_id, file_size=file_size)
+                        except Exception:
+                            pass
+                    can_start = QuotaService(self.database).claim(download_id, 32).admitted
+                else:
+                    self.database.update_download(download_id, status="downloading")
             
             # 如果任务进入队列，发送通知但不执行下载
             if not can_start:
                 logger.info(f"规则下载任务 {download_id} 进入队列，等待其他任务完成")
                 
+                waiting_record = self.database.get_download(download_id) or {}
+                waiting_reason = waiting_record.get('queue_reason_text') or waiting_record.get('error') or '等待下载位置'
+                waiting_status = '无法下载' if waiting_record.get('status') == 'failed' else '队列中'
                 # 发送队列通知给管理员用户
                 if self._bot_client and self.settings.admin_user_ids:
                     try:
@@ -2317,7 +2373,7 @@ class TelegramWorker:
                         )
 
                         notification_text = (
-                            f"📋 **任务已加入队列**\n\n"
+                            f"📋 **{waiting_status}**\n\n"
                             f"**来源群聊：** {chat_title}\n"
                             f"**发送者：** {sender_name}\n"
                             f"**文件名：** {original_file_name}\n"
@@ -2325,8 +2381,8 @@ class TelegramWorker:
                             f"**大小：** {self._format_size(file_size)}\n"
                             f"**任务ID：** `{download_id}`\n"
                             f"**规则ID：** {rule.get('id', 'Unknown')}\n\n"
-                            f"**状态：** 队列中\n"
-                            f"已达到并发上限（{self.settings.download_options.concurrent_downloads} 个任务），等待空闲位置..."
+                            f"**状态：** {waiting_status}\n"
+                            f"{waiting_reason}"
                         )
 
                         buttons = [
@@ -2422,9 +2478,7 @@ class TelegramWorker:
             logger.info("开始下载文件: %s -> %s", original_file_name, actual_target_path)
             
             # 获取文件大小
-            file_size = 0
-            if message.file:
-                file_size = getattr(message.file, "size", 0) or 0
+            file_size = _media_size(message)
             
             # 发送Bot通知给管理员用户（如果Bot客户端可用，且管理员为用户账号而非频道/群）
             sender_name = (

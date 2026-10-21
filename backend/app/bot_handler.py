@@ -1271,6 +1271,7 @@ class BotCommandHandler:
                     f"• 任务ID: `{download_id}`\n"
                     f"  进度: {progress:.1f}% | 速度: {speed_text}\n"
                     f"  文件: {file_name}"
+                    + (f"\n  原因: {d.get('queue_reason_text')}" if d.get('queue_reason_text') and status == 'queued' else '')
                 )
 
             text = (
@@ -1289,8 +1290,7 @@ class BotCommandHandler:
             await event.answer(f"❌ 查看失败: {exc}", alert=True)
 
     async def pause_download(self, download_id: int) -> bool:
-        downloads = self.database.list_downloads(limit=1000)
-        download = next((d for d in downloads if d.get("id") == download_id), None)
+        download = self.database.get_download(download_id)
         if not download:
             return False
         if download.get("status") != "downloading":
@@ -1314,8 +1314,7 @@ class BotCommandHandler:
         """处理暂停下载"""
         try:
             # 获取下载记录
-            downloads = self.database.list_downloads(limit=1000)
-            download = next((d for d in downloads if d.get('id') == download_id), None)
+            download = self.database.get_download(download_id)
             
             if not download:
                 await event.answer("❌ 下载记录不存在", alert=True)
@@ -1345,6 +1344,10 @@ class BotCommandHandler:
                     )
                 else:
                     await event.answer("❌ 暂停失败", alert=True)
+            elif current_status == 'queued':
+                self.database.update_download(download_id, status='paused', error='用户暂停', download_speed=0)
+                await event.answer('⏸️ 已暂停等待任务')
+                await event.edit(f"⏸️ **已暂停**\n\n文件: {download.get('file_name', '未知')}")
             elif current_status == 'paused':
                 await event.answer("ℹ️ 下载已经是暂停状态", alert=True)
             else:
@@ -1358,8 +1361,7 @@ class BotCommandHandler:
         """处理置顶优先"""
         try:
             # 获取下载记录
-            downloads = self.database.list_downloads(limit=1000)
-            download = next((d for d in downloads if d.get('id') == download_id), None)
+            download = self.database.get_download(download_id)
             
             if not download:
                 await event.answer("❌ 下载记录不存在", alert=True)
@@ -1372,7 +1374,8 @@ class BotCommandHandler:
             self.database.update_download(download_id, priority=new_priority)
 
             # 如果设置为高优先级，则抢占最早开始的其他下载任务
-            if new_priority > 0:
+            if new_priority > 0 and download.get('queue_reason') != 'quota':
+                downloads = self.database.unfinished_downloads()
                 other_candidates = [
                     d for d in downloads
                     if d.get('status') == 'downloading' and d.get('id') != download_id
@@ -1414,8 +1417,7 @@ class BotCommandHandler:
         """处理删除下载"""
         try:
             # 获取下载记录
-            downloads = self.database.list_downloads(limit=1000)
-            download = next((d for d in downloads if d.get('id') == download_id), None)
+            download = self.database.get_download(download_id)
             
             if not download:
                 await event.answer("❌ 下载记录不存在", alert=True)
@@ -1455,8 +1457,7 @@ class BotCommandHandler:
         """处理恢复下载"""
         try:
             # 获取下载记录
-            downloads = self.database.list_downloads(limit=1000)
-            download = next((d for d in downloads if d.get('id') == download_id), None)
+            download = self.database.get_download(download_id)
             
             if not download:
                 await event.answer("❌ 下载记录不存在", alert=True)
@@ -1474,6 +1475,10 @@ class BotCommandHandler:
                 can_start = await self.queue_manager.try_start_download(download_id)
             
             if can_start:
+                if download.get('source') == 'rule' and self.worker:
+                    asyncio.create_task(self.worker.restore_queued_download(download_id, int(download['message_id']), int(download['chat_id'])))
+                else:
+                    asyncio.create_task(self.restore_queued_download(self.database.get_download(download_id)))
                 await event.answer("✅ 已恢复下载")
                 await event.edit(
                     f"▶️ **已恢复下载**\n\n"
@@ -1482,12 +1487,14 @@ class BotCommandHandler:
                     f"使用 /download 命令查看所有下载"
                 )
             else:
-                await event.answer("📋 任务已加入队列，等待其他任务完成")
+                record = self.database.get_download(download_id) or {}
+                wait_reason = record.get('queue_reason_text') or record.get('error') or '等待下载位置'
+                await event.answer(wait_reason, alert=True)
                 await event.edit(
                     f"📋 **任务已加入队列**\n\n"
                     f"文件: {download.get('file_name', '未知')}\n"
                     f"状态: 队列中\n\n"
-                    f"已达到并发上限（{self.settings.download_options.concurrent_downloads} 个任务），等待空闲位置..."
+                    f"{wait_reason}"
                 )
                 
         except Exception as e:
@@ -1522,8 +1529,8 @@ class BotCommandHandler:
                     asyncio.create_task(self.worker.restore_queued_download(download_id, int(message_id), int(chat_id)))
                     await event.answer("🔄 已开始重试下载")
                 else:
-                    self.database.update_download(download_id, status="queued", error="", progress=0.0, download_speed=0.0)
-                    await event.answer("📋 已加入队列，等待重试")
+                    record = self.database.get_download(download_id) or {}
+                    await event.answer(record.get('queue_reason_text') or record.get('error') or '📋 已加入队列，等待重试', alert=True)
                 return
 
             can_start = await self.queue_manager.try_start_download(download_id) if self.queue_manager else True

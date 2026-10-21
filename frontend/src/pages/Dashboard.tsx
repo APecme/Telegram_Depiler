@@ -3,6 +3,8 @@ import { Link } from "react-router-dom";
 import axios from "axios";
 import ThemeToggle from "../components/ThemeToggle";
 import ThemeLogo from "../components/ThemeLogo";
+import { DownloadQuotaEditor, DownloadQuotaUsage, DownloadWaitReason } from "../components/DownloadQuota";
+import { quotaDraft, quotaPayload, type QuotaDraft, type QuotaLimit, type QuotaUsage } from "../utils/downloadQuota";
 import { applyPreviewPage, PREVIEW_PAGE_SIZE, type PreviewHistory } from "../utils/downloadPreview";
 
 const api = axios.create({
@@ -40,6 +42,9 @@ api.interceptors.response.use(
 );
 
 type DownloadRecord = {
+  queue_reason_text?: string;
+  queue_reason?: string;
+  next_retry_at?: string;
   id: number;
   message_id?: number;
   chat_id?: number;
@@ -71,6 +76,10 @@ type DownloadRuntimeSummary = {
 };
 
 type GroupRule = {
+  quota_enabled?: boolean;
+  quota_limits?: QuotaLimit[];
+  quota_usage?: QuotaUsage[];
+  quota_timezone?: string;
   id: number;
   chat_id: number;
   chat_title?: string;
@@ -225,6 +234,8 @@ export default function Dashboard() {
   const [formMoveAfterComplete, setFormMoveAfterComplete] = useState(false);
   const [formAutoCatchUp, setFormAutoCatchUp] = useState(false);
   const [formIncludeComments, setFormIncludeComments] = useState(false);
+  const [formQuotaEnabled, setFormQuotaEnabled] = useState(false);
+  const [formQuotaLimits, setFormQuotaLimits] = useState<QuotaDraft[]>([]);
   const [dirOptions, setDirOptions] = useState<string[]>([]);
   const [dirLoading, setDirLoading] = useState(false);
   const [notification, setNotification] = useState<{message: string; type: "success" | "error" | "info"} | null>(null);
@@ -249,6 +260,13 @@ export default function Dashboard() {
     fetchDefaultDownloadPath();
     fetchDefaultFilenameTemplate();
     fetchVersionCheck();
+  }, []);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      api.get('/group-rules').then(({ data }) => setGroupRules(data.items || [])).catch(() => {});
+    }, 5000);
+    return () => clearInterval(timer);
   }, []);
 
   useEffect(() => {
@@ -736,6 +754,8 @@ export default function Dashboard() {
     setFormMoveAfterComplete(false);
     setFormAutoCatchUp(false);
     setFormIncludeComments(false);
+    setFormQuotaEnabled(false);
+    setFormQuotaLimits([]);
     setShowRuleModal(true);
   };
 
@@ -767,6 +787,8 @@ export default function Dashboard() {
     setFormMoveAfterComplete(rule.move_after_complete || false);
     setFormAutoCatchUp(rule.auto_catch_up || false);
     setFormIncludeComments(rule.include_comments || false);
+    setFormQuotaEnabled(Boolean(rule.quota_enabled));
+    setFormQuotaLimits((rule.quota_limits || []).map(quotaDraft));
     setShowRuleModal(true);
     // 如果已有保存路径，加载该路径的父目录
     if (rule.save_dir) {
@@ -851,6 +873,14 @@ export default function Dashboard() {
       return;
     }
 
+    let limits: QuotaLimit[] = [];
+    try {
+      if (formContentType === 'media') limits = formQuotaLimits.length ? quotaPayload(formQuotaLimits) : [];
+      if (formContentType === 'media' && formQuotaEnabled && !limits.length) throw new Error('开启下载限额至少需要一条限额');
+    } catch (error) {
+      showNotification(error instanceof Error ? error.message : '下载限额配置无效', 'error');
+      return;
+    }
     const selectedDialog = dialogs.find((d) => d.id === formChatId);
     const chatTitle = selectedDialog?.title || selectedDialog?.username || groupRules.find((rule) => rule.id === editingRuleId && rule.chat_id === formChatId)?.chat_title || null;
     const normalizedRuleName = formRuleName.trim() || chatTitle || null;
@@ -878,6 +908,8 @@ export default function Dashboard() {
       move_after_complete: formMoveAfterComplete,
       auto_catch_up: formAutoCatchUp,
       include_comments: formIncludeComments,
+      quota_enabled: formContentType === 'media' && formQuotaEnabled,
+      quota_limits: limits,
     };
 
     try {
@@ -895,7 +927,8 @@ export default function Dashboard() {
       showNotification(editingRuleId ? "规则更新成功！" : "规则创建成功！", "success");
     } catch (error) {
       console.error("Failed to save rule:", error);
-      showNotification("保存规则失败", "error");
+      const detail = axios.isAxiosError(error) ? error.response?.data?.detail : undefined;
+      showNotification(typeof detail === 'string' ? detail : '保存规则失败，请检查限额和规则设置', 'error');
     }
   };
 
@@ -1020,14 +1053,14 @@ export default function Dashboard() {
     return "机器人接收";
   };
 
-  const getStatusMeta = (status: string) => {
+  const getStatusMeta = (status: string, queueReason?: string) => {
     switch (status) {
       case "completed":
         return { label: "已完成", emoji: "✅", bg: "var(--color-success-surface)", color: "var(--color-success-strong)" };
       case "downloading":
         return { label: "下载中", emoji: "⏳", bg: "var(--color-info-surface)", color: "var(--color-info-strong)" };
       case "queued":
-        return { label: "队列中", emoji: "📋", bg: "var(--color-warning-surface)", color: "var(--color-warning-strong)" };
+        return { label: queueReason === 'quota' ? '等待额度' : '队列中', emoji: queueReason === 'quota' ? '⏳' : '📋', bg: "var(--color-warning-surface)", color: "var(--color-warning-strong)" };
       case "paused":
         return { label: "已暂停", emoji: "⏸️", bg: "var(--color-paused-surface)", color: "var(--color-paused-strong)" };
       case "failed":
@@ -1378,7 +1411,7 @@ export default function Dashboard() {
             }}
           >
             {downloads.map((record: DownloadRecord) => {
-              const statusMeta = getStatusMeta(record.status);
+              const statusMeta = getStatusMeta(record.status, record.queue_reason);
               return (
                 <article key={record.id} className="download-record-card">
                   <div className="download-record-top">
@@ -1472,12 +1505,10 @@ export default function Dashboard() {
                     </div>
                   </div>
 
-                  {record.error && record.status === "failed" && (
-                    <div className="download-record-error">{record.error}</div>
-                  )}
+                  <DownloadWaitReason record={record} />
 
                   <div className="download-record-actions">
-                    {record.status === "downloading" && (
+                    {(record.status === "downloading" || record.status === "queued") && (
                       <button
                         onClick={() => handlePauseDownload(record.id)}
                         style={{ padding: "0.45rem 0.75rem", fontSize: "0.85rem", border: "1px solid var(--color-warning)", backgroundColor: "var(--color-warning-surface)", color: "var(--color-warning-strong)", borderRadius: "8px", cursor: "pointer" }}
@@ -1544,12 +1575,13 @@ export default function Dashboard() {
                 </thead>
                 <tbody>
                   {downloads.map((record: DownloadRecord) => {
-                    const statusMeta = getStatusMeta(record.status);
+                    const statusMeta = getStatusMeta(record.status, record.queue_reason);
                     return (
                       <tr key={record.id}>
                         <td><input type="checkbox" checked={selectedIds.includes(record.id)} onChange={(e) => setSelectedIds(e.target.checked ? [...selectedIds, record.id] : selectedIds.filter((id) => id !== record.id))} /></td>
                         <td className="download-table-file" title={record.file_path || record.file_name}>
                           <strong>{record.file_name}</strong>
+                          <DownloadWaitReason record={record} />
                           {record.origin_file_name && record.origin_file_name !== record.file_name && <small>{record.origin_file_name}</small>}
                         </td>
                         <td><span className="download-table-rule">{record.rule_name || sourceLabel(record)}</span>{record.rule_id ? <small>规则 #{record.rule_id}</small> : null}</td>
@@ -1559,7 +1591,7 @@ export default function Dashboard() {
                         <td className="download-table-path" title={record.file_path || record.save_dir || "-"}>{record.file_path || record.save_dir || "-"}</td>
                         <td>{new Date(record.created_at).toLocaleString()}</td>
                         <td className="download-table-actions">
-                          {record.status === "downloading" && <button title="暂停" onClick={() => handlePauseDownload(record.id)}>暂停</button>}
+                          {(record.status === "downloading" || record.status === "queued") && <button title="暂停" onClick={() => handlePauseDownload(record.id)}>暂停</button>}
                           {record.status === "paused" && <button title="恢复" onClick={() => handleResumeDownload(record.id)}>恢复</button>}
                           {record.status === "failed" && <button title="重试" onClick={() => handleRetryDownload(record.id)}>重试</button>}
                           {(record.status === "downloading" || record.status === "pending" || record.status === "queued" || record.status === "paused") && <button title="优先" onClick={() => handlePriorityDownload(record.id)}>优先</button>}
@@ -1580,6 +1612,9 @@ export default function Dashboard() {
 
   return (
     <div className="dashboard-page" style={{ padding: isMobile ? "1rem" : "2rem", maxWidth: "1400px", margin: "0 auto", minHeight: "100vh", display: "flex", flexDirection: "column" }}>
+      {notification && <div role={notification.type === 'error' ? 'alert' : 'status'} className={`dashboard-notification ${notification.type}`}>
+        {notification.message}
+      </div>}
       <div style={{ marginBottom: "2rem", display: "flex", justifyContent: "space-between", alignItems: "center", gap: "1rem", flexWrap: "wrap" }}>
         <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
           <ThemeLogo height={isMobile ? "64px" : "100px"} width={isMobile ? "191px" : "298px"} />
@@ -1992,6 +2027,9 @@ export default function Dashboard() {
                       <span style={{ fontWeight: "500" }}>{rule.text_format === "json" ? "JSON" : "TXT"}{rule.text_merge ? " · 合并文件" : " · 每条消息"}</span>
                     </div>
                   )}
+                  {Boolean(rule.quota_enabled) && rule.content_type !== 'message_text' && <div style={{ gridColumn: '1 / -1' }}>
+                    <DownloadQuotaUsage usage={rule.quota_usage || []} timezone={rule.quota_timezone} />
+                  </div>}
                   {rule.include_extensions && (
                     <div>
                       <span style={{ color: "var(--theme-muted-text)" }}>文件类型：</span>
@@ -2304,7 +2342,7 @@ export default function Dashboard() {
                           : record.status === "downloading"
                           ? "⏳ 下载中"
                           : record.status === "queued"
-                          ? "📋 队列中"
+                          ? (record.queue_reason === 'quota' ? '⏳ 等待额度' : '📋 队列中')
                           : record.status === "paused"
                           ? "⏸️ 已暂停"
                           : record.status === "failed"
@@ -2320,6 +2358,7 @@ export default function Dashboard() {
                       )}
                     </div>
 
+                    <DownloadWaitReason record={record} />
                     {typeof record.progress === "number" && (
                       <div>
                         <div
@@ -2352,7 +2391,7 @@ export default function Dashboard() {
                     )}
 
                     <div style={{ display: "flex", gap: "0.5rem", justifyContent: "flex-start", flexWrap: "wrap" }}>
-                      {record.status === "downloading" && (
+                      {(record.status === "downloading" || record.status === "queued") && (
                         <button
                           onClick={() => handlePauseDownload(record.id)}
                           style={{
@@ -2491,6 +2530,7 @@ export default function Dashboard() {
                           >
                             {record.file_name}
                           </div>
+                          <DownloadWaitReason record={record} />
                         </td>
                         <td style={{ padding: "0.75rem" }}>{record.origin_file_name || "-"}</td>
                         <td style={{ padding: "0.75rem" }}>
@@ -2551,7 +2591,7 @@ export default function Dashboard() {
                                 : record.status === "downloading"
                                 ? "⏳ 下载中"
                                 : record.status === "queued"
-                                ? "📋 队列中"
+                                ? (record.queue_reason === 'quota' ? '⏳ 等待额度' : '📋 队列中')
                                 : record.status === "paused"
                                 ? "⏸️ 已暂停"
                                 : record.status === "failed"
@@ -2606,7 +2646,7 @@ export default function Dashboard() {
                         </td>
                         <td style={{ padding: "0.75rem", textAlign: "center" }}>
                           <div style={{ display: "flex", gap: "0.5rem", justifyContent: "center", flexWrap: "wrap" }}>
-                            {record.status === "downloading" && (
+                            {(record.status === "downloading" || record.status === "queued") && (
                               <button
                                 onClick={() => handlePauseDownload(record.id)}
                                 style={{
@@ -3478,6 +3518,9 @@ export default function Dashboard() {
                   />
                 )}
               </div>
+
+              {formContentType === 'media' && <DownloadQuotaEditor enabled={formQuotaEnabled} limits={formQuotaLimits}
+                onEnabled={setFormQuotaEnabled} onLimits={setFormQuotaLimits} />}
 
               <div hidden={formContentType === "message_text"}>
                 <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontWeight: "500" }}>

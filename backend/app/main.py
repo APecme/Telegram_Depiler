@@ -21,6 +21,7 @@ from telethon import events
 from .config import get_settings
 from .download_control import DownloadOptions
 from .database import Database
+from .download_quota import QuotaConfigError, QuotaService, QuotaScheduler
 from .schemas import (
     ConfigPayload,
     RestartRequest,
@@ -54,6 +55,7 @@ class UpdateSettingsRequest(BaseModel):
 settings = get_settings()
 database = Database(settings.data_dir / "state.db")
 settings.load_from_mapping(database.get_config())
+quota_service = QuotaService(database)
 
 
 def _hash_password(password: str) -> str:
@@ -126,56 +128,59 @@ ADMIN_TOKENS: set[str] = set()
 
 
 class DownloadQueueManager:
-    """Bot 与规则下载共享的可配置队列。"""
-    
+    """Bot and rule downloads share atomic slot and quota admission."""
+
     @property
     def MAX_CONCURRENT(self):
         return settings.download_options.concurrent_downloads
-    
+
     def __init__(self, database: Database):
         self.database = database
+        self.quota = QuotaService(database)
         self._lock = asyncio.Lock()
-    
+
     async def try_start_download(self, download_id: int) -> bool:
-        """尝试开始一个下载任务。如果当前并发数已满，返回False并将任务标记为queued"""
+        record = self.database.get_download(download_id)
+        if not record or record.get('status') in ('downloading', 'completed', 'cancelled'):
+            return False
+        rule = self.database.get_group_rule(record['rule_id']) if record.get('rule_id') else None
+        if (record.get('source') == 'rule' and rule and rule.get('quota_enabled')
+                and rule.get('content_type', 'media') == 'media' and not record.get('file_size')):
+            try:
+                size = await worker.resolve_download_size(record)
+                if size > 0:
+                    self.database.update_download(download_id, file_size=size)
+            except Exception as exc:
+                logger.debug('补查文件大小失败 %s: %s', download_id, exc)
         async with self._lock:
-            # 统计当前正在下载的任务数
-            downloading_count = self.database.get_download_stats()["downloading"]
-            
-            if downloading_count >= self.MAX_CONCURRENT:
-                # 超过并发限制，标记为队列中
-                self.database.update_download(download_id, status='queued')
-                logger.info(f"下载任务 {download_id} 进入队列（当前 {downloading_count}/{self.MAX_CONCURRENT}）")
-                return False
-            else:
-                # 可以开始下载
-                self.database.update_download(download_id, status='downloading')
-                logger.info(f"下载任务 {download_id} 开始（当前 {downloading_count + 1}/{self.MAX_CONCURRENT}）")
-                return True
-    
+            return self.quota.claim(download_id, self.MAX_CONCURRENT).admitted
+
     async def on_download_finished(self, download_id: int):
-        """Fill available slots without exceeding the current configured limit."""
-        async with self._lock:
-            available = max(0, self.MAX_CONCURRENT - self.database.get_download_stats()["downloading"])
-            queued = self.database.queued_downloads()
-            for next_task in queued:
-                if available <= 0:
-                    break
-                next_id = next_task["id"]
-                source = next_task.get("source", "bot")
-                if source == "rule" and worker:
-                    message_id, chat_id = next_task.get("message_id"), next_task.get("chat_id")
-                    if not message_id or not chat_id:
-                        self.database.update_download(next_id, status="failed", error="缺少原始消息信息", download_speed=0)
-                        continue
-                    self.database.update_download(next_id, status="downloading", error="", download_speed=0)
-                    asyncio.create_task(worker.restore_queued_download(next_id, message_id, chat_id))
-                elif source == "bot" and bot_handler:
-                    self.database.update_download(next_id, status="downloading", error="", download_speed=0)
-                    asyncio.create_task(bot_handler.restore_queued_download(next_task))
-                else:
+        for task in self.database.queued_downloads():
+            if self.database.get_download_stats()['downloading'] >= self.MAX_CONCURRENT:
+                break
+            # Unknown sizes are retried only when due; known sizes need no Telegram request.
+            if (not task.get('file_size') and task.get('queue_reason') == 'quota'
+                    and task.get('next_retry_at') and task['next_retry_at'] > self.quota.now().strftime('%Y-%m-%d %H:%M:%S')):
+                continue
+            source = task.get('source') or 'bot'
+            if source == 'rule':
+                if not worker:
                     continue
-                available -= 1
+                if not task.get('message_id') or not task.get('chat_id'):
+                    self.database.update_download(task['id'], status='failed', error='缺少原始消息信息', download_speed=0)
+                    continue
+            elif not bot_handler:
+                continue
+            if await self.try_start_download(task['id']):
+                if source == 'rule':
+                    asyncio.create_task(worker.restore_queued_download(task['id'], task['message_id'], task['chat_id']))
+                else:
+                    asyncio.create_task(bot_handler.restore_queued_download(self.database.get_download(task['id'])))
+
+
+async def _wake_quota_waiting_tasks():
+    await download_queue_manager.on_download_finished(0)
 
 
 download_queue_manager = DownloadQueueManager(database)
@@ -185,79 +190,18 @@ _bot_start_lock = asyncio.Lock()
 
 
 async def _resume_incomplete_downloads() -> None:
-    """容器重启后，自动继续之前的 downloading / queued / pending 任务。
-
-    策略：
-    - 将 status 为 downloading/pending 的任务统一重置为 queued；
-    - 然后按优先级和创建时间排序，依次交给 DownloadQueueManager.try_start_download；
-    - 由来源 source 决定调用 TelegramWorker 或 BotCommandHandler 进行实际恢复。
-    """
-    # 先获取尽量多的记录（与队列管理器保持一致，最多 1000 条）
-    downloads = database.list_downloads(limit=1000)
-    if not downloads:
-        return
-
-    # 需要恢复的状态
-    resume_statuses = {"downloading", "queued", "pending"}
-    candidates = [d for d in downloads if d.get("status") in resume_statuses]
-    if not candidates:
-        return
-
-    logger.info("检测到 %s 个未完成的下载任务，准备尝试自动恢复", len(candidates))
-
-    # 第一步：将 downloading/pending 状态统一重置为 queued，避免误判为正在下载但实际上任务已丢失
-    for d in candidates:
-        status = d.get("status")
-        if status in ("downloading", "pending"):
-            try:
-                database.update_download(int(d["id"]), status="queued")
-            except Exception as exc:  # pragma: no cover - 防御性
-                logger.warning("重置下载任务 %s 状态失败: %s", d.get("id"), exc)
-
-    # 重新拉取一遍，拿到最新的 queued 列表
-    downloads = database.list_downloads(limit=1000)
-    queued_tasks = [d for d in downloads if d.get("status") == "queued"]
-    if not queued_tasks:
-        logger.info("状态重置后队列为空，无需恢复任务")
-        return
-
-    # 按优先级（降序）和创建时间（升序）排序
-    queued_tasks.sort(key=lambda d: (-(d.get("priority") or 0), d.get("created_at") or ""))
-
-    started_count = 0
-    for task in queued_tasks:
-        download_id = task.get("id")
-        if download_id is None:
-            continue
-
-        can_start = await download_queue_manager.try_start_download(int(download_id))
-        if not can_start:
-            # 并发已满，后续任务保持 queued，等运行中的任务完成后由 on_download_finished 接力
-            continue
-
-        source = task.get("source", "bot")
-        try:
-            if source == "rule" and worker:
-                message_id = task.get("message_id")
-                chat_id = task.get("chat_id")
-                if message_id and chat_id:
-                    asyncio.create_task(worker.restore_queued_download(int(download_id), int(message_id), int(chat_id)))
-                    started_count += 1
-                else:
-                    logger.warning("规则下载任务 %s 缺少 message_id 或 chat_id，无法自动恢复", download_id)
-            elif source == "bot" and bot_handler:
-                asyncio.create_task(bot_handler.restore_queued_download(task))
-                started_count += 1
-        except Exception as exc:  # pragma: no cover - 防御性
-            logger.warning("自动恢复下载任务 %s 失败: %s", download_id, exc)
-
-    logger.info("自动恢复下载任务完成，本次共启动 %s 个任务", started_count)
+    """Drain persisted jobs after Telegram setup without resetting new live transfers."""
+    await download_queue_manager.on_download_finished(0)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用启动和关闭时的生命周期管理"""
     updater.start_scheduler()
+    database.prepare_download_recovery()
+    lifecycle_quota = QuotaService(database)
+    lifecycle_quota.reconcile()
+    quota_scheduler = QuotaScheduler(lifecycle_quota, _wake_quota_waiting_tasks, logger=logger)
     global bot_handler
     
     # 记录当前配置
@@ -270,6 +214,7 @@ async def lifespan(app: FastAPI):
         try:
             await _ensure_bot_handler_running()
             await _resume_incomplete_downloads()
+            quota_scheduler.start()
         except Exception as exc:
             logger.warning("初始化 Telegram 或恢复下载失败: %s", exc)
 
@@ -280,6 +225,7 @@ async def lifespan(app: FastAPI):
     finally:
         initialization.cancel()
         await asyncio.gather(initialization, return_exceptions=True)
+        await quota_scheduler.stop()
     
     # 关闭时：断开连接
     if bot_handler:
@@ -1083,13 +1029,15 @@ async def get_download_cover(
 @api.post("/downloads/{download_id}/pause")
 async def pause_download(download_id: int) -> dict:
     """暂停下载（支持 Bot 与群聊规则任务）。"""
-    downloads = database.list_downloads(limit=1000)
-    download = next((d for d in downloads if d.get("id") == download_id), None)
+    download = database.get_download(download_id)
 
     if not download:
         raise HTTPException(status_code=404, detail="下载记录不存在")
 
     status = download.get("status")
+    if status == 'queued':
+        database.update_download(download_id, status='paused', error='用户暂停', download_speed=0)
+        return {'success': True, 'message': '已暂停等待任务'}
     if status != "downloading":
         return {"success": False, "message": f"当前状态({status})无法暂停"}
 
@@ -1113,8 +1061,7 @@ async def pause_download(download_id: int) -> dict:
 @api.post("/downloads/{download_id}/resume")
 async def resume_download(download_id: int) -> dict:
     """恢复下载（支持 Bot 与群聊规则任务）。"""
-    downloads = database.list_downloads(limit=1000)
-    download = next((d for d in downloads if d.get("id") == download_id), None)
+    download = database.get_download(download_id)
 
     if not download:
         raise HTTPException(status_code=404, detail="下载记录不存在")
@@ -1136,17 +1083,18 @@ async def resume_download(download_id: int) -> dict:
             if message_id and chat_id:
                 # 在后台任务中恢复下载
                 asyncio.create_task(worker.restore_queued_download(download_id, message_id, chat_id))
-        # Bot下载的恢复逻辑在bot_handler中处理
+        elif source == 'bot' and bot_handler:
+            asyncio.create_task(bot_handler.restore_queued_download(database.get_download(download_id)))
         return {"success": True, "message": "已恢复下载"}
     else:
-        return {"success": True, "message": "任务已加入队列，等待其他任务完成"}
+        record = database.get_download(download_id) or {}
+        return {"success": True, "message": record.get('queue_reason_text') or record.get('error') or '任务已加入队列'}
 
 
 @api.post("/downloads/{download_id}/priority")
 async def set_download_priority(download_id: int) -> dict:
     """设置下载优先级，并在需要时抢占其他下载任务。"""
-    downloads = database.list_downloads(limit=1000)
-    download = next((d for d in downloads if d.get("id") == download_id), None)
+    download = database.get_download(download_id)
 
     if not download:
         raise HTTPException(status_code=404, detail="下载记录不存在")
@@ -1157,7 +1105,8 @@ async def set_download_priority(download_id: int) -> dict:
     database.update_download(download_id, priority=new_priority)
 
     # 如果设置为高优先级，则抢占最早开始的其他下载任务
-    if new_priority > 0:
+    if new_priority > 0 and download.get('queue_reason') != 'quota':
+        downloads = database.unfinished_downloads()
         other_candidates = [
             d
             for d in downloads
@@ -1183,14 +1132,14 @@ async def set_download_priority(download_id: int) -> dict:
                     error="被高优先级任务抢占",
                 )
 
+    await download_queue_manager.on_download_finished(0)
     return {"success": True, "priority": new_priority, "message": "已更新优先级"}
 
 
 @api.post("/downloads/{download_id}/retry")
 async def retry_download(download_id: int) -> dict:
     """重试失败/暂停/排队中的下载任务。"""
-    downloads = database.list_downloads(limit=1000)
-    download = next((d for d in downloads if d.get("id") == download_id), None)
+    download = database.get_download(download_id)
 
     if not download:
         raise HTTPException(status_code=404, detail="下载记录不存在")
@@ -1204,7 +1153,8 @@ async def retry_download(download_id: int) -> dict:
     chat_id = download.get("chat_id")
 
     can_start = await download_queue_manager.try_start_download(download_id)
-    database.update_download(download_id, error="", progress=0.0, download_speed=0.0)
+    if can_start:
+        database.update_download(download_id, error="", progress=0.0, download_speed=0.0)
 
     if can_start:
         if source == "rule" and worker:
@@ -1216,7 +1166,8 @@ async def retry_download(download_id: int) -> dict:
             asyncio.create_task(bot_handler.restore_queued_download(refreshed))
         return {"success": True, "message": "已开始重试下载"}
 
-    return {"success": True, "message": "任务已加入队列，等待重试"}
+    record = database.get_download(download_id) or {}
+    return {"success": record.get('status') != 'failed', "message": record.get('queue_reason_text') or record.get('error') or '任务已加入队列'}
 
 
 @api.delete("/downloads/{download_id}")
@@ -1225,8 +1176,7 @@ async def delete_download(
     delete_file: bool = Query(default=False, description="是否同时删除已下载的文件"),
 ) -> dict:
     """删除下载任务，可选择是否删除已下载文件"""
-    downloads = database.list_downloads(limit=1000)
-    download = next((d for d in downloads if d.get('id') == download_id), None)
+    download = database.get_download(download_id)
     
     if not download:
         raise HTTPException(status_code=404, detail="下载记录不存在")
@@ -1269,6 +1219,7 @@ async def delete_download(
 
     # 删除数据库记录
     database.delete_download(download_id)
+    await download_queue_manager.on_download_finished(download_id)
     
     return {"success": True, "message": "已删除下载任务", "delete_file": delete_file}
 
@@ -1548,14 +1499,41 @@ async def update_default_download_path(
     return {"status": "updated", "path": abs_str}
 
 
+def _rule_with_quota(rule: dict) -> dict:
+    return {**rule, 'quota_limits': quota_service.list_limits(rule['id']),
+            'quota_usage': quota_service.usage(rule['id']), 'quota_timezone': quota_service.timezone_name}
+
+
+def _validate_rule_quota(enabled, limits, content_type, rule_id=None):
+    if limits is None:
+        payload = None
+    else:
+        payload = [item.model_dump() for item in limits]
+        try:
+            for item in payload:
+                quota_service._normalize_limit(item, rule_id=rule_id or 0)
+            ids = [item['id'] for item in payload if item.get('id') is not None]
+            existing = {item['id'] for item in quota_service.list_limits(rule_id)} if rule_id else set()
+            if len(ids) != len(set(ids)) or not set(ids) <= existing:
+                raise QuotaConfigError('限额 ID 重复或不属于当前规则')
+        except (QuotaConfigError, ValueError, OverflowError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if content_type == 'message_text' and (enabled or payload):
+        raise HTTPException(status_code=422, detail='文本导出不参与媒体下载限额')
+    if enabled and not (payload if payload is not None else (quota_service.list_limits(rule_id) if rule_id is not None else [])):
+        raise HTTPException(status_code=422, detail='开启下载限额至少需要一条限额')
+    return payload
+
+
 @api.get("/group-rules")
 async def list_group_rules(chat_id: int | None = None, mode: str | None = None) -> dict:
     items = database.list_group_rules(chat_id=chat_id, mode=mode)
-    return {"items": items}
+    return {"items": [_rule_with_quota(rule) for rule in items]}
 
 
 @api.post("/group-rules")
 async def create_group_rule(body: GroupRuleCreate) -> dict:
+    quota_payload = _validate_rule_quota(body.quota_enabled, body.quota_limits, body.content_type)
     if body.mode == "history" and (body.min_message_id is None or body.max_message_id is None):
         raise HTTPException(status_code=422, detail="历史下载规则必须填写消息 ID 起止范围")
     if body.mode == "history" and (body.min_message_id <= 0 or body.max_message_id < body.min_message_id):
@@ -1577,40 +1555,55 @@ async def create_group_rule(body: GroupRuleCreate) -> dict:
     if save_dir:
         save_dir = _normalize_rule_save_dir(save_dir)
     
-    rule_id = database.add_group_rule(
-        chat_id=body.chat_id,
-        chat_title=body.chat_title,
-        rule_name=body.rule_name,
-        mode=body.mode,
-        content_type=body.content_type,
-        text_format=body.text_format,
-        text_merge=body.text_merge,
-        enabled=body.enabled,
-        include_extensions=body.include_extensions,
-        text_preprocess=body.text_preprocess,
-        min_size_bytes=min_size_bytes,
-        max_size_bytes=max_size_bytes,
-        size_range=size_range,
-        save_dir=save_dir,
-        filename_template=body.filename_template,
-        include_keywords=body.include_keywords,
-        exclude_keywords=body.exclude_keywords,
-        match_mode=body.match_mode,
-        start_time=body.start_time.isoformat() if body.start_time else None,
-        end_time=body.end_time.isoformat() if body.end_time else None,
-        min_message_id=body.min_message_id,
-        max_message_id=body.max_message_id,
-        add_download_suffix=body.add_download_suffix,
-        move_after_complete=body.move_after_complete,
-        auto_catch_up=body.auto_catch_up,
-        include_comments=body.include_comments,
-    )
-    rule = database.get_group_rule(rule_id)
+    with quota_service._transaction() as conn:
+        rule_id = database.add_group_rule(
+            chat_id=body.chat_id,
+            chat_title=body.chat_title,
+            rule_name=body.rule_name,
+            mode=body.mode,
+            content_type=body.content_type,
+            text_format=body.text_format,
+            text_merge=body.text_merge,
+            enabled=body.enabled,
+            include_extensions=body.include_extensions,
+            text_preprocess=body.text_preprocess,
+            min_size_bytes=min_size_bytes,
+            max_size_bytes=max_size_bytes,
+            size_range=size_range,
+            save_dir=save_dir,
+            filename_template=body.filename_template,
+            include_keywords=body.include_keywords,
+            exclude_keywords=body.exclude_keywords,
+            match_mode=body.match_mode,
+            start_time=body.start_time.isoformat() if body.start_time else None,
+            end_time=body.end_time.isoformat() if body.end_time else None,
+            min_message_id=body.min_message_id,
+            max_message_id=body.max_message_id,
+            add_download_suffix=body.add_download_suffix,
+            move_after_complete=body.move_after_complete,
+            auto_catch_up=body.auto_catch_up,
+            include_comments=body.include_comments,
+            quota_enabled=body.quota_enabled,
+            _conn=conn,
+        )
+        if quota_payload is not None:
+            quota_service.replace_limits(rule_id, quota_payload, _conn=conn)
+    rule = _rule_with_quota(database.get_group_rule(rule_id))
     return {"id": rule_id, "rule": rule}
 
 
 @api.put("/group-rules/{rule_id}")
 async def update_group_rule(rule_id: int, body: GroupRuleUpdate) -> dict:
+    previous = database.get_group_rule(rule_id)
+    if not previous:
+        raise HTTPException(status_code=404, detail='规则不存在')
+    content_type = body.content_type or previous.get('content_type', 'media')
+    effective_enabled = body.quota_enabled if body.quota_enabled is not None else bool(previous.get('quota_enabled'))
+    if body.quota_limits == [] and body.quota_enabled is None:
+        effective_enabled = False
+    if content_type == 'message_text' and body.quota_enabled is None:
+        effective_enabled = False
+    quota_payload = _validate_rule_quota(effective_enabled, body.quota_limits, content_type, rule_id)
     # 解析体积范围字符串（如果提供）
     min_size_bytes = None
     max_size_bytes = None
@@ -1631,35 +1624,41 @@ async def update_group_rule(rule_id: int, body: GroupRuleUpdate) -> dict:
     if save_dir is not None and save_dir:
         save_dir = _normalize_rule_save_dir(save_dir)
 
-    database.update_group_rule(
-        rule_id,
-        chat_title=body.chat_title,
-        rule_name=body.rule_name,
-        mode=body.mode,
-        content_type=body.content_type,
-        text_format=body.text_format,
-        text_merge=body.text_merge,
-        enabled=body.enabled,
-        include_extensions=body.include_extensions,
-        text_preprocess=body.text_preprocess,
-        min_size_bytes=min_size_bytes,
-        max_size_bytes=max_size_bytes,
-        size_range=size_range,
-        save_dir=save_dir,
-        filename_template=body.filename_template,
-        include_keywords=body.include_keywords,
-        exclude_keywords=body.exclude_keywords,
-        match_mode=body.match_mode,
-        start_time=body.start_time.isoformat() if body.start_time else None,
-        end_time=body.end_time.isoformat() if body.end_time else None,
-        min_message_id=body.min_message_id,
-        max_message_id=body.max_message_id,
-        add_download_suffix=body.add_download_suffix,
-        move_after_complete=body.move_after_complete,
-        auto_catch_up=body.auto_catch_up,
-        include_comments=body.include_comments,
-    )
-    rule = database.get_group_rule(rule_id)
+    with quota_service._transaction() as conn:
+        database.update_group_rule(
+            rule_id,
+            chat_title=body.chat_title,
+            rule_name=body.rule_name,
+            mode=body.mode,
+            content_type=body.content_type,
+            text_format=body.text_format,
+            text_merge=body.text_merge,
+            enabled=body.enabled,
+            include_extensions=body.include_extensions,
+            text_preprocess=body.text_preprocess,
+            min_size_bytes=min_size_bytes,
+            max_size_bytes=max_size_bytes,
+            size_range=size_range,
+            save_dir=save_dir,
+            filename_template=body.filename_template,
+            include_keywords=body.include_keywords,
+            exclude_keywords=body.exclude_keywords,
+            match_mode=body.match_mode,
+            start_time=body.start_time.isoformat() if body.start_time else None,
+            end_time=body.end_time.isoformat() if body.end_time else None,
+            min_message_id=body.min_message_id,
+            max_message_id=body.max_message_id,
+            add_download_suffix=body.add_download_suffix,
+            move_after_complete=body.move_after_complete,
+            auto_catch_up=body.auto_catch_up,
+            include_comments=body.include_comments,
+            quota_enabled=effective_enabled,
+            _conn=conn,
+        )
+        if quota_payload is not None:
+            quota_service.replace_limits(rule_id, quota_payload, _conn=conn)
+    await download_queue_manager.on_download_finished(0)
+    rule = _rule_with_quota(database.get_group_rule(rule_id))
     if not rule:
         raise HTTPException(status_code=404, detail="规则不存在")
     if rule.get("mode") == "history" and rule.get("min_message_id") is not None and rule.get("max_message_id") is not None:

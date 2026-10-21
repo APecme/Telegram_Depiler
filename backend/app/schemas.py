@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class ProxySettings(BaseModel):
@@ -75,6 +75,40 @@ class DownloadRecord(BaseModel):
     updated_at: datetime
 
 
+class QuotaLimitIn(BaseModel):
+    """一条下载容量限额配置（前端传"数值 + 单位"，也可直接传 bytes）。"""
+
+    id: Optional[int] = Field(default=None, description="已有限额的ID；不传表示新增")
+    period: Literal["hour", "day", "week", "month", "custom"] = Field(
+        default="day", description="自然周期：小时/天/周/月，或 custom 自定义"
+    )
+    custom_value: Optional[int] = Field(default=None, ge=1, le=100000, description="custom 周期的 N")
+    custom_unit: Optional[Literal["hours", "days"]] = Field(
+        default=None, description="custom 周期的单位：小时或天"
+    )
+    limit_value: Optional[float] = Field(default=None, gt=0, le=1024, description="限额数值")
+    limit_unit: Optional[Literal["MB", "GB", "TB"]] = Field(default="GB", description="限额单位（1024 进制）")
+    limit_bytes: Optional[int] = Field(default=None, gt=0, description="限额（字节），优先于 value/unit")
+
+    @model_validator(mode="after")
+    def _validate_limit(self) -> "QuotaLimitIn":
+        if self.limit_bytes is None and self.limit_value is None:
+            raise ValueError("请填写限额容量")
+        if self.period == "custom":
+            if not self.custom_value:
+                raise ValueError("自定义限额必须填写间隔小时数或天数")
+            if self.custom_unit not in ("hours", "days"):
+                raise ValueError("自定义限额必须选择小时或天")
+        return self
+
+
+class QuotaPayload(BaseModel):
+    """规则的下载限额配置。limits 为空表示不限额。"""
+
+    enabled: bool = False
+    limits: list[QuotaLimitIn] = Field(default_factory=list)
+
+
 class GroupRuleCreate(BaseModel):
     chat_id: int = Field(..., description="群聊ID")
     chat_title: Optional[str] = None
@@ -100,6 +134,8 @@ class GroupRuleCreate(BaseModel):
     move_after_complete: bool = False  # 下载完成后再移动到目标目录
     auto_catch_up: bool = False  # 启动时自动回补遗漏消息
     include_comments: bool = False  # 是否包含评论/回复/讨论组内容
+    quota_enabled: bool = False  # 是否开启下载容量限额（默认关闭，兼容老配置）
+    quota_limits: Optional[list[QuotaLimitIn]] = None  # 限额条目（可多条，全部满足才准入）
 
 
 class GroupRuleUpdate(BaseModel):
@@ -126,6 +162,8 @@ class GroupRuleUpdate(BaseModel):
     move_after_complete: Optional[bool] = None  # 下载完成后再移动到目标目录
     auto_catch_up: Optional[bool] = None
     include_comments: Optional[bool] = None
+    quota_enabled: Optional[bool] = None  # 不传表示保持现值
+    quota_limits: Optional[list[QuotaLimitIn]] = None  # 不传保持现值；传 [] 表示清除限额
 
 
 class AdminLoginRequest(BaseModel):

@@ -1439,3 +1439,26 @@ button {
   color: var(--theme-muted-text);
   font-size: 0.7rem;
 }
+
+/* Download quotas use the same theme and adapt to narrow rule dialogs. */
+.quota-editor { margin: 0; padding: 1rem; border: 1px solid var(--theme-border); border-radius: 10px; min-width: 0; }
+.quota-editor legend { padding: 0 .4rem; font-weight: 600; }
+.quota-toggle { display: flex; gap: .5rem; align-items: center; }
+.quota-help { color: var(--theme-muted-text); font-size: .8rem; line-height: 1.6; margin: .5rem 0; }
+.quota-limit-row { display: flex; flex-wrap: wrap; gap: .65rem; align-items: end; padding: .8rem 0; border-top: 1px solid var(--theme-border); }
+.quota-limit-row > label { display: grid; flex: 1 1 130px; min-width: 0; gap: .3rem; font-size: .85rem; }
+.quota-input-pair { display: flex; gap: .35rem; min-width: 0; }
+.quota-editor input[type=number], .quota-editor select { min-width: 0; width: 100%; padding: .5rem; border-radius: 6px; border: 1px solid var(--theme-border); background: var(--theme-surface); color: var(--theme-text); box-sizing: border-box; }
+.quota-input-pair select { width: 78px; flex-shrink: 0; }
+.quota-add, .quota-remove { padding: .5rem .7rem; border-radius: 6px; border: 1px solid var(--theme-border); background: var(--theme-surface); color: var(--theme-text); cursor: pointer; }
+.quota-remove { color: var(--color-danger); }
+.quota-usage { padding: .8rem; border-radius: 8px; background: var(--theme-surface-muted); }
+.quota-usage small { color: var(--theme-muted-text); font-weight: 400; }
+.quota-usage-row { margin-top: .65rem; }
+.quota-usage-row > div { display: flex; justify-content: space-between; flex-wrap: wrap; gap: .25rem .75rem; }
+.quota-usage progress { width: 100%; height: 8px; accent-color: var(--color-info); }
+.quota-wait-reason { margin-top: .4rem; font-size: .8rem; color: var(--color-warning-strong); overflow-wrap: anywhere; white-space: normal; }
+
+.dashboard-notification { position: fixed; z-index: 20000; top: 1rem; right: 1rem; max-width: min(440px, calc(100vw - 2rem)); padding: .9rem 1.1rem; border-radius: 9px; box-shadow: 0 4px 20px var(--theme-shadow); background: var(--color-info-surface); color: var(--color-info-strong); border: 1px solid var(--theme-border); overflow-wrap: anywhere; }
+.dashboard-notification.error { background: var(--color-danger-surface); color: var(--color-danger-strong); }
+.dashboard-notification.success { background: var(--color-success-surface); color: var(--color-success-strong); }
