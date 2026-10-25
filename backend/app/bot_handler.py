@@ -7,14 +7,44 @@ import shutil
 from pathlib import Path
 from typing import Optional
 from telethon import TelegramClient, events
+from telethon.utils import get_peer_id
 from telethon.tl.types import User, KeyboardButtonCallback
 
 from .config import Settings
 from .database import Database
 from .media_cache import generate_cover_cache
 from .download_control import FloodGate, download_with_control
+from .telegram_links import TelegramLink, parse_telegram_link
 
 logger = logging.getLogger(__name__)
+
+
+def _message_media_info(message) -> Optional[tuple[str, str, int]]:
+    """返回 (媒体类型, 文件名, 文件大小)；没有可下载媒体时返回 None。"""
+    message_id = getattr(message, "id", 0)
+    file = getattr(message, "file", None)
+    size = int(getattr(file, "size", 0) or 0)
+
+    video = getattr(message, "video", None)
+    document = getattr(message, "document", None)
+    audio = getattr(message, "audio", None)
+    voice = getattr(message, "voice", None)
+    video_note = getattr(message, "video_note", None)
+    photo = getattr(message, "photo", None)
+
+    if video is not None:
+        return "video", getattr(video, "file_name", None) or f"video_{message_id}.mp4", size
+    if document is not None:
+        return "document", getattr(document, "file_name", None) or f"telegram_{message_id}", size
+    if audio is not None:
+        return "audio", getattr(audio, "file_name", None) or f"audio_{message_id}.mp3", size
+    if voice is not None:
+        return "voice", f"voice_{message_id}.ogg", size
+    if video_note is not None:
+        return "video_note", f"video_note_{message_id}.mp4", size
+    if photo is not None:
+        return "photo", f"photo_{message_id}.jpg", size
+    return None
 
 
 class BotCommandHandler:
@@ -401,7 +431,9 @@ class BotCommandHandler:
             "/dedupe_off - 关闭机器人重复文件检测\n\n"
             "**使用方法：**\n"
             "1. 直接向Bot发送视频或文件，系统会自动下载\n"
-            "2. 使用 /createrule 创建群聊自动下载规则"
+            "2. 直接发送消息链接（如 `https://t.me/c/123456789/17748?thread=17724`），\n"
+            "   按链接下载该条消息（下载账号需已加入对应群组/频道）\n"
+            "3. 使用 /createrule 创建群聊自动下载规则"
         )
         await event.reply(help_text, parse_mode='markdown')
         
@@ -496,10 +528,124 @@ class BotCommandHandler:
         # 验证管理员权限
         if self.settings.admin_user_ids and sender_id not in self.settings.admin_user_ids:
             return
-            
+
+        # 链接下载：t.me/c/<id>/<msg> 或 t.me/<username>/<msg>
+        link = parse_telegram_link(event.message.message)
+        if link is not None:
+            await self._handle_link_message(event, link)
+            return
+
         # 检查是否是视频或文档
         if event.message.video or event.message.document:
             await self._handle_media_message(event)
+
+    async def _handle_link_message(self, event: events.NewMessage.Event, link: TelegramLink) -> None:
+        """下载链接指向的那一条消息（私有频道只能由用户账户读取）。"""
+        client = self.user_client
+        if client is None:
+            await self._request(event.reply("❌ 用户账户尚未登录，无法通过链接下载"))
+            return
+
+        try:
+            entity, message = await self._resolve_link_message(client, link)
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.warning("解析下载链接失败 %s: %s", link, exc)
+            await self._request(event.reply(
+                f"❌ 无法读取该链接指向的消息：{exc}\n\n"
+                "请确认下载账号已加入该群组/频道。"
+            ))
+            return
+
+        if message is None or not getattr(message, "id", None):
+            await self._request(event.reply(
+                "❌ 找不到该链接指向的消息。\n\n请确认下载账号已加入该群组/频道，且消息未被删除。"
+            ))
+            return
+
+        info = _message_media_info(message)
+        if info is None:
+            await self._request(event.reply("❌ 该消息没有可下载的媒体文件"))
+            return
+
+        media_type, file_name, file_size = info
+
+        tg_file_id = None
+        tg_access_hash = None
+        media_obj = getattr(message, "document", None) or getattr(message, "photo", None)
+        if media_obj is not None:
+            tg_file_id = getattr(media_obj, "id", None)
+            tg_access_hash = getattr(media_obj, "access_hash", None)
+
+        config = self.database.get_config()
+        bot_dedupe_enabled = config.get("bot_dedupe_enabled", "1") != "0"
+        if bot_dedupe_enabled and tg_file_id is not None and tg_access_hash is not None:
+            existing = self.database.find_download_by_telegram_file(tg_file_id, tg_access_hash)
+            if existing:
+                await self._request(event.reply(
+                    "⚠️ 此文件之前已下载过，将不再重复下载。\n\n"
+                    f"已有任务ID：`{existing.get('id')}`\n"
+                    f"保存路径：`{existing.get('file_path') or '未知路径'}`\n\n"
+                    "如需再次下载此文件，可先使用 /dedupe_off 关闭重复检测，再重新发送链接。",
+                    parse_mode="markdown",
+                ))
+                return
+
+        chat_id = get_peer_id(entity)
+        download_id = self.database.add_download(
+            message_id=int(message.id),
+            chat_id=chat_id,
+            bot_username=self._bot_username or "unknown",
+            file_name=file_name,
+            origin_file_name=file_name,
+            status="pending",
+            source="link",
+            tg_file_id=tg_file_id,
+            tg_access_hash=tg_access_hash,
+            file_size=file_size,
+            save_dir=str(self.settings.download_dir),
+            # 进度消息发到管理员与 Bot 的会话，绝不发到被下载的群组里。
+            reply_chat_id=event.chat_id or 0,
+        )
+
+        can_start = True
+        if self.queue_manager:
+            can_start = await self.queue_manager.try_start_download(download_id)
+        else:
+            self.database.update_download(download_id, status="downloading")
+
+        if not can_start:
+            stats = self.database.get_download_stats()
+            await self._request(event.reply(
+                "📋 **任务已加入队列**\n\n"
+                f"**任务ID：** `{download_id}`\n"
+                f"**文件名：** {file_name}\n"
+                f"**大小：** {self._format_size(file_size)}\n"
+                f"**类型：** {media_type}\n\n"
+                f"已达到并发上限（{self.settings.download_options.concurrent_downloads} 个任务），等待空闲位置...\n\n"
+                "**下载统计：**\n"
+                f"总计：{stats.get('total', 0)} | 成功：{stats.get('completed', 0)} | 失败：{stats.get('failed', 0)}",
+                parse_mode="markdown",
+            ))
+            return
+
+        record = self.database.get_download(download_id)
+        if record:
+            asyncio.create_task(self.restore_queued_download(record))
+
+    async def _get_entity_with_warmup(self, client: TelegramClient, chat_ref):
+        """私有频道/群的 access_hash 不在会话缓存时，先预热会话列表再重试一次。"""
+        try:
+            return await self._request(client.get_entity(chat_ref))
+        except ValueError:
+            logger.info("实体 %s 不在会话缓存中，拉取会话列表后重试", chat_ref)
+            await self._request(client.get_dialogs())
+            return await self._request(client.get_entity(chat_ref))
+
+    async def _resolve_link_message(self, client: TelegramClient, link: TelegramLink):
+        """按链接取实体与消息。"""
+        entity = await self._get_entity_with_warmup(client, link.chat_ref)
+        message = await self._request(client.get_messages(entity, ids=link.message_id))
+        return entity, message
             
     async def _handle_media_message(self, event: events.NewMessage.Event) -> None:
         """处理Bot收到的媒体消息"""
@@ -859,10 +1005,15 @@ class BotCommandHandler:
         - 为了简化实现，进度更新只做数据库更新，以及在开始/完成/失败时编辑一条 Bot 消息。
         """
         try:
-            if not self._bot_client:
-                logger.warning("Bot 客户端尚未就绪，无法恢复队列中的下载任务")
-                await self._fail_download(download.get("id"), "Bot 客户端尚未就绪")
+            # 链接下载的目标消息只对用户账户可见（Bot 读不到私有频道），
+            # 其余来源的消息属于 Bot 会话。
+            client = self.user_client if (download.get("source") or "") == "link" else self._bot_client
+            if not client:
+                logger.warning("Telegram 客户端尚未就绪，无法恢复队列中的下载任务")
+                await self._fail_download(download.get("id"), "Telegram 客户端尚未就绪")
                 return
+            # 进度消息一律由 Bot 发出：用户账户无法编辑 Bot 的消息。
+            notifier = self._bot_client or client
 
             download_id = download.get("id")
             message_id = download.get("message_id")
@@ -877,17 +1028,18 @@ class BotCommandHandler:
             media_type = "unknown"
 
             # 获取原始消息
-            chat = await self._request(self._bot_client.get_entity(chat_id))
-            msg = await self._request(self._bot_client.get_messages(chat, ids=message_id))
+            chat = await self._get_entity_with_warmup(client, chat_id)
+            msg = await self._request(client.get_messages(chat, ids=message_id))
             if not msg:
                 logger.warning("无法恢复队列任务 %s：找不到原始消息 %s", download_id, message_id)
                 await self._fail_download(download_id, "找不到原始消息")
                 return
 
-            if msg.video:
-                media_type = "video"
-            elif msg.document:
-                media_type = "document"
+            info = _message_media_info(msg)
+            if info is not None:
+                media_type, media_name, media_size = info
+                file_name = download.get("file_name") or media_name
+                file_size = file_size or media_size
 
             # 计算保存路径
             from pathlib import Path as _Path
@@ -911,11 +1063,15 @@ class BotCommandHandler:
 
             # 找到需要更新的 Bot 消息（队列时的那条），找不到就新发一条
             reply_message_id = download.get("reply_message_id")
-            reply_chat_id = download.get("reply_chat_id") or chat_id
+            if (download.get("source") or "") == "link":
+                # 链接下载的进度消息只能发到管理员会话，绝不能发到被下载的群组。
+                reply_chat_id = download.get("reply_chat_id") or next(iter(self.settings.admin_user_ids or []), None)
+            else:
+                reply_chat_id = download.get("reply_chat_id") or chat_id
             reply_msg = None
             try:
-                if reply_message_id:
-                    reply_msg = await self._request(self._bot_client.get_messages(reply_chat_id, ids=reply_message_id))
+                if reply_message_id and reply_chat_id:
+                    reply_msg = await self._request(notifier.get_messages(reply_chat_id, ids=reply_message_id))
             except Exception:
                 reply_msg = None
 
@@ -945,7 +1101,7 @@ class BotCommandHandler:
 
             if reply_msg:
                 try:
-                    await self._request(self._bot_client.edit_message(
+                    await self._request(notifier.edit_message(
                         reply_chat_id,
                         reply_message_id,
                         start_text,
@@ -956,8 +1112,8 @@ class BotCommandHandler:
                     logger.debug("编辑队列提示消息失败，将发送新消息: %s", e)
                     reply_msg = None
 
-            if not reply_msg:
-                reply_msg = await self._request(self._bot_client.send_message(
+            if not reply_msg and reply_chat_id:
+                reply_msg = await self._request(notifier.send_message(
                     reply_chat_id,
                     start_text,
                     buttons=buttons,
@@ -1014,7 +1170,7 @@ class BotCommandHandler:
                         )
 
                     await self._download_with_control(
-                        self._bot_client, msg, download_id,
+                        client, msg, download_id,
                         file=target_path,
                         progress_callback=progress_callback,
                     )
@@ -1057,13 +1213,14 @@ class BotCommandHandler:
                     )
                     finished_buttons = self._build_completed_download_buttons(download_id)
 
-                    await self._request(self._bot_client.edit_message(
-                        reply_chat_id,
-                        reply_msg.id,
-                        success_text,
-                        parse_mode="markdown",
-                        buttons=finished_buttons,
-                    ))
+                    if reply_msg:
+                        await self._request(notifier.edit_message(
+                            reply_chat_id,
+                            reply_msg.id,
+                            success_text,
+                            parse_mode="markdown",
+                            buttons=finished_buttons,
+                        ))
 
                     self._active_downloads[download_id] = False
                     self._download_tasks.pop(download_id, None)
@@ -1097,7 +1254,7 @@ class BotCommandHandler:
                         [KeyboardButtonCallback("🗑️ 删除", f"delete_{download_id}".encode("utf-8"))]
                     ]
                     try:
-                        await self._request(self._bot_client.edit_message(
+                        await self._request(notifier.edit_message(
                             reply_chat_id,
                             reply_msg.id,
                             error_text,

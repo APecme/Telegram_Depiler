@@ -1050,6 +1050,7 @@ export default function Dashboard() {
 
   const sourceLabel = (record: DownloadRecord) => {
     if (record.source === "rule") return record.rule_name || `规则 #${record.rule_id ?? "-"}`;
+    if (record.source === "link") return "链接下载";
     return "机器人接收";
   };
 

@@ -1083,7 +1083,7 @@ async def resume_download(download_id: int) -> dict:
             if message_id and chat_id:
                 # 在后台任务中恢复下载
                 asyncio.create_task(worker.restore_queued_download(download_id, message_id, chat_id))
-        elif source == 'bot' and bot_handler:
+        elif source in ('bot', 'link') and bot_handler:
             asyncio.create_task(bot_handler.restore_queued_download(database.get_download(download_id)))
         return {"success": True, "message": "已恢复下载"}
     else:
@@ -1161,7 +1161,7 @@ async def retry_download(download_id: int) -> dict:
             if not message_id or not chat_id:
                 raise HTTPException(status_code=400, detail="规则下载任务缺少 message_id 或 chat_id")
             asyncio.create_task(worker.restore_queued_download(download_id, int(message_id), int(chat_id)))
-        elif source == "bot" and bot_handler:
+        elif source in ("bot", "link") and bot_handler:
             refreshed = next((d for d in database.list_downloads(limit=1000) if d.get("id") == download_id), download)
             asyncio.create_task(bot_handler.restore_queued_download(refreshed))
         return {"success": True, "message": "已开始重试下载"}
