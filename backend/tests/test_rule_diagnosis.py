@@ -53,17 +53,22 @@ def discussion() -> SimpleNamespace:
     return SimpleNamespace(id=DISCUSSION_ID, title="新厕VIP3.3 讨论组", megagroup=True)
 
 
+class UserNotParticipantError(Exception):
+    """Same class name as telethon's error so the membership probe recognises it."""
+
+
 class FakeClient:
     """Minimal Telethon stand-in: entities, message iteration and GetFullChannel."""
 
     def __init__(self, messages, *, comment_messages=None, entities=None, linked=True,
-                 reverse_channel_id=None):
+                 reverse_channel_id=None, member=True):
         self._messages = messages
         self._comment_messages = comment_messages or []
         self._entities = entities or {}
         self._linked = linked
         # 讨论组反查频道时返回的 ID，用来模拟"实时评论不会挂到这条规则上"。
         self._reverse_channel_id = reverse_channel_id
+        self._member = member
 
     async def is_user_authorized(self):
         return True
@@ -74,6 +79,10 @@ class FakeClient:
         return SimpleNamespace(id=chat_id, title="新厕VIP3.3")
 
     async def __call__(self, request):
+        if "GetParticipant" in type(request).__name__:
+            if self._member is False:
+                raise UserNotParticipantError("User not participant")
+            return SimpleNamespace(participant=SimpleNamespace())
         target = getattr(request, "channel", None)
         target_id = int(getattr(target, "id", 0) or 0)
         if not self._linked:
@@ -233,6 +242,33 @@ class RuleDiagnosisTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result["comments"]["live_rule_match"])
         self.assertIn("不会被这条规则接管", result["comments"]["note"])
 
+    async def test_comment_scan_reports_account_membership(self):
+        rule_id = self._rule()
+        self._client(
+            [photo_message(1)],
+            comment_messages=[video_message(47003)],
+            entities={CHANNEL_ID: channel(), DISCUSSION_ID: discussion()},
+        )
+
+        result = await self.worker.diagnose_rule(rule_id)
+
+        self.assertTrue(result["comments"]["account_is_member"])
+        self.assertNotIn("note", result["comments"])
+
+    async def test_not_being_in_the_discussion_is_explained(self):
+        rule_id = self._rule()
+        self._client(
+            [photo_message(1)],
+            comment_messages=[video_message(47003)],
+            entities={CHANNEL_ID: channel(), DISCUSSION_ID: discussion()},
+            member=False,
+        )
+
+        result = await self.worker.diagnose_rule(rule_id)
+
+        self.assertFalse(result["comments"]["account_is_member"])
+        self.assertIn("不在该讨论组内", result["comments"]["note"])
+
     def test_diagnosis_uses_the_same_gate_as_the_download_path(self):
         rule = {"id": 9, "include_extensions": "mp4,mkv"}
         message = video_message(1)
@@ -361,3 +397,43 @@ class DiagnosisWindowTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["window"]["limit"], 50)
         self.assertEqual(result["scanned"], 3)
+
+
+class PeriodicCatchUpTests(unittest.IsolatedAsyncioTestCase):
+    """定期回补是"实时更新漏掉"时的兜底。"""
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.addCleanup(gc.collect)
+        root = Path(self.directory.name)
+        self.settings = Settings(data_dir=root / "data", download_dir=root / "downloads")
+        self.settings.ensure_directories()
+        self.database = Database(self.settings.data_dir / "state.db")
+        self.worker = TelegramWorker(self.settings, self.database)
+
+    async def test_catch_up_runs_repeatedly_and_survives_errors(self):
+        self.worker.catch_up_missed_group_messages = AsyncMock(
+            side_effect=[RuntimeError("telegram down"), None, None]
+        )
+        task = asyncio.create_task(self.worker.run_periodic_catch_up(0.01))
+        await asyncio.sleep(0.06)
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+
+        self.assertGreaterEqual(self.worker.catch_up_missed_group_messages.await_count, 2)
+
+    async def test_catch_up_stops_immediately_on_cancel(self):
+        started = asyncio.Event()
+
+        async def blocked():
+            started.set()
+            await asyncio.Event().wait()
+
+        self.worker.catch_up_missed_group_messages = blocked
+        task = asyncio.create_task(self.worker.run_periodic_catch_up(0.01))
+        await started.wait()
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task

@@ -127,6 +127,10 @@ def _get_admin_credentials() -> tuple[str, str]:
 ADMIN_TOKENS: set[str] = set()
 
 
+#: 定期回补间隔：实时更新漏掉时，最多等这么久就能补下来。
+CATCH_UP_INTERVAL_SECONDS = 900
+
+
 class DownloadQueueManager:
     """Bot and rule downloads share atomic slot and quota admission."""
 
@@ -220,11 +224,14 @@ async def lifespan(app: FastAPI):
 
     # Telegram being unreachable must not hide settings or fail update health checks.
     initialization = asyncio.create_task(initialize_telegram())
+    # 实时更新可能漏（账号不在讨论组里、进程重启），定期回补兜底。
+    periodic_catch_up = asyncio.create_task(worker.run_periodic_catch_up(CATCH_UP_INTERVAL_SECONDS))
     try:
         yield
     finally:
         initialization.cancel()
-        await asyncio.gather(initialization, return_exceptions=True)
+        periodic_catch_up.cancel()
+        await asyncio.gather(initialization, periodic_catch_up, return_exceptions=True)
         await quota_scheduler.stop()
     
     # 关闭时：断开连接

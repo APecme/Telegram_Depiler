@@ -1322,6 +1322,21 @@ class TelegramWorker:
         
         logger.info("👂 开始监听来自 %s 的消息和群聊消息", bot_username)
 
+    async def run_periodic_catch_up(self, interval_seconds: float = 900) -> None:
+        """定期把漏掉的群消息与评论补下来。
+
+        实时更新只覆盖"账号在群里且事件确实到达"的情况；定期回补是兜底，
+        保证错过的内容最终会被处理（重复下载由 Telegram 文件 ID 去重挡住）。
+        """
+        while True:
+            await asyncio.sleep(interval_seconds)
+            try:
+                await self.catch_up_missed_group_messages()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # pragma: no cover - 防御性
+                logger.warning("定期遗漏回补失败: %s", exc)
+
     async def catch_up_missed_group_messages(self) -> None:
         client = await self._get_client()
         if not await client.is_user_authorized():
@@ -1527,6 +1542,24 @@ class TelegramWorker:
             "items": items,
         }
 
+    async def _is_chat_member(self, chat: Any) -> Optional[bool]:
+        """账号是否在该群/讨论组里；``None`` 表示无法判断。
+
+        不在群里时 Telegram 不会推送实时更新，评论只能靠回补拿到——这是
+        "群里明明有新内容却没有下载记录"最常见的原因。
+        """
+        client = self._client
+        if client is None:
+            return None
+        try:
+            await client(functions.channels.GetParticipantRequest(channel=chat, participant="me"))
+            return True
+        except Exception as exc:
+            if type(exc).__name__ in ("UserNotParticipantError", "ChannelPrivateError"):
+                return False
+            logger.debug("检查群成员身份失败 (%s): %s", getattr(chat, "id", None), exc)
+            return None
+
     async def _diagnose_comments(
         self, client: Any, chat: Any, rule: dict, limit: int,
         *, min_message_id: Optional[int] = None, max_message_id: Optional[int] = None,
@@ -1571,10 +1604,12 @@ class TelegramWorker:
 
         reverse_channel_id = await self._get_linked_channel_id_for_discussion(discussion)
         live_match = bool(reverse_channel_id and int(reverse_channel_id) == int(rule.get("chat_id") or 0))
+        is_member = await self._is_chat_member(discussion)
         result = {
             "enabled": True,
             "linked_discussion_id": int(linked_id),
             "live_rule_match": live_match,
+            "account_is_member": is_member,
             **await self._diagnose_scan(
                 client, discussion, rule, limit, int(rule.get("last_seen_comment_message_id") or 0),
                 min_message_id=min_message_id, max_message_id=max_message_id,
@@ -1582,6 +1617,11 @@ class TelegramWorker:
         }
         if not live_match:
             result["note"] = "讨论组反查到的频道 ID 与规则 chat_id 不一致，实时评论不会被这条规则接管"
+        elif is_member is False:
+            result["note"] = (
+                "下载账号不在该讨论组内：Telegram 不会推送实时消息，"
+                "评论只能靠定期回补拿到；建议用下载账号加入该讨论组"
+            )
         return result
 
     async def diagnose_rule(
