@@ -1446,8 +1446,138 @@ class TelegramWorker:
                 return category
         return "other"
 
+    def _diagnose_message(self, message: Any, rule: dict) -> dict[str, Any]:
+        """判断单条消息在该规则下的结果，只读，与真实下载共用同一份判断逻辑。"""
+        has_media = bool(
+            getattr(message, "video", None) or getattr(message, "document", None)
+            or getattr(message, "photo", None) or getattr(message, "audio", None)
+        )
+        file_name = _media_filename(message) if has_media else ""
+        media_type = None
+        if getattr(message, "video", None):
+            media_type = "video"
+        elif getattr(message, "document", None):
+            media_type = "document"
+        elif getattr(message, "audio", None):
+            media_type = "audio"
+        elif getattr(message, "photo", None):
+            media_type = "photo"
+
+        if rule.get("content_type", "media") == "message_text":
+            reason = self._rule_rejection_reason(message, rule)
+        elif not has_media:
+            reason = "消息没有媒体文件"
+        elif not self._message_matches_comment_rule(message, rule):
+            reason = "是评论/回复，但规则未启用评论下载"
+        else:
+            reason = self._rule_rejection_reason(message, rule)
+
+        if reason is None:
+            media_obj = getattr(message, "document", None) or getattr(message, "photo", None)
+            tg_file_id = getattr(media_obj, "id", None) if media_obj is not None else None
+            tg_access_hash = getattr(media_obj, "access_hash", None) if media_obj is not None else None
+            if tg_file_id is not None and tg_access_hash is not None:
+                existing = self.database.find_download_by_telegram_file(tg_file_id, tg_access_hash)
+                if existing:
+                    reason = (
+                        f"已存在相同 Telegram 文件：任务 {existing.get('id')}"
+                        f"（{existing.get('status')}），按规则下载会被去重跳过"
+                    )
+
+        return {
+            "message_id": int(message.id),
+            "date": message.date.strftime("%Y-%m-%d %H:%M:%S") if getattr(message, "date", None) else None,
+            "has_media": has_media,
+            "media_type": media_type,
+            "file_name": file_name or "",
+            "extension": file_name.rsplit(".", 1)[-1].lower() if "." in file_name else "",
+            "file_size": _media_size(message),
+            "verdict": "download" if reason is None else "skip",
+            "reason": reason or "",
+        }
+
+    async def _diagnose_scan(
+        self, client: Any, chat: Any, rule: dict, limit: int, last_seen: int,
+    ) -> dict[str, Any]:
+        """扫描一个会话最近的若干条消息并汇总判定结果。"""
+        items: list[dict[str, Any]] = []
+        reasons: dict[str, int] = {}
+        would_download = 0
+        async for message in client.iter_messages(chat, limit=limit):
+            if not getattr(message, "id", None):
+                continue
+            entry = self._diagnose_message(message, rule)
+            entry["below_last_seen"] = bool(last_seen and entry["message_id"] <= last_seen)
+            if entry["verdict"] == "download":
+                would_download += 1
+            else:
+                category = self._reason_category(entry["reason"])
+                reasons[category] = reasons.get(category, 0) + 1
+            items.append(entry)
+        return {
+            "scanned": len(items),
+            "would_download": would_download,
+            "reasons": reasons,
+            "items": items,
+        }
+
+    async def _diagnose_comments(
+        self, client: Any, chat: Any, rule: dict, limit: int,
+    ) -> dict[str, Any]:
+        """扫描频道关联的讨论组：评论内容往往不在这条频道本身。"""
+        if not rule.get("include_comments"):
+            return {"enabled": False}
+        if getattr(chat, "megagroup", False):
+            return {
+                "enabled": True,
+                "scanned": 0,
+                "would_download": 0,
+                "reasons": {},
+                "items": [],
+                "note": "该规则直接监控讨论组，评论就是本群消息",
+            }
+
+        linked_id = await self._get_linked_discussion_id_for_channel(chat)
+        if not linked_id:
+            return {
+                "enabled": True,
+                "linked_discussion_id": None,
+                "scanned": 0,
+                "would_download": 0,
+                "reasons": {},
+                "items": [],
+                "note": "未找到关联讨论组，评论不会被下载",
+            }
+
+        try:
+            discussion = await client.get_entity(int(linked_id))
+        except Exception as exc:
+            return {
+                "enabled": True,
+                "linked_discussion_id": int(linked_id),
+                "scanned": 0,
+                "would_download": 0,
+                "reasons": {},
+                "items": [],
+                "note": f"无法读取关联讨论组：{exc}",
+            }
+
+        reverse_channel_id = await self._get_linked_channel_id_for_discussion(discussion)
+        live_match = bool(reverse_channel_id and int(reverse_channel_id) == int(rule.get("chat_id") or 0))
+        result = {
+            "enabled": True,
+            "linked_discussion_id": int(linked_id),
+            "live_rule_match": live_match,
+            **await self._diagnose_scan(
+                client, discussion, rule, limit, int(rule.get("last_seen_comment_message_id") or 0)
+            ),
+        }
+        if not live_match:
+            result["note"] = "讨论组反查到的频道 ID 与规则 chat_id 不一致，实时评论不会被这条规则接管"
+        return result
+
     async def diagnose_rule(self, rule_id: int, limit: int = 50) -> dict[str, Any]:
-        """只读诊断：扫描规则最近的若干条消息，说明每条会不会被下载、被哪一步拒绝。
+        """只读诊断：扫描规则最近的若干条消息（含关联讨论组的评论），说明每条会不会被下载、被哪一步拒绝。
 
         不创建下载记录、不改游标、不消耗限额，可安全地在生产环境反复调用。
         """
@@ -1461,73 +1591,8 @@ class TelegramWorker:
 
         chat = await client.get_entity(int(rule["chat_id"]))
         last_seen = int(rule.get("last_seen_message_id") or 0)
-        is_text_rule = rule.get("content_type", "media") == "message_text"
-
-        items: list[dict[str, Any]] = []
-        reasons: dict[str, int] = {}
-        would_download = 0
-
-        async for message in client.iter_messages(chat, limit=limit):
-            if not getattr(message, "id", None):
-                continue
-
-            has_media = bool(
-                getattr(message, "video", None) or getattr(message, "document", None)
-                or getattr(message, "photo", None) or getattr(message, "audio", None)
-            )
-            file_name = _media_filename(message) if has_media else ""
-            media_type = None
-            if getattr(message, "video", None):
-                media_type = "video"
-            elif getattr(message, "document", None):
-                media_type = "document"
-            elif getattr(message, "audio", None):
-                media_type = "audio"
-            elif getattr(message, "photo", None):
-                media_type = "photo"
-
-            if is_text_rule:
-                reason = self._rule_rejection_reason(message, rule)
-            elif not has_media:
-                reason = "消息没有媒体文件"
-            elif not self._message_matches_comment_rule(message, rule):
-                reason = "是评论/回复，但规则未启用评论下载"
-            else:
-                reason = self._rule_rejection_reason(message, rule)
-
-            if reason is None:
-                media_obj = getattr(message, "document", None) or getattr(message, "photo", None)
-                tg_file_id = getattr(media_obj, "id", None) if media_obj is not None else None
-                tg_access_hash = getattr(media_obj, "access_hash", None) if media_obj is not None else None
-                if tg_file_id is not None and tg_access_hash is not None:
-                    existing = self.database.find_download_by_telegram_file(tg_file_id, tg_access_hash)
-                    if existing:
-                        reason = (
-                            f"已存在相同 Telegram 文件：任务 {existing.get('id')}"
-                            f"（{existing.get('status')}），按规则下载会被去重跳过"
-                        )
-
-            below_last_seen = bool(last_seen and int(message.id) <= last_seen)
-            if reason is None:
-                would_download += 1
-            else:
-                category = self._reason_category(reason)
-                reasons[category] = reasons.get(category, 0) + 1
-
-            items.append(
-                {
-                    "message_id": int(message.id),
-                    "date": message.date.strftime("%Y-%m-%d %H:%M:%S") if getattr(message, "date", None) else None,
-                    "has_media": has_media,
-                    "media_type": media_type,
-                    "file_name": file_name or "",
-                    "extension": file_name.rsplit(".", 1)[-1].lower() if "." in file_name else "",
-                    "file_size": _media_size(message),
-                    "below_last_seen": below_last_seen,
-                    "verdict": "download" if reason is None else "skip",
-                    "reason": reason or "",
-                }
-            )
+        scan = await self._diagnose_scan(client, chat, rule, limit, last_seen)
+        comments = await self._diagnose_comments(client, chat, rule, limit)
 
         notes: list[str] = []
         if rule.get("mode") == "monitor":
@@ -1539,10 +1604,12 @@ class TelegramWorker:
             notes.append(f"扩展名白名单：{rule['include_extensions']}，其它类型一律跳过")
         if rule.get("quota_enabled"):
             notes.append("该规则启用了下载限额；诊断只检查匹配条件，不检查额度")
-        if not items:
+        if not scan["items"]:
             notes.append("该群最近没有可读取的消息")
-        elif not would_download:
-            notes.append("扫描范围内没有任何消息会被下载，逐条原因见 items")
+        elif not scan["would_download"]:
+            notes.append("频道本体扫描范围内没有任何消息会被下载，逐条原因见 items")
+        if comments.get("enabled") and comments.get("linked_discussion_id") and not comments.get("would_download"):
+            notes.append("关联讨论组扫描范围内没有任何评论会被下载，逐条原因见 comments.items")
 
         return {
             "rule": {
@@ -1561,17 +1628,19 @@ class TelegramWorker:
                 "max_size_bytes": rule.get("max_size_bytes"),
                 "include_comments": rule.get("include_comments"),
                 "last_seen_message_id": last_seen,
+                "last_seen_comment_message_id": rule.get("last_seen_comment_message_id"),
             },
             "chat": {
                 "id": int(getattr(chat, "id", 0) or 0),
                 "title": getattr(chat, "title", None),
-                "latest_message_id": items[0]["message_id"] if items else None,
+                "latest_message_id": scan["items"][0]["message_id"] if scan["items"] else None,
             },
-            "scanned": len(items),
-            "would_download": would_download,
-            "reasons": reasons,
+            "scanned": scan["scanned"],
+            "would_download": scan["would_download"],
+            "reasons": scan["reasons"],
+            "items": scan["items"],
+            "comments": comments,
             "notes": notes,
-            "items": items,
         }
 
     async def get_dialog_message_range(self, chat_id: int) -> dict[str, Any]:
@@ -1630,38 +1699,63 @@ class TelegramWorker:
                 raise PermissionError("Client not authorized. Complete login first.")
 
             chat = await client.get_entity(int(rule["chat_id"]))
+
+            # 评论/留言板内容在关联讨论组里，消息 ID 是另一套序列；
+            # include_comments 的规则用同一区间把讨论组也扫一遍。
+            targets: list[tuple[Any, str]] = [(chat, "chat")]
+            if rule.get("include_comments") and not getattr(chat, "megagroup", False):
+                linked_chat_id = await self._get_linked_discussion_id_for_channel(chat)
+                if linked_chat_id:
+                    try:
+                        targets.append((await client.get_entity(int(linked_chat_id)), "comments"))
+                    except Exception as exc:  # pragma: no cover - 防御性
+                        logger.warning("历史下载：无法读取关联讨论组 %s: %s", linked_chat_id, exc)
+                else:
+                    logger.info("历史下载：规则 %s 未找到关联讨论组，仅扫描频道本身", rule_id)
+
             scanned = 0
             added_tasks = 0
-            seen_grouped_ids: set[int] = set()
+            scope_stats: dict[str, dict[str, int]] = {}
 
             def record_added_tasks(count: int) -> None:
                 current = int(self._history_runs[rule_id].get("added_tasks") or 0)
                 self._history_runs[rule_id].update(added_tasks=current + count)
 
-            async for message in client.iter_messages(
-                chat,
-                min_id=start_id - 1,
-                max_id=end_id + 1,
-                reverse=True,
-            ):
-                scanned += 1
-                self._history_runs[rule_id].update(scanned=scanned)
-                try:
-                    sender = await message.get_sender()
-                except Exception:
-                    sender = None
+            for target_chat, scope in targets:
+                scope_scanned = 0
+                # 相册去重集合按会话分开，避免两个会话的消息 ID 互相干扰。
+                seen_grouped_ids: set[int] = set()
+                async for message in client.iter_messages(
+                    target_chat,
+                    min_id=start_id - 1,
+                    max_id=end_id + 1,
+                    reverse=True,
+                ):
+                    scope_scanned += 1
+                    scanned += 1
+                    self._history_runs[rule_id].update(scanned=scanned, scope=scope)
+                    try:
+                        sender = await message.get_sender()
+                    except Exception:
+                        sender = None
 
-                await self._apply_monitor_rules_to_message(
-                    msg=message,
-                    chat=chat,
-                    sender=sender,
-                    rules=[rule],
-                    seen_grouped_ids=seen_grouped_ids,
-                    min_message_id=start_id,
-                    max_message_id=end_id,
-                    on_tasks_added=record_added_tasks,
+                    await self._apply_monitor_rules_to_message(
+                        msg=message,
+                        chat=target_chat,
+                        sender=sender,
+                        rules=[rule],
+                        seen_grouped_ids=seen_grouped_ids,
+                        min_message_id=start_id,
+                        max_message_id=end_id,
+                        on_tasks_added=record_added_tasks,
+                    )
+                    added_tasks = int(self._history_runs[rule_id]["added_tasks"])
+
+                scope_stats[scope] = {"scanned": scope_scanned}
+                logger.info(
+                    "History rule %s scope=%s scanned %s messages in [%s, %s]",
+                    rule_id, scope, scope_scanned, start_id, end_id,
                 )
-                added_tasks = int(self._history_runs[rule_id]["added_tasks"])
 
             logger.info(
                 "History rule %s scanned %s messages in [%s, %s], added %s download tasks",
@@ -1671,8 +1765,10 @@ class TelegramWorker:
                 end_id,
                 added_tasks,
             )
-            self._history_runs[rule_id].update(status="completed", scanned=scanned, added_tasks=added_tasks)
-            return {"scanned": scanned, "added_tasks": added_tasks}
+            self._history_runs[rule_id].update(
+                status="completed", scanned=scanned, added_tasks=added_tasks, scopes=scope_stats,
+            )
+            return {"scanned": scanned, "added_tasks": added_tasks, "scopes": scope_stats}
 
         task = asyncio.create_task(run())
         self._history_tasks[rule_id] = task

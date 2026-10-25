@@ -41,6 +41,12 @@ npm run type-check
 npm run build
 ```
 
+## 评论/讨论组历史回补
+
+`mode=history` 的规则在 `include_comments=1` 时会**同时扫描频道本体和它的关联讨论组**，消息 ID 区间分别套用到两个会话（讨论组的 ID 序列独立，通常远大于频道，例如频道 12778 而讨论组 47005，区间填 `1`–`47005` 即可覆盖两者）。运行状态里的 `scopes` 分别给出两段扫描数。
+
+monitor 规则不会回补：新建规则的 `last_seen_message_id` / `last_seen_comment_message_id` 会直接跳到当时的最新消息，此前的历史一条都不会下载。需要历史内容时用 history 规则。
+
 ## 规则诊断（只读）
 
 规则看起来"不下载"时，用 `POST /api/group-rules/{rule_id}/diagnose?limit=50`（需要面板管理员会话）扫描该规则最近的消息，逐条返回媒体类型、文件名、扩展名、大小，以及会不会被下载、被哪一步拒绝：
@@ -54,5 +60,7 @@ npm run build
 | `comment` | 是评论/回复，但规则未启用评论下载 |
 | `duplicate` | 全局去重命中：已有相同 Telegram 文件的任务，按规则下载会被跳过 |
 | `error` | 规则判断过程抛异常 |
+
+诊断同时覆盖**关联讨论组**：`include_comments` 的规则会额外扫描频道挂的讨论组（评论/留言板内容在那里，消息 ID 是另一套序列），返回 `comments` 段（`linked_discussion_id`、`live_rule_match`、`scanned`、`would_download`、`reasons`、`items`）。`live_rule_match=false` 表示讨论组反查到的频道与规则 `chat_id` 不一致，实时评论不会被这条规则接管。
 
 诊断与真实下载共用同一份判断逻辑（`_rule_rejection_reason`），结果不会漂移。它不创建下载记录、不推进 `last_seen_message_id`、不占用并发位、不消耗限额，可反复调用。返回里的 `notes` 会点明 monitor 规则不回补历史消息、扩展名白名单、限额未参与判断等前提；`items[].below_last_seen` 标出该消息是否早于游标（monitor 规则不会处理）。
