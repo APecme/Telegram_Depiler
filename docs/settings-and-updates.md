@@ -27,6 +27,8 @@ API：`GET /api/download-settings`、`PUT /api/download-settings`，需要面板
 
 监督进程从新包的 backend 目录启动新版本，明确设置静态资源目录，并固定原有数据和下载目录。Telegram 初始化在后台进行，不再阻塞管理页面及健康检查。启动失败时沿用原有回滚机制。容器重启后，未完成的更新任务会恢复为成功或失败状态，不会永久显示执行中。
 
+前端资源缓存：`index.html` 与 SPA 兜底响应带 `Cache-Control: no-cache, must-revalidate`，`/assets/` 下带内容哈希的产物为 `public, max-age=31536000, immutable`，其余静态文件每次回源校验。应用更新后浏览器不会继续使用旧入口页，无需强制刷新。
+
 **首次迁移：** 旧镜像中的监督进程和更新器不能自行修复自身。该改动发布为新镜像后，需要在宿主机执行一次 `docker compose pull && docker compose up -d`。挂载原来的 `/app/data`，保留登录会话、规则和记录；后续依赖兼容的版本可用应用内更新。源码部署可以检查版本，更新代码及重启由部署者完成。
 
 验证命令：
@@ -38,3 +40,19 @@ npm test
 npm run type-check
 npm run build
 ```
+
+## 规则诊断（只读）
+
+规则看起来"不下载"时，用 `POST /api/group-rules/{rule_id}/diagnose?limit=50`（需要面板管理员会话）扫描该规则最近的消息，逐条返回媒体类型、文件名、扩展名、大小，以及会不会被下载、被哪一步拒绝：
+
+| `reason` 分类 | 含义 |
+| --- | --- |
+| `extension` | 扩展名不在规则白名单内 |
+| `size` | 文件大小超出规则的上下限 |
+| `keyword` | 关键词匹配失败 |
+| `no_media` / `no_text` | 消息没有媒体，或文本规则没有文本 |
+| `comment` | 是评论/回复，但规则未启用评论下载 |
+| `duplicate` | 全局去重命中：已有相同 Telegram 文件的任务，按规则下载会被跳过 |
+| `error` | 规则判断过程抛异常 |
+
+诊断与真实下载共用同一份判断逻辑（`_rule_rejection_reason`），结果不会漂移。它不创建下载记录、不推进 `last_seen_message_id`、不占用并发位、不消耗限额，可反复调用。返回里的 `notes` 会点明 monitor 规则不回补历史消息、扩展名白名单、限额未参与判断等前提；`items[].below_last_seen` 标出该消息是否早于游标（monitor 规则不会处理）。

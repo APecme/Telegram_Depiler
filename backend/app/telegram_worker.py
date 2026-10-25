@@ -1426,6 +1426,154 @@ class TelegramWorker:
             comment_last_seen = min(int(r.get("last_seen_comment_message_id") or 0) for r in comment_rules)
             await scan_messages(discussion, comment_rules, comment_last_seen, comment_ids, comment_cursor=True)
 
+    @staticmethod
+    def _reason_category(reason: str) -> str:
+        """把拒绝原因归成稳定的分类，便于统计。"""
+        for prefix, category in (
+            ("扩展名", "extension"),
+            ("没有文件名", "extension"),
+            ("文件大小", "size"),
+            ("关键词", "keyword"),
+            ("文本不包含", "keyword"),
+            ("文本包含", "keyword"),
+            ("消息没有文本", "no_text"),
+            ("消息没有媒体", "no_media"),
+            ("评论", "comment"),
+            ("已存在相同", "duplicate"),
+            ("规则检查异常", "error"),
+        ):
+            if reason.startswith(prefix):
+                return category
+        return "other"
+
+    async def diagnose_rule(self, rule_id: int, limit: int = 50) -> dict[str, Any]:
+        """只读诊断：扫描规则最近的若干条消息，说明每条会不会被下载、被哪一步拒绝。
+
+        不创建下载记录、不改游标、不消耗限额，可安全地在生产环境反复调用。
+        """
+        rule = self.database.get_group_rule(rule_id)
+        if not rule:
+            raise ValueError("规则不存在")
+
+        client = await self._get_client()
+        if not await client.is_user_authorized():
+            raise PermissionError("Telegram 客户端未登录")
+
+        chat = await client.get_entity(int(rule["chat_id"]))
+        last_seen = int(rule.get("last_seen_message_id") or 0)
+        is_text_rule = rule.get("content_type", "media") == "message_text"
+
+        items: list[dict[str, Any]] = []
+        reasons: dict[str, int] = {}
+        would_download = 0
+
+        async for message in client.iter_messages(chat, limit=limit):
+            if not getattr(message, "id", None):
+                continue
+
+            has_media = bool(
+                getattr(message, "video", None) or getattr(message, "document", None)
+                or getattr(message, "photo", None) or getattr(message, "audio", None)
+            )
+            file_name = _media_filename(message) if has_media else ""
+            media_type = None
+            if getattr(message, "video", None):
+                media_type = "video"
+            elif getattr(message, "document", None):
+                media_type = "document"
+            elif getattr(message, "audio", None):
+                media_type = "audio"
+            elif getattr(message, "photo", None):
+                media_type = "photo"
+
+            if is_text_rule:
+                reason = self._rule_rejection_reason(message, rule)
+            elif not has_media:
+                reason = "消息没有媒体文件"
+            elif not self._message_matches_comment_rule(message, rule):
+                reason = "是评论/回复，但规则未启用评论下载"
+            else:
+                reason = self._rule_rejection_reason(message, rule)
+
+            if reason is None:
+                media_obj = getattr(message, "document", None) or getattr(message, "photo", None)
+                tg_file_id = getattr(media_obj, "id", None) if media_obj is not None else None
+                tg_access_hash = getattr(media_obj, "access_hash", None) if media_obj is not None else None
+                if tg_file_id is not None and tg_access_hash is not None:
+                    existing = self.database.find_download_by_telegram_file(tg_file_id, tg_access_hash)
+                    if existing:
+                        reason = (
+                            f"已存在相同 Telegram 文件：任务 {existing.get('id')}"
+                            f"（{existing.get('status')}），按规则下载会被去重跳过"
+                        )
+
+            below_last_seen = bool(last_seen and int(message.id) <= last_seen)
+            if reason is None:
+                would_download += 1
+            else:
+                category = self._reason_category(reason)
+                reasons[category] = reasons.get(category, 0) + 1
+
+            items.append(
+                {
+                    "message_id": int(message.id),
+                    "date": message.date.strftime("%Y-%m-%d %H:%M:%S") if getattr(message, "date", None) else None,
+                    "has_media": has_media,
+                    "media_type": media_type,
+                    "file_name": file_name or "",
+                    "extension": file_name.rsplit(".", 1)[-1].lower() if "." in file_name else "",
+                    "file_size": _media_size(message),
+                    "below_last_seen": below_last_seen,
+                    "verdict": "download" if reason is None else "skip",
+                    "reason": reason or "",
+                }
+            )
+
+        notes: list[str] = []
+        if rule.get("mode") == "monitor":
+            notes.append(
+                f"monitor 规则只处理新消息（last_seen_message_id={last_seen}），"
+                "更早的消息不会自动下载；如需回补历史请用 history 规则指定消息 ID 区间"
+            )
+        if rule.get("include_extensions"):
+            notes.append(f"扩展名白名单：{rule['include_extensions']}，其它类型一律跳过")
+        if rule.get("quota_enabled"):
+            notes.append("该规则启用了下载限额；诊断只检查匹配条件，不检查额度")
+        if not items:
+            notes.append("该群最近没有可读取的消息")
+        elif not would_download:
+            notes.append("扫描范围内没有任何消息会被下载，逐条原因见 items")
+
+        return {
+            "rule": {
+                "id": rule.get("id"),
+                "chat_id": rule.get("chat_id"),
+                "chat_title": rule.get("chat_title"),
+                "rule_name": rule.get("rule_name"),
+                "mode": rule.get("mode"),
+                "enabled": rule.get("enabled"),
+                "content_type": rule.get("content_type", "media"),
+                "include_extensions": rule.get("include_extensions"),
+                "include_keywords": rule.get("include_keywords"),
+                "exclude_keywords": rule.get("exclude_keywords"),
+                "match_mode": rule.get("match_mode"),
+                "min_size_bytes": rule.get("min_size_bytes"),
+                "max_size_bytes": rule.get("max_size_bytes"),
+                "include_comments": rule.get("include_comments"),
+                "last_seen_message_id": last_seen,
+            },
+            "chat": {
+                "id": int(getattr(chat, "id", 0) or 0),
+                "title": getattr(chat, "title", None),
+                "latest_message_id": items[0]["message_id"] if items else None,
+            },
+            "scanned": len(items),
+            "would_download": would_download,
+            "reasons": reasons,
+            "notes": notes,
+            "items": items,
+        }
+
     async def get_dialog_message_range(self, chat_id: int) -> dict[str, Any]:
         """Return the oldest and newest message IDs in a selected dialog."""
         client = await self._get_client()
@@ -2055,27 +2203,32 @@ class TelegramWorker:
         except Exception as e:
             logger.exception("处理群聊消息规则时出错: %s", e)
     
-    def _should_download_by_rule(self, message: Any, rule: dict) -> bool:
-        """检查消息是否符合下载规则"""
+    def _rule_rejection_reason(self, message: Any, rule: dict) -> Optional[str]:
+        """返回第一条不满足的规则条件；``None`` 表示这条消息会被下载。
+
+        只做判断、不产生任何下载记录，「规则诊断」接口直接复用同一份逻辑，
+        因此诊断结果与真实下载行为不会漂移。
+        """
         try:
             if rule.get("content_type", "media") == "message_text":
                 message_text = str(getattr(message, "message", "") or "")
                 if not message_text.strip():
-                    return False
+                    return "消息没有文本内容"
                 match_mode = rule.get("match_mode", "all")
                 if match_mode == "include":
                     keywords = [k.strip().lower() for k in str(rule.get("include_keywords") or "").split(",") if k.strip()]
                     if keywords and not any(k in message_text.lower() for k in keywords):
-                        return False
+                        return f"文本不包含必需关键词 {keywords}"
                 elif match_mode == "exclude":
                     keywords = [k.strip().lower() for k in str(rule.get("exclude_keywords") or "").split(",") if k.strip()]
                     if any(k in message_text.lower() for k in keywords):
-                        return False
-                return True
+                        return f"文本包含排除关键词 {keywords}"
+                return None
+
             rule_id = rule.get('id', 'Unknown')
             logger.info("=" * 60)
             logger.info("开始检查规则 ID:%s", rule_id)
-            
+
             # 获取文件名
             file_name = _media_filename(message)
             if message.video:
@@ -2086,52 +2239,52 @@ class TelegramWorker:
                 logger.info("  ✓ 文件类型: 音频")
             elif message.photo:
                 logger.info("  ✓ 文件类型: 图片")
-            
+
             logger.info("  ✓ 文件名: %s", file_name or "无")
-            
+
             # 检查文件类型
             if rule.get('include_extensions'):
                 if not file_name:
                     logger.info("  ✗ 文件扩展名检查: 失败 - 无文件名")
                     logger.info("=" * 60)
-                    return False
+                    return "没有文件名，无法判断扩展名"
                 ext = file_name.split('.')[-1].lower() if '.' in file_name else ''
                 allowed_exts = [e.strip().lower() for e in rule['include_extensions'].split(',') if e.strip()]
                 if ext not in allowed_exts:
                     logger.info("  ✗ 文件扩展名检查: 失败 - '%s' 不在允许列表 %s 中", ext, allowed_exts)
                     logger.info("=" * 60)
-                    return False
+                    return f"扩展名 '{ext or '(无)'}' 不在允许列表 {allowed_exts}"
                 logger.info("  ✓ 文件扩展名检查: 通过 - '%s' 在允许列表中", ext)
             else:
                 logger.info("  - 文件扩展名检查: 跳过（未配置）")
-            
+
             # 检查文件大小（支持范围）
             min_size_bytes = rule.get('min_size_bytes', 0) or 0
             max_size_bytes = rule.get('max_size_bytes', 0) or 0
-            
+
             if min_size_bytes > 0 or max_size_bytes > 0:
                 file_size = 0
                 if message.file:
                     file_size = getattr(message.file, "size", 0) or 0
                 file_size_mb = file_size / (1024 * 1024)
-                
+
                 # 检查最小值
                 if min_size_bytes > 0 and file_size < min_size_bytes:
                     min_size_mb = min_size_bytes / (1024 * 1024)
                     logger.info("  ✗ 文件大小检查: 失败 - %.2f MB < %.2f MB（最小值）", file_size_mb, min_size_mb)
                     logger.info("=" * 60)
-                    return False
-                
+                    return f"文件大小 {file_size_mb:.2f} MB 小于最小值 {min_size_mb:.2f} MB"
+
                 # 检查最大值
                 if max_size_bytes > 0 and file_size > max_size_bytes:
                     max_size_mb = max_size_bytes / (1024 * 1024)
                     logger.info("  ✗ 文件大小检查: 失败 - %.2f MB > %.2f MB（最大值）", file_size_mb, max_size_mb)
                     logger.info("=" * 60)
-                    return False
-                
+                    return f"文件大小 {file_size_mb:.2f} MB 大于最大值 {max_size_mb:.2f} MB"
+
                 # 通过检查
                 if min_size_bytes > 0 and max_size_bytes > 0:
-                    logger.info("  ✓ 文件大小检查: 通过 - %.2f MB 在范围 [%.2f, %.2f] MB 内", 
+                    logger.info("  ✓ 文件大小检查: 通过 - %.2f MB 在范围 [%.2f, %.2f] MB 内",
                                file_size_mb, min_size_bytes / (1024 * 1024), max_size_bytes / (1024 * 1024))
                 elif min_size_bytes > 0:
                     logger.info("  ✓ 文件大小检查: 通过 - %.2f MB >= %.2f MB", file_size_mb, min_size_bytes / (1024 * 1024))
@@ -2139,7 +2292,7 @@ class TelegramWorker:
                     logger.info("  ✓ 文件大小检查: 通过 - %.2f MB <= %.2f MB", file_size_mb, max_size_bytes / (1024 * 1024))
             else:
                 logger.info("  - 文件大小检查: 跳过（未配置或为0）")
-            
+
             # 检查关键词
             match_mode = rule.get('match_mode', 'all')
             if match_mode == 'include' and rule.get('include_keywords'):
@@ -2149,9 +2302,9 @@ class TelegramWorker:
                 if not any(kw.lower() in combined_text for kw in keywords):
                     logger.info("  ✗ 关键词检查: 失败 - 未找到任何必需关键词 %s", keywords)
                     logger.info("=" * 60)
-                    return False
+                    return f"文件名/文本未包含必需关键词 {keywords}"
                 logger.info("  ✓ 关键词检查: 通过 - 找到必需关键词")
-            
+
             elif match_mode == 'exclude' and rule.get('exclude_keywords'):
                 keywords = [k.strip() for k in rule['exclude_keywords'].split(',') if k.strip()]
                 message_text = getattr(message, 'message', '') or ''
@@ -2159,19 +2312,23 @@ class TelegramWorker:
                 if any(kw.lower() in combined_text for kw in keywords):
                     logger.info("  ✗ 关键词检查: 失败 - 包含排除关键词 %s", keywords)
                     logger.info("=" * 60)
-                    return False
+                    return f"文件名/文本包含排除关键词 {keywords}"
                 logger.info("  ✓ 关键词检查: 通过 - 不包含排除关键词")
             else:
                 logger.info("  - 关键词检查: 跳过（模式为'all'或未配置）")
-            
+
             logger.info("  ✓✓✓ 规则 ID:%s 全部检查通过！准备下载", rule_id)
             logger.info("=" * 60)
-            return True
-            
+            return None
+
         except Exception as e:
             logger.exception("检查规则时出错: %s", e)
-            return False
-    
+            return f"规则检查异常: {e}"
+
+    def _should_download_by_rule(self, message: Any, rule: dict) -> bool:
+        """检查消息是否符合下载规则"""
+        return self._rule_rejection_reason(message, rule) is None
+
     async def _download_message_text_by_rule(self, message: Any, rule: dict, chat: Any, sender: Any, media_group_size: int = 1) -> None:
         """Persist a monitored message as JSON, using the same queue lifecycle as media."""
         try:

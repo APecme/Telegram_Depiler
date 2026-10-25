@@ -1697,6 +1697,28 @@ async def get_history_download_status(rule_id: int) -> dict:
     return worker.get_history_run_status(rule_id)
 
 
+@api.post("/group-rules/{rule_id}/diagnose")
+async def diagnose_group_rule(
+    rule_id: int,
+    limit: int = Query(default=50, ge=1, le=500, description="扫描最近多少条消息"),
+    x_admin_token: str | None = Header(default=None, alias="X-Admin-Token"),
+) -> dict:
+    """只读诊断：这条规则最近的消息会不会被下载、被哪一步拒绝。
+
+    不创建下载记录、不改游标、不消耗限额。
+    """
+    _require_admin(x_admin_token)
+    try:
+        return await worker.diagnose_rule(rule_id, limit)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # pragma: no cover - 防御性
+        logger.warning("诊断规则 %s 失败: %s", rule_id, exc)
+        raise HTTPException(status_code=503, detail=f"诊断失败: {exc}") from exc
+
+
 @api.delete("/group-rules/{rule_id}")
 async def delete_group_rule(rule_id: int) -> dict:
     database.delete_group_rule(rule_id)
