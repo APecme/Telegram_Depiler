@@ -1498,12 +1498,18 @@ class TelegramWorker:
 
     async def _diagnose_scan(
         self, client: Any, chat: Any, rule: dict, limit: int, last_seen: int,
+        *, min_message_id: Optional[int] = None, max_message_id: Optional[int] = None,
     ) -> dict[str, Any]:
-        """扫描一个会话最近的若干条消息并汇总判定结果。"""
+        """扫描一个会话的若干条消息（默认最近 limit 条）并汇总判定结果。"""
         items: list[dict[str, Any]] = []
         reasons: dict[str, int] = {}
         would_download = 0
-        async for message in client.iter_messages(chat, limit=limit):
+        window: dict[str, Any] = {}
+        if min_message_id is not None:
+            window["min_id"] = min_message_id - 1
+        if max_message_id is not None:
+            window["max_id"] = max_message_id + 1
+        async for message in client.iter_messages(chat, limit=limit, **window):
             if not getattr(message, "id", None):
                 continue
             entry = self._diagnose_message(message, rule)
@@ -1523,6 +1529,7 @@ class TelegramWorker:
 
     async def _diagnose_comments(
         self, client: Any, chat: Any, rule: dict, limit: int,
+        *, min_message_id: Optional[int] = None, max_message_id: Optional[int] = None,
     ) -> dict[str, Any]:
         """扫描频道关联的讨论组：评论内容往往不在这条频道本身。"""
         if not rule.get("include_comments"):
@@ -1569,14 +1576,22 @@ class TelegramWorker:
             "linked_discussion_id": int(linked_id),
             "live_rule_match": live_match,
             **await self._diagnose_scan(
-                client, discussion, rule, limit, int(rule.get("last_seen_comment_message_id") or 0)
+                client, discussion, rule, limit, int(rule.get("last_seen_comment_message_id") or 0),
+                min_message_id=min_message_id, max_message_id=max_message_id,
             ),
         }
         if not live_match:
             result["note"] = "讨论组反查到的频道 ID 与规则 chat_id 不一致，实时评论不会被这条规则接管"
         return result
 
-    async def diagnose_rule(self, rule_id: int, limit: int = 50) -> dict[str, Any]:
+    async def diagnose_rule(
+        self,
+        rule_id: int,
+        limit: int = 50,
+        *,
+        min_message_id: Optional[int] = None,
+        max_message_id: Optional[int] = None,
+    ) -> dict[str, Any]:
         """只读诊断：扫描规则最近的若干条消息（含关联讨论组的评论），说明每条会不会被下载、被哪一步拒绝。
 
         不创建下载记录、不改游标、不消耗限额，可安全地在生产环境反复调用。
@@ -1591,8 +1606,14 @@ class TelegramWorker:
 
         chat = await client.get_entity(int(rule["chat_id"]))
         last_seen = int(rule.get("last_seen_message_id") or 0)
-        scan = await self._diagnose_scan(client, chat, rule, limit, last_seen)
-        comments = await self._diagnose_comments(client, chat, rule, limit)
+        scan = await self._diagnose_scan(
+            client, chat, rule, limit, last_seen,
+            min_message_id=min_message_id, max_message_id=max_message_id,
+        )
+        comments = await self._diagnose_comments(
+            client, chat, rule, limit,
+            min_message_id=min_message_id, max_message_id=max_message_id,
+        )
 
         notes: list[str] = []
         if rule.get("mode") == "monitor":
@@ -1634,6 +1655,13 @@ class TelegramWorker:
                 "id": int(getattr(chat, "id", 0) or 0),
                 "title": getattr(chat, "title", None),
                 "latest_message_id": scan["items"][0]["message_id"] if scan["items"] else None,
+            },
+            "window": {
+                "min_message_id": min_message_id,
+                "max_message_id": max_message_id,
+                "limit": limit,
+                "first_date": scan["items"][-1]["date"] if scan["items"] else None,
+                "last_date": scan["items"][0]["date"] if scan["items"] else None,
             },
             "scanned": scan["scanned"],
             "would_download": scan["would_download"],

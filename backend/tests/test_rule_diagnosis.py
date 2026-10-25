@@ -85,13 +85,19 @@ class FakeClient:
 
     def iter_messages(self, chat, limit=None, min_id=None, max_id=None, reverse=False):
         source = self._comment_messages if int(getattr(chat, "id", 0) or 0) == DISCUSSION_ID else self._messages
+        # Telethon yields newest-first by default (and oldest-first with reverse=True).
+        ordered = sorted(source, key=lambda message: int(message.id), reverse=not reverse)
 
         async def generate():
-            for message in source[:limit] if limit else source:
+            emitted = 0
+            for message in ordered:
                 if min_id is not None and int(message.id) <= min_id:
                     continue
                 if max_id is not None and int(message.id) >= max_id:
                     continue
+                if limit is not None and emitted >= limit:
+                    return
+                emitted += 1
                 yield message
 
         return generate()
@@ -199,8 +205,9 @@ class RuleDiagnosisTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(comments["scanned"], 2)
         self.assertEqual(comments["would_download"], 1)
         self.assertEqual(comments["reasons"], {"extension": 1})
-        self.assertEqual(comments["items"][0]["message_id"], 47003)
-        self.assertEqual(comments["items"][0]["verdict"], "download")
+        # 最新在前：47004 是图片被拒，47003 是视频会下载。
+        self.assertEqual([item["message_id"] for item in comments["items"]], [47004, 47003])
+        self.assertEqual(comments["items"][1]["verdict"], "download")
 
     async def test_comment_scan_explains_a_missing_discussion(self):
         rule_id = self._rule()
@@ -314,3 +321,43 @@ class HistoryBackfillTests(unittest.IsolatedAsyncioTestCase):
         result = await self.worker.download_history_for_rule(rule_id)
 
         self.assertEqual(result["scopes"], {"chat": {"scanned": 0}})
+
+
+class DiagnosisWindowTests(unittest.IsolatedAsyncioTestCase):
+    """诊断要能把窗口推到更早的历史，用来确认某一天到底有没有符合规则的内容。"""
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.addCleanup(gc.collect)
+        root = Path(self.directory.name)
+        self.settings = Settings(data_dir=root / "data", download_dir=root / "downloads")
+        self.settings.ensure_directories()
+        self.database = Database(self.settings.data_dir / "state.db")
+        self.worker = TelegramWorker(self.settings, self.database)
+        self.rule_id = self.database.add_group_rule(
+            chat_id=CHANNEL_ID, chat_title="新厕VIP3.3", mode="monitor", enabled=1,
+            content_type="media", include_extensions="mp4,mkv", include_comments=1,
+        )
+        messages = [video_message(900), video_message(950), photo_message(1000)]
+        client = FakeClient(messages, entities={CHANNEL_ID: channel()}, linked=False)
+        self.worker._client = client
+        self.worker._get_client = AsyncMock(return_value=client)
+
+    async def test_max_message_id_pushes_the_window_into_older_history(self):
+        result = await self.worker.diagnose_rule(self.rule_id, limit=50, max_message_id=960)
+
+        self.assertEqual(result["window"]["max_message_id"], 960)
+        self.assertEqual([item["message_id"] for item in result["items"]], [950, 900])
+        self.assertEqual(result["would_download"], 2)
+
+    async def test_min_message_id_excludes_older_messages(self):
+        result = await self.worker.diagnose_rule(self.rule_id, limit=50, min_message_id=940)
+
+        self.assertEqual([item["message_id"] for item in result["items"]], [1000, 950])
+
+    async def test_window_reports_the_dates_it_covered(self):
+        result = await self.worker.diagnose_rule(self.rule_id, limit=50)
+
+        self.assertEqual(result["window"]["limit"], 50)
+        self.assertEqual(result["scanned"], 3)

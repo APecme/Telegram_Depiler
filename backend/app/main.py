@@ -1700,16 +1700,21 @@ async def get_history_download_status(rule_id: int) -> dict:
 @api.post("/group-rules/{rule_id}/diagnose")
 async def diagnose_group_rule(
     rule_id: int,
-    limit: int = Query(default=50, ge=1, le=500, description="扫描最近多少条消息"),
+    limit: int = Query(default=50, ge=1, le=500, description="最多扫描多少条消息"),
+    min_message_id: int | None = Query(default=None, ge=1, description="只看 ID 不小于该值的消息"),
+    max_message_id: int | None = Query(default=None, ge=1, description="只看 ID 不大于该值的消息"),
     x_admin_token: str | None = Header(default=None, alias="X-Admin-Token"),
 ) -> dict:
-    """只读诊断：这条规则最近的消息会不会被下载、被哪一步拒绝。
+    """只读诊断：这条规则的消息会不会被下载、被哪一步拒绝。
 
-    不创建下载记录、不改游标、不消耗限额。
+    不创建下载记录、不改游标、不消耗限额。传 `max_message_id` 可以把窗口往前推，
+    用于确认更早的历史里到底有没有符合规则的内容。
     """
     _require_admin(x_admin_token)
     try:
-        return await worker.diagnose_rule(rule_id, limit)
+        return await worker.diagnose_rule(
+            rule_id, limit, min_message_id=min_message_id, max_message_id=max_message_id,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except PermissionError as exc:
