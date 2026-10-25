@@ -1831,6 +1831,18 @@ async def get_logs(limit: int = 50) -> dict:
 app = FastAPI(lifespan=lifespan)
 app.mount("/api", api)
 
+def _static_cache_headers(full_path: str) -> dict[str, str]:
+    """Vite 产物文件名带内容哈希，可以长期缓存；其余静态文件每次都重新校验。"""
+    if full_path.startswith("assets/"):
+        return {"Cache-Control": "public, max-age=31536000, immutable"}
+    return {"Cache-Control": "no-cache"}
+
+
+#: index.html 引用的是带哈希的资源名，被缓存后应用更新仍会加载旧界面，
+#: 因此它必须每次回源校验（命中 etag 时仍是 304，代价很小）。
+INDEX_CACHE_HEADERS = {"Cache-Control": "no-cache, must-revalidate"}
+
+
 if settings.static_dir.exists():
     @app.get("/{full_path:path}", include_in_schema=False)
     async def serve_spa(full_path: str):
@@ -1842,13 +1854,13 @@ if settings.static_dir.exists():
         root = settings.static_dir.resolve()
         try:
             if candidate.is_file() and str(candidate).startswith(str(root)):
-                return FileResponse(candidate)
+                return FileResponse(candidate, headers=_static_cache_headers(full_path))
         except Exception:
             pass
 
         index_file = settings.static_dir / "index.html"
         if index_file.exists():
-            return FileResponse(index_file)
+            return FileResponse(index_file, headers=INDEX_CACHE_HEADERS)
         raise HTTPException(status_code=404, detail="Not Found")
 
     app.mount("/", StaticFiles(directory=settings.static_dir, html=True), name="frontend")
