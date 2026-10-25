@@ -196,3 +196,42 @@ class DownloadControlTests(unittest.IsolatedAsyncioTestCase):
                     transfer, DownloadOptions(max_retries=0, retry_delay_seconds=0))
 
         self.assertEqual(attempts, 3)
+
+    async def test_consecutive_floods_back_off_exponentially(self):
+        blocked: list[float] = []
+        gate = SimpleNamespace(remaining=0, block=blocked.append, wait=AsyncMock())
+        attempts = 0
+
+        async def transfer(callback):
+            nonlocal attempts
+            attempts += 1
+            raise premium_flood(1)
+
+        with patch("backend.app.download_control.FLOOD_WAIT_MARGIN_SECONDS", 0), \
+                patch("backend.app.download_control.FLOOD_WAIT_JITTER_SECONDS", 0), \
+                patch("backend.app.download_control.FLOOD_RELEASE_SPREAD_SECONDS", 0), \
+                patch("backend.app.download_control.MAX_FLOOD_RETRIES", 3):
+            with self.assertRaises(FloodError):
+                await download_with_control(
+                    transfer, DownloadOptions(max_retries=0), flood_gate=gate)
+
+        self.assertEqual(attempts, 4)
+        self.assertEqual(blocked, [1.0, 2.0, 4.0])
+
+    async def test_flood_backoff_is_capped(self):
+        blocked: list[float] = []
+        gate = SimpleNamespace(remaining=0, block=blocked.append, wait=AsyncMock())
+
+        async def transfer(callback):
+            raise premium_flood(400)
+
+        with patch("backend.app.download_control.FLOOD_WAIT_MARGIN_SECONDS", 0), \
+                patch("backend.app.download_control.FLOOD_WAIT_JITTER_SECONDS", 0), \
+                patch("backend.app.download_control.FLOOD_RELEASE_SPREAD_SECONDS", 0), \
+                patch("backend.app.download_control.MAX_FLOOD_RETRIES", 3), \
+                patch("backend.app.download_control.FLOOD_WAIT_BACKOFF_CAP_SECONDS", 600):
+            with self.assertRaises(FloodError):
+                await download_with_control(
+                    transfer, DownloadOptions(max_retries=0), flood_gate=gate)
+
+        self.assertEqual(blocked, [400.0, 600.0, 600.0])

@@ -23,7 +23,14 @@ FLOOD_WAIT_MARGIN_SECONDS = 2
 FLOOD_WAIT_JITTER_SECONDS = 2
 #: Flood waits are Telegram-side throttling, not transfer failures: they get
 #: their own budget so they never eat the retries meant for broken transfers.
-MAX_FLOOD_RETRIES = 5
+#: A throttled account can refuse GetFile for minutes, and every retry restarts
+#: the file, so the budget has to survive several rounds.
+MAX_FLOOD_RETRIES = 12
+#: Back off on consecutive floods; Telegram escalates when we keep knocking.
+FLOOD_WAIT_BACKOFF_CAP_SECONDS = 600
+#: After a shared cooldown expires, spread transfers out instead of firing all
+#: of them at the same instant and re-triggering the same flood.
+FLOOD_RELEASE_SPREAD_SECONDS = 3
 
 
 class DownloadOptions(BaseModel):
@@ -153,7 +160,9 @@ async def download_with_control(
             flood_seconds = flood_wait_seconds(exc)
             if flood_seconds and flood_retries < MAX_FLOOD_RETRIES:
                 flood_retries += 1
-                delay = flood_seconds + FLOOD_WAIT_MARGIN_SECONDS + random.uniform(0, FLOOD_WAIT_JITTER_SECONDS)
+                # 连续限流时指数退避：6s → 12s → 24s …（封顶 10 分钟）。
+                backoff = min(flood_seconds * 2 ** (flood_retries - 1), FLOOD_WAIT_BACKOFF_CAP_SECONDS)
+                delay = backoff + FLOOD_WAIT_MARGIN_SECONDS + random.uniform(0, FLOOD_WAIT_JITTER_SECONDS)
                 logger.warning(
                     "Telegram 限流 %s 秒（%s），等待 %.1f 秒后重试（限流重试 %s/%s）",
                     flood_seconds, exc, delay, flood_retries, MAX_FLOOD_RETRIES,
@@ -161,6 +170,8 @@ async def download_with_control(
                 if flood_gate is not None:
                     flood_gate.block(delay)
                     await flood_gate.wait()
+                    # 冷却结束时错开各任务，避免同一秒再次集体撞限流。
+                    await asyncio.sleep(random.uniform(0, FLOOD_RELEASE_SPREAD_SECONDS))
                 else:
                     await asyncio.sleep(delay)
                 continue
