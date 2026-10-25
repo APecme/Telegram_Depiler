@@ -13,7 +13,7 @@ import sqlite3
 from typing import Any, Awaitable, Callable, Literal, Optional
 
 from .media_cache import generate_cover_cache
-from .download_control import download_with_control
+from .download_control import FloodGate, download_with_control
 from .download_quota import QuotaService, record_block
 
 logger = logging.getLogger(__name__)
@@ -236,6 +236,7 @@ class TelegramWorker:
         self._bot_client: Optional[TelegramClient] = None  # Bot客户端用于发送通知
         self._download_tasks: dict[int, asyncio.Task] = {}  # 跟踪正在进行的下载任务
         self._cancelled_downloads: set[int] = set()  # 已取消的下载ID
+        self._flood_gate = FloodGate()  # 用户号限流冷却，所有并发下载共享
         self._notification_edit_lock = asyncio.Lock()
         self._notification_min_edit_interval = 4.0
         self._last_notification_edit_time = 0.0
@@ -619,6 +620,7 @@ class TelegramWorker:
             lambda callback: message.download_media(file=file, progress_callback=callback),
             options, progress_callback, before_attempt=prepare, on_stalled=stalled,
             on_waiting=lambda: self.database.update_download(download_id, download_speed=0) if download_id is not None else None,
+            flood_gate=self._flood_gate,
         )
 
     async def _create_client(self, proxy: Optional[tuple]) -> TelegramClient:

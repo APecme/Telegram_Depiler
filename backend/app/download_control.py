@@ -3,13 +3,27 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
+import random
+import re
 import time
 from typing import Any, Awaitable, Callable
 
 from pydantic import BaseModel, Field
 from telethon.errors import FloodWaitError, RPCError
 
+logger = logging.getLogger(__name__)
+
 WAITING_SPEED_RESET_SECONDS = 5
+
+#: Telegram also answers flood waits it has no telethon class for, such as
+#: ``FLOOD_PREMIUM_WAIT_11``. Only the message carries the seconds there.
+FLOOD_WAIT_PATTERN = re.compile(r"FLOOD(?:_[A-Z]+)*_WAIT_(\d+)", re.IGNORECASE)
+FLOOD_WAIT_MARGIN_SECONDS = 2
+FLOOD_WAIT_JITTER_SECONDS = 2
+#: Flood waits are Telegram-side throttling, not transfer failures: they get
+#: their own budget so they never eat the retries meant for broken transfers.
+MAX_FLOOD_RETRIES = 5
 
 
 class DownloadOptions(BaseModel):
@@ -19,6 +33,44 @@ class DownloadOptions(BaseModel):
     task_timeout_seconds: float = Field(default=0, ge=0, le=604800)
     max_retries: int = Field(default=3, ge=0, le=10)
     retry_delay_seconds: float = Field(default=3, ge=0, le=300)
+
+
+def flood_wait_seconds(exc: BaseException) -> float:
+    """Return how long Telegram asked us to wait, or 0 for any other error.
+
+    telethon 1.36 has no class for ``FLOOD_PREMIUM_WAIT_N``, so it falls back to
+    a plain ``FloodError`` (code 420) whose ``seconds`` attribute does not exist.
+    """
+    if isinstance(exc, FloodWaitError):
+        return float(getattr(exc, "seconds", 0) or 0)
+    if isinstance(exc, RPCError) and getattr(exc, "code", None) == 420:
+        match = FLOOD_WAIT_PATTERN.search(getattr(exc, "message", "") or "")
+        if match:
+            return float(match.group(1))
+    return 0.0
+
+
+class FloodGate:
+    """Cooldown shared by every transfer of one Telegram account.
+
+    Flood limits apply per account, so one transfer being told to wait means all
+    of them must pause; retrying independently makes the wait snowball until
+    each transfer burns its retry budget.
+    """
+
+    def __init__(self) -> None:
+        self._not_before = 0.0
+
+    @property
+    def remaining(self) -> float:
+        return max(0.0, self._not_before - time.monotonic())
+
+    def block(self, seconds: float) -> None:
+        self._not_before = max(self._not_before, time.monotonic() + seconds)
+
+    async def wait(self) -> None:
+        while (delay := self.remaining) > 0:
+            await asyncio.sleep(delay)
 
 
 async def _notify(callback, *args):
@@ -31,13 +83,21 @@ async def _notify(callback, *args):
 async def download_with_control(
     transfer: Callable[[Callable], Awaitable[Any]], options: DownloadOptions,
     progress_callback=None, *, on_stalled=None, before_attempt=None, on_waiting=None,
+    flood_gate: FloodGate | None = None,
 ) -> Any:
     """Cancel stalled attempts, throttle each task, and retry a bounded number of times.
 
     Retries restart the file from the beginning. Rate limiting waits are excluded
-    from idle detection; task timeouts still bound the entire attempt.
+    from idle detection; task timeouts still bound the entire attempt. Flood waits
+    pause every transfer sharing ``flood_gate`` and are retried on their own budget.
     """
-    for attempt in range(options.max_retries + 1):
+    attempt = 0
+    flood_retries = 0
+    while True:
+        if flood_gate is not None and flood_gate.remaining > 0:
+            await _notify(on_waiting)
+            await flood_gate.wait()
+
         started = time.monotonic()
         last_advance = started
         last_bytes = 0
@@ -90,11 +150,26 @@ async def download_with_control(
             # Stop the old transfer before starting another attempt.
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
+            flood_seconds = flood_wait_seconds(exc)
+            if flood_seconds and flood_retries < MAX_FLOOD_RETRIES:
+                flood_retries += 1
+                delay = flood_seconds + FLOOD_WAIT_MARGIN_SECONDS + random.uniform(0, FLOOD_WAIT_JITTER_SECONDS)
+                logger.warning(
+                    "Telegram 限流 %s 秒（%s），等待 %.1f 秒后重试（限流重试 %s/%s）",
+                    flood_seconds, exc, delay, flood_retries, MAX_FLOOD_RETRIES,
+                )
+                if flood_gate is not None:
+                    flood_gate.block(delay)
+                    await flood_gate.wait()
+                else:
+                    await asyncio.sleep(delay)
+                continue
             await _notify(on_stalled, exc, attempt)
             if attempt >= options.max_retries:
                 raise
-            delay = max(options.retry_delay_seconds, getattr(exc, "seconds", 0) if isinstance(exc, FloodWaitError) else 0)
+            delay = max(options.retry_delay_seconds, flood_seconds)
             await asyncio.sleep(delay)
+            attempt += 1
         finally:
             if not task.done():
                 task.cancel()

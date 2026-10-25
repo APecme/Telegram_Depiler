@@ -12,7 +12,7 @@ from telethon.tl.types import User, KeyboardButtonCallback
 from .config import Settings
 from .database import Database
 from .media_cache import generate_cover_cache
-from .download_control import download_with_control
+from .download_control import FloodGate, download_with_control
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +32,7 @@ class BotCommandHandler:
         self._bot_first_name: Optional[str] = None
         self._bot_last_name: Optional[str] = None
         self._download_semaphore = asyncio.Semaphore(32)
+        self._flood_gate = FloodGate()  # Bot 号限流冷却，所有并发下载共享
         self._active_downloads: dict[int, bool] = {}
         self._download_tasks: dict[int, asyncio.Task] = {}
         self._cancelled_downloads: set[int] = set()
@@ -178,6 +179,7 @@ class BotCommandHandler:
             lambda callback: client.download_media(message, file=file, progress_callback=callback),
             self.settings.download_options, progress_callback, before_attempt=prepare, on_stalled=stalled,
             on_waiting=lambda: self.database.update_download(download_id, download_speed=0),
+            flood_gate=self._flood_gate,
         )
 
     async def _set_bot_commands(self) -> None:
