@@ -7,6 +7,9 @@ import { DownloadQuotaEditor, DownloadQuotaUsage, DownloadWaitReason } from "../
 import { quotaDraft, quotaPayload, type QuotaDraft, type QuotaLimit, type QuotaUsage } from "../utils/downloadQuota";
 import { applyPreviewPage, PREVIEW_PAGE_SIZE, type PreviewHistory } from "../utils/downloadPreview";
 
+// Allow slow responses across multiple 2s polls, but release a stalled request after 15s.
+const DOWNLOAD_REQUEST_TIMEOUT_MS = 15000;
+
 const api = axios.create({
   // 默认使用相对路径，始终请求当前站点下的 /api，避免端口写死为 8000
   baseURL: import.meta.env.VITE_API_URL || "/api",
@@ -172,7 +175,15 @@ const renderFilenameTemplatePreview = (template: string) => {
 };
 
 export default function Dashboard() {
-  const [downloads, setDownloads] = useState<DownloadRecord[]>([]);
+  const [downloadResult, setDownloadResult] = useState<{
+    key: string;
+    items: DownloadRecord[];
+    total: number;
+    error: string | null;
+  } | null>(null);
+  const downloadsRequestSeq = useRef(0);
+  const downloadsAbortController = useRef<AbortController | null>(null);
+  const downloadsActive = useRef(false);
   const [groupRules, setGroupRules] = useState<GroupRule[]>([]);
   const [dialogs, setDialogs] = useState<Dialog[]>([]);
   const [dialogsLoading, setDialogsLoading] = useState(false);
@@ -186,7 +197,6 @@ export default function Dashboard() {
   // 下载记录筛选 & 分页
   const [downloadPage, setDownloadPage] = useState<number>(1);
   const [downloadPageSize, setDownloadPageSize] = useState<number>(20);
-  const [downloadTotal, setDownloadTotal] = useState<number>(0);
   const [downloadStatusFilter, setDownloadStatusFilter] = useState<string>("all");
   const [downloadRuleFilter, setDownloadRuleFilter] = useState<number | "all">("all");
   const [downloadPathFilter, setDownloadPathFilter] = useState<string>("");
@@ -194,6 +204,14 @@ export default function Dashboard() {
   const [downloadMaxSize, setDownloadMaxSize] = useState<string>(""); // MB
   const [downloadStartTime, setDownloadStartTime] = useState<string>(""); // datetime-local
   const [downloadEndTime, setDownloadEndTime] = useState<string>("");
+  // Bind results to every filter and pagination input, even before effect cleanup runs.
+  const downloadQueryKey = JSON.stringify([downloadPage, downloadPageSize, downloadStatusFilter, downloadRuleFilter, downloadPathFilter, downloadMinSize, downloadMaxSize, downloadStartTime, downloadEndTime]);
+  const latestDownloadQueryKey = useRef(downloadQueryKey);
+  latestDownloadQueryKey.current = downloadQueryKey;
+  const currentDownloadResult = downloadResult?.key === downloadQueryKey ? downloadResult : null;
+  const downloads = currentDownloadResult?.items ?? [];
+  const downloadTotal = currentDownloadResult?.total ?? 0;
+  const downloadError = currentDownloadResult?.error;
   const [downloadRuntimeSummary, setDownloadRuntimeSummary] = useState<DownloadRuntimeSummary>({ total_speed: 0, downloading_count: 0, queued_count: 0, remaining_bytes: 0 });
   const [lightboxRecord, setLightboxRecord] = useState<DownloadRecord | null>(null);
   const [failedAvatarChatIds, setFailedAvatarChatIds] = useState<number[]>([]);
@@ -270,13 +288,20 @@ export default function Dashboard() {
   }, []);
 
   useEffect(() => {
+    downloadsActive.current = true;
+    setSelectedIds([]);
     fetchDownloads();
     fetchDownloadRuntimeSummary();
     const interval = setInterval(() => {
-      fetchDownloads();
+      void fetchDownloads({ skipIfInFlight: true });
       fetchDownloadRuntimeSummary();
     }, 2000);
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(interval);
+      downloadsActive.current = false;
+      ++downloadsRequestSeq.current;
+      downloadsAbortController.current?.abort();
+    };
   }, [downloadPage, downloadPageSize, downloadStatusFilter, downloadRuleFilter, downloadPathFilter, downloadMinSize, downloadMaxSize, downloadStartTime, downloadEndTime]);
 
   useEffect(() => {
@@ -353,8 +378,28 @@ export default function Dashboard() {
     return error instanceof Error ? error.message : String(error);
   };
 
-  const fetchDownloads = async () => {
+  const fetchDownloads = async ({ skipIfInFlight = false }: { skipIfInFlight?: boolean } = {}) => {
+    // An action that finished after a filter change may still hold an old closure.
+    if (!downloadsActive.current || latestDownloadQueryKey.current !== downloadQueryKey) return;
+    if (skipIfInFlight && downloadsAbortController.current) return;
+    const seq = ++downloadsRequestSeq.current;
+    downloadsAbortController.current?.abort();
+    const controller = new AbortController();
+    downloadsAbortController.current = controller;
+    const isCurrentRequest = () => downloadsActive.current &&
+      seq === downloadsRequestSeq.current &&
+      latestDownloadQueryKey.current === downloadQueryKey;
+    let timedOut = false;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
     try {
+      // Race as well as abort so even a transport that ignores cancellation cannot stall polling.
+      const timeout = new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(() => {
+          timedOut = true;
+          reject(new Error(`下载列表请求超时（${DOWNLOAD_REQUEST_TIMEOUT_MS / 1000} 秒），请重试`));
+          controller.abort();
+        }, DOWNLOAD_REQUEST_TIMEOUT_MS);
+      });
       const params: any = {
         page: downloadPage,
         page_size: downloadPageSize,
@@ -388,11 +433,21 @@ export default function Dashboard() {
         params.end_time = downloadEndTime.replace("T", " ") + ":59";
       }
 
-      const { data } = await api.get("/downloads", { params });
-      setDownloads(data.items || []);
-      setDownloadTotal(data.total || 0);
+      const { data } = await Promise.race([
+        api.get("/downloads", { params, signal: controller.signal }), timeout,
+      ]);
+      if (!isCurrentRequest() || controller.signal.aborted) return;
+      setDownloadResult({ key: downloadQueryKey, items: data.items || [], total: data.total ?? 0, error: null });
     } catch (error) {
+      if (!isCurrentRequest() || (!timedOut && (controller.signal.aborted || axios.isCancel(error) || (error instanceof Error && error.name === "AbortError")))) return;
       console.error("Failed to fetch downloads:", error);
+      const detail = formatError(error);
+      const reason = typeof detail === "string" ? detail : JSON.stringify(detail);
+      setDownloadResult({ key: downloadQueryKey, items: [], total: 0, error: (reason || "未知错误").slice(0, 240) });
+      setSelectedIds([]);
+    } finally {
+      clearTimeout(timeoutId);
+      if (seq === downloadsRequestSeq.current) downloadsAbortController.current = null;
     }
   };
 
@@ -1093,6 +1148,19 @@ export default function Dashboard() {
     downloadStartTime !== "" ||
     downloadEndTime !== "";
 
+  const downloadListFeedback = downloadError ? (
+    <div role="alert" style={{ padding: "1rem", color: "var(--color-danger-strong)", background: "var(--color-danger-surface)", borderRadius: "6px" }}>
+      <strong>加载失败</strong>：{downloadError}
+      <button onClick={() => void fetchDownloads()} style={{ marginLeft: "0.75rem", padding: "0.35rem 0.9rem", border: "1px solid var(--color-info)", borderRadius: "6px", background: "var(--color-info-surface)", color: "var(--color-info-strong)", cursor: "pointer" }}>重试</button>
+    </div>
+  ) : !currentDownloadResult ? (
+    <p role="status" style={{ textAlign: "center", color: "var(--theme-muted-text)", padding: "2rem" }}>加载中…</p>
+  ) : downloads.length === 0 ? (
+    <p style={{ textAlign: "center", color: "var(--theme-muted-text)", padding: "2rem" }}>
+      {downloadTotal === 0 ? "暂无下载记录" : "当前页无记录，请切换页码"}
+    </p>
+  ) : null;
+
   const allCurrentPageSelected = downloads.length > 0 && selectedIds.length === downloads.length;
   const previewGroups = buildPreviewGroups();
 
@@ -1399,11 +1467,7 @@ export default function Dashboard() {
       </div>
 
       <div>
-        {downloads.length === 0 ? (
-          <p style={{ textAlign: "center", color: "var(--theme-muted-text)", padding: "2rem" }}>
-            暂无下载记录
-          </p>
-        ) : (
+        {downloadListFeedback ? downloadListFeedback : (
           false ? (
           <div
             className="download-record-grid"
@@ -1914,6 +1978,11 @@ export default function Dashboard() {
                         已禁用
                       </span>
                     )}
+                    {rule.mode === "monitor" && !rule.auto_catch_up && (
+                      <p role="note" style={{ margin: "0.5rem 0 0", fontSize: "0.8rem", color: "var(--color-warning-strong)" }}>
+                        未开启自动回补：程序离线期间的消息不会被补下载
+                      </p>
+                    )}
                     {rule.mode === "history" && historyRunStates[rule.id] && historyRunStates[rule.id].status !== "idle" && (
                       <span
                         style={{
@@ -2235,11 +2304,7 @@ export default function Dashboard() {
           </button>
         </div>
         <div>
-          {downloads.length === 0 ? (
-            <p style={{ textAlign: "center", color: "var(--theme-muted-text)", padding: "2rem" }}>
-              暂无下载记录
-            </p>
-          ) : (
+          {downloadListFeedback ? downloadListFeedback : (
             isMobile ? (
               <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.75rem" }}>
@@ -3563,6 +3628,11 @@ export default function Dashboard() {
                 <small style={{ display: "block", marginTop: "0.25rem", color: "var(--theme-muted-text)", fontSize: "0.8rem" }}>
                   开启后程序启动会扫描本群自上次记录以来的新消息，并按本规则匹配下载
                 </small>
+                {formMode === "monitor" && !formAutoCatchUp && (
+                  <small role="note" style={{ display: "block", marginTop: "0.25rem", color: "var(--color-warning-strong)", fontSize: "0.8rem" }}>
+                    未开启自动回补：程序离线期间的消息不会被补下载
+                  </small>
+                )}
               </div>
 
               <div>

@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import logging
 import sqlite3
-from contextlib import nullcontext
+from contextlib import closing, nullcontext
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+
+logger = logging.getLogger(__name__)
 
 
 class Database:
@@ -13,8 +17,18 @@ class Database:
         self._init_db()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=5.0)
         conn.row_factory = sqlite3.Row
+        try:
+            conn.execute("PRAGMA busy_timeout = 5000")
+            # No DML/transaction has started: read back the actual journal mode.
+            mode = conn.execute("PRAGMA journal_mode = WAL").fetchone()[0]
+            if str(mode).lower() != "wal":
+                logger.warning("SQLite WAL was not enabled (db=%s, journal_mode=%s)", self.db_path, mode)
+            conn.execute("PRAGMA synchronous = NORMAL")
+        except sqlite3.DatabaseError:
+            conn.close()
+            raise
         return conn
 
     def _init_db(self) -> None:
@@ -156,6 +170,22 @@ class Database:
                 """
             )
             self._migrate_schema(conn)
+        # Migrations are committed first; optional index failures must not stop startup.
+        self._create_download_indexes()
+
+    def _create_download_indexes(self) -> None:
+        # search_downloads: status IN (...) and ORDER BY created_at DESC, id DESC.
+        # The second index serves the unfiltered list and created_at ranges.
+        indexes = (
+            ("idx_downloads_status_created_at_id", "status, created_at DESC, id DESC"),
+            ("idx_downloads_created_at_id", "created_at DESC, id DESC"),
+        )
+        for name, columns in indexes:
+            try:
+                with closing(self._connect()) as conn, conn:
+                    conn.execute(f"CREATE INDEX IF NOT EXISTS {name} ON downloads ({columns})")
+            except sqlite3.DatabaseError:
+                logger.warning("Failed to create SQLite index %s (db=%s)", name, self.db_path, exc_info=True)
 
     def _migrate_schema(self, conn: sqlite3.Connection) -> None:
         """确保现有数据库表包含代码期望的所有列，用于兼容旧版本 state.db。"""

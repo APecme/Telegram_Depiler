@@ -1372,6 +1372,15 @@ class TelegramWorker:
                             self.database.update_group_rules_last_seen_comment_message_id(rule_ids, latest_id)
                         else:
                             self.database.update_group_rules_last_seen_message_id(rule_ids, latest_id)
+                        logger.warning(
+                            "首次回补无历史游标，已跳到最新消息并跳过积压 "
+                            "(rule_ids=%s, channel=%s, chat_id=%s, cursor=%s, skipped_message_id_range=1..%s)",
+                            rule_ids,
+                            getattr(chat, "title", None) or getattr(chat, "username", None),
+                            getattr(chat, "id", chat),
+                            "comment" if comment_cursor else "message",
+                            latest_id,
+                        )
                 except Exception as exc:
                     logger.debug("初始化遗漏回补游标失败 (chat_id=%s): %s", getattr(chat, "id", None), exc)
                 return
